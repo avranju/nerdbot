@@ -268,9 +268,9 @@ fn test_run_job_now_name() {
 }
 
 #[test]
-fn test_send_telegram_message_name() {
+fn test_send_user_message_name() {
     let tool = nerdbot::tools::telegram::SendTelegramMessage;
-    assert_eq!(tool.name(), "send_telegram_message");
+    assert_eq!(tool.name(), "send_user_message");
 }
 
 #[test]
