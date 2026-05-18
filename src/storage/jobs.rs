@@ -2,6 +2,7 @@
 
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::SqlitePool;
 use tracing::debug;
 
@@ -15,17 +16,17 @@ pub struct StoredJob {
     pub owner_chat_id: i64,
     pub name: String,
     pub prompt: String,
-    pub schedule_type: String,
+    pub schedule_type: Value,
     pub cron_expression: Option<String>,
     pub run_at: Option<DateTime<chrono::Utc>>,
     pub timezone: Option<String>,
     pub notify_on_completion: bool,
-    pub context_policy: String,
+    pub context_policy: Value,
     pub creation_context_snapshot: Option<String>,
     pub enabled: bool,
     pub last_run_at: Option<DateTime<chrono::Utc>>,
     pub next_run_at: Option<DateTime<chrono::Utc>>,
-    pub last_status: Option<String>,
+    pub last_status: Option<Value>,
     pub created_at: DateTime<chrono::Utc>,
     pub updated_at: DateTime<chrono::Utc>,
 }
@@ -33,17 +34,17 @@ pub struct StoredJob {
 impl StoredJob {
     /// Convert stored fields back to their typed representations.
     pub fn schedule_type(&self) -> Result<ScheduleType, AgentError> {
-        serde_json::from_str(&self.schedule_type).map_err(|e| AgentError::Storage(format!("Failed to deserialize schedule_type: {e}")))
+        serde_json::from_value(self.schedule_type.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize schedule_type: {e}")))
     }
 
     pub fn context_policy(&self) -> Result<JobContextPolicy, AgentError> {
-        serde_json::from_str(&self.context_policy).map_err(|e| AgentError::Storage(format!("Failed to deserialize context_policy: {e}")))
+        serde_json::from_value(self.context_policy.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize context_policy: {e}")))
     }
 
     pub fn last_status(&self) -> Result<Option<JobStatus>, AgentError> {
         self.last_status
             .as_ref()
-            .map(|s| serde_json::from_str(s).map_err(|e| AgentError::Storage(format!("Failed to deserialize last_status: {e}"))))
+            .map(|v| serde_json::from_value(v.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize last_status: {e}"))))
             .transpose()
     }
 }
@@ -62,12 +63,12 @@ impl StoredJob {
             owner_chat_id,
             name,
             prompt,
-            schedule_type: serde_json::to_string(&schedule_type).unwrap_or_default(),
+            schedule_type: serde_json::to_value(&schedule_type).unwrap_or(Value::Null),
             cron_expression: None,
             run_at: None,
             timezone: None,
             notify_on_completion: false,
-            context_policy: serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "\"include_creation_snapshot\"".to_string()),
+            context_policy: serde_json::to_value(JobContextPolicy::default()).unwrap_or(Value::Null),
             creation_context_snapshot: None,
             enabled: true,
             last_run_at: None,
@@ -90,9 +91,6 @@ pub async fn create_job(
 ) -> Result<StoredJob, AgentError> {
     let now = chrono::Utc::now();
     let id = uuid::Uuid::new_v4().to_string();
-    let schedule_type_json = serde_json::to_string(&schedule_type).map_err(|e| AgentError::Storage(format!("Failed to serialize schedule_type: {e}")))?;
-
-    let context_policy_json = serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "\"include_creation_snapshot\"".to_string());
 
     sqlx::query(
         r#"
@@ -104,8 +102,8 @@ pub async fn create_job(
     .bind(owner_chat_id)
     .bind(&name)
     .bind(&prompt)
-    .bind(&schedule_type_json)
-    .bind(&context_policy_json)
+    .bind(serde_json::to_value(&schedule_type).unwrap_or(Value::Null))
+    .bind(serde_json::to_value(JobContextPolicy::default()).unwrap_or(Value::Null))
     .bind(now.to_rfc3339())
     .bind(now.to_rfc3339())
     .bind(next_run_at.map(|t| t.to_rfc3339()))
@@ -119,12 +117,12 @@ pub async fn create_job(
         owner_chat_id,
         name,
         prompt,
-        schedule_type: schedule_type_json,
+        schedule_type: serde_json::to_value(&schedule_type).unwrap_or(Value::Null),
         cron_expression: None,
         run_at: None,
         timezone: None,
         notify_on_completion: false,
-        context_policy: serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "null".to_string()),
+        context_policy: serde_json::to_value(JobContextPolicy::default()).unwrap_or(Value::Null),
         creation_context_snapshot: None,
         enabled: true,
         last_run_at: None,

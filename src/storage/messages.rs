@@ -2,20 +2,21 @@
 
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::SqlitePool;
 use tracing::debug;
 
 use crate::error::AgentError;
-use crate::llm::types::{Message, Role};
+use crate::llm::types::{Message, MessageContent, Role};
 
 /// A stored message row from the database.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct StoredMessage {
     pub id: String,
     pub chat_session_id: String,
-    pub role: String,
+    pub role: Value,
     pub content: String,
-    pub structured_content_json: Option<String>,
+    pub structured_content_json: Option<Value>,
     pub token_estimate: Option<i64>,
     pub created_at: DateTime<chrono::Utc>,
 }
@@ -31,7 +32,7 @@ impl StoredMessage {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             chat_session_id,
-            role: serde_json::to_string(&role).unwrap_or_else(|_| "unknown".to_string()),
+            role: serde_json::to_value(&role).unwrap_or(Value::Null),
             content,
             structured_content_json: None,
             token_estimate: token_estimate.map(|t| t as i64),
@@ -44,13 +45,13 @@ impl StoredMessage {
 impl StoredMessage {
     /// Deserialize the role from JSON.
     pub fn role(&self) -> Result<Role, AgentError> {
-        serde_json::from_str(&self.role).map_err(|e| AgentError::Storage(format!("Failed to deserialize role: {e}")))
+        serde_json::from_value(self.role.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize role: {e}")))
     }
 
     /// Convert to a full `Message` with role.
     pub fn to_message(&self) -> Result<Message, AgentError> {
         let role = self.role()?;
-        Ok(Message::new(role, crate::llm::types::MessageContent::Text(self.content.clone())))
+        Ok(Message::new(role, MessageContent::Text(self.content.clone())))
     }
 }
 
@@ -61,18 +62,12 @@ pub async fn create_message(
     message: &Message,
     token_estimate: Option<usize>,
 ) -> Result<StoredMessage, AgentError> {
-    let content = match &message.content {
-        crate::llm::types::MessageContent::Text(t) => t.clone(),
-        crate::llm::types::MessageContent::Parts(parts) => {
-            serde_json::to_string(parts).unwrap_or_else(|_| String::new())
+    let (content, structured_json) = match &message.content {
+        MessageContent::Text(t) => (t.clone(), None),
+        MessageContent::Parts(parts) => {
+            let json = serde_json::to_value(parts).unwrap_or(Value::Null);
+            (String::new(), Some(json))
         }
-    };
-
-    let structured_json = match &message.content {
-        crate::llm::types::MessageContent::Parts(parts) => {
-            Some(serde_json::to_string(parts).unwrap_or_else(|_| String::new()))
-        }
-        _ => None,
     };
 
     let stored = StoredMessage::new(
