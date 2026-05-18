@@ -232,6 +232,21 @@ impl Message {
             metadata: None,
         }
     }
+
+    /// Create a tool message from a list of tool results.
+    ///
+    /// Each result becomes a separate ContentPart within a single Tool message.
+    pub fn with_tool_results(results: Vec<ToolResult>) -> Self {
+        let parts: Vec<ContentPart> = results
+            .into_iter()
+            .map(ContentPart::ToolResult)
+            .collect();
+        Self {
+            role: Role::Tool,
+            content: MessageContent::Parts(parts),
+            metadata: None,
+        }
+    }
 }
 
 impl ModelRequest {

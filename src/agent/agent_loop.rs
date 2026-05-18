@@ -35,6 +35,9 @@ impl Default for AgentLoopConfig {
 /// 1. Build the initial model request from context.
 /// 2. Loop: send request to provider, execute tool calls, repeat.
 /// 3. Return final text or an error.
+///
+/// Tool results are appended to the message history after each iteration,
+/// allowing the provider to see tool outputs and respond accordingly.
 #[instrument(skip(ctx, provider, registry, config), fields(run_mode = ?ctx.run_mode))]
 pub async fn run_agent(
     ctx: &AgentContext,
@@ -42,8 +45,10 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
-    // Build the initial model request with personality, context, and tools
-    let request = build_model_request(ctx, registry).await?;
+    // Build the initial model request with personality, context, and tools.
+    // We start with a working copy of messages that we can append to.
+    let initial_messages = build_initial_messages(ctx, registry).await?;
+    let mut working_messages = initial_messages.messages.clone();
 
     let mut total_input_tokens: usize = 0;
     let mut total_output_tokens: usize = 0;
@@ -51,11 +56,17 @@ pub async fn run_agent(
     debug!(
         iterations_limit = config.max_tool_iterations,
         tools_count = registry.len(),
+        message_count = working_messages.len(),
         "starting agent loop"
     );
 
     for step in 0..config.max_tool_iterations {
         let iterations = step + 1;
+
+        // Build the request for this iteration from working messages
+        let request = ModelRequest::default()
+            .with_messages(working_messages.clone())
+            .with_tools(registry.specs());
 
         // Call the LLM
         let response = provider.complete(request.clone()).await?;
@@ -114,7 +125,7 @@ pub async fn run_agent(
             }
         }
 
-        // Execute tool calls
+        // Execute tool calls and collect results
         let tool_ctx = ToolContext {
             run_mode: ctx.run_mode.clone(),
             workspace_root: ctx.workspace_root.clone(),
@@ -123,6 +134,8 @@ pub async fn run_agent(
             allowed_user_ids: ctx.allowed_user_ids.clone(),
         };
 
+        let mut tool_results = Vec::new();
+
         for tool_call in &response.tool_calls {
             match registry.execute(tool_call, tool_ctx.clone()) {
                 Ok(output) => {
@@ -130,8 +143,22 @@ pub async fn run_agent(
                         tool = tool_call.name,
                         tool_id = tool_call.id,
                         success = output.success,
+                        summary = output.summary,
                         "tool call completed"
                     );
+                    // Create a ToolResult for the message history
+                    let status = if output.success {
+                        crate::llm::types::ToolExecutionStatus::Success
+                    } else {
+                        crate::llm::types::ToolExecutionStatus::Error {
+                            error: output.summary.clone(),
+                        }
+                    };
+                    tool_results.push(crate::llm::types::ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        status,
+                        content: output.data,
+                    });
                 }
                 Err(e) => {
                     warn!(
@@ -140,16 +167,32 @@ pub async fn run_agent(
                         error = %e,
                         "tool call failed"
                     );
+                    // Record the error as a tool result so the provider sees it
+                    tool_results.push(crate::llm::types::ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        status: crate::llm::types::ToolExecutionStatus::Error {
+                            error: e.to_string(),
+                        },
+                        content: serde_json::json!({ "error": e.to_string() }),
+                    });
                 }
             }
         }
 
-        // Prepare request for next iteration with tool results
-        // In a full implementation, this would append tool results to the message history
-        // For Phase 1 skeleton, we track that tool calls were made
+        // Append tool call messages and results to working messages
+        // so the provider can see them on the next iteration.
+        working_messages.push(crate::llm::types::Message::assistant_tool_calls(response.tool_calls.clone()));
+
+        let results_count = tool_results.len();
+        if !tool_results.is_empty() {
+            working_messages.push(crate::llm::types::Message::with_tool_results(tool_results));
+        }
+
         debug!(
             step = step + 1,
             tool_calls_count = response.tool_calls.len(),
+            results_count,
+            message_count = working_messages.len(),
             "tool calls executed, continuing loop"
         );
     }
@@ -163,25 +206,31 @@ pub async fn run_agent(
     Err(AgentError::MaxToolIterationsExceeded(config.max_tool_iterations))
 }
 
-/// Build a model request from the current agent context.
+/// Build the initial message set from the agent context.
 ///
-/// Phase 1 skeleton — full implementation will include:
-/// - Personality prompt injection
-/// - Context assembly (summary + recent turns)
-/// - Tool specs from the registry
-async fn build_model_request(
-    _ctx: &AgentContext,
+/// Currently includes only the user message if provided.
+/// Full implementation will inject personality, summaries, and recent turns.
+async fn build_initial_messages(
+    ctx: &AgentContext,
     registry: &ToolRegistry,
 ) -> Result<ModelRequest, AgentError> {
+    let mut messages = ctx.messages.clone();
+
+    // Inject personality as system message if not already present
+    if !messages.iter().any(|m| matches!(m.role, crate::llm::types::Role::System)) {
+        if !ctx.personality.is_empty() {
+            messages.insert(
+                0,
+                crate::llm::types::Message::system(&ctx.personality),
+            );
+        }
+    }
+
     let tools = registry.specs();
 
-    // Phase 1: minimal request with tools
-    // Full implementation will inject personality, conversation history, etc.
-    let request = ModelRequest::default()
-        .with_tools(tools)
-        .with_messages(vec![]); // Will be filled in later phases
-
-    Ok(request)
+    Ok(ModelRequest::default()
+        .with_messages(messages)
+        .with_tools(tools))
 }
 
 /// Context passed to the agent loop.

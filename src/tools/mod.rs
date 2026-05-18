@@ -1,5 +1,7 @@
 //! Tool system — trait, registry, and built-in tool implementations.
 
+pub mod calculator;
+pub mod echo;
 pub mod registry;
 pub mod traits;
 
