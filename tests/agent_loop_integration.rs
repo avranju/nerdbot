@@ -446,6 +446,72 @@ async fn test_fake_provider_reset() {
     assert!(provider.last_request().is_some());
 }
 
+#[tokio::test]
+async fn test_fake_provider_total_tool_calls_received() {
+    let provider = FakeProvider::new(vec![
+        FakeResponse::tool_call("echo", serde_json::json!({"message": "test"})),
+        FakeResponse::final_text("done"),
+    ]);
+
+    let ctx = test_context();
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    let _ = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+
+    // After the agent loop, the provider should have seen:
+    // - 1 tool call from first response (echo)
+    // - 1 tool result from tool execution (in second request)
+    // Total: 2 tool-related messages in request
+    let total = provider.total_tool_calls_received();
+    assert_eq!(total, 2);
+}
+
+#[tokio::test]
+async fn test_agent_loop_permission_denied() {
+    // Provider returns a tool call, which triggers the permission check
+    let provider = FakeProvider::new(vec![
+        FakeResponse::tool_call("echo", serde_json::json!({"message": "test"})),
+        FakeResponse::final_text("should not be reached"),
+    ]);
+
+    let mut ctx = test_context();
+    // Set allowed_chat_ids to a non-matching value
+    ctx.allowed_chat_ids = vec![999_999_999];
+
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    let result = run_agent(&ctx, &provider, &registry, &config).await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::PermissionDenied));
+}
+
+#[tokio::test]
+async fn test_agent_loop_tool_returns_failure_output() {
+    // Calculator returns success: false for division by zero.
+    // The agent loop should handle this and continue (not error out).
+    let provider = FakeProvider::new(vec![
+        FakeResponse::tool_call(
+            "calculator",
+            serde_json::json!({"operation": "divide", "a": 1, "b": 0}),
+        ),
+        FakeResponse::final_text("Division by zero was attempted."),
+    ]);
+
+    let ctx = test_context();
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
+    let AgentOutcome::FinalText(text) = result.outcome else {
+        panic!("expected FinalText");
+    };
+    assert_eq!(text, "Division by zero was attempted.");
+    assert_eq!(provider.call_count(), 2);
+}
+
 // ── Test: Agent Context Carries Messages ───────────────────────────────
 
 #[tokio::test]
@@ -591,7 +657,7 @@ async fn test_registry_execute_calculator() {
     assert_eq!(data.get("result").and_then(|v| v.as_f64()).unwrap(), 21.0);
 }
 
-// ── Test: ToolSpec Generation ──────────────────────────────────────────
+// ── Test: FakeResponse Builders ──────────────────────────────────────────
 
 #[test]
 fn test_echo_tool_spec_generation() {
