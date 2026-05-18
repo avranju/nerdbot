@@ -1,33 +1,55 @@
-//! Scheduled job persistence.
-//!
-//! Implementations come in Phase 3.
+//! Scheduled job persistence — CRUD operations via SQLx.
 
-use crate::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use tracing::debug;
 
-/// A stored scheduled job.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use crate::error::AgentError;
+use crate::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
+
+/// A stored job row from the database.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct StoredJob {
     pub id: String,
     pub owner_chat_id: i64,
     pub name: String,
     pub prompt: String,
-    pub schedule_type: ScheduleType,
+    pub schedule_type: String,
     pub cron_expression: Option<String>,
-    pub run_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub run_at: Option<DateTime<chrono::Utc>>,
     pub timezone: Option<String>,
     pub notify_on_completion: bool,
-    pub context_policy: JobContextPolicy,
+    pub context_policy: String,
     pub creation_context_snapshot: Option<String>,
     pub enabled: bool,
-    pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub next_run_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub last_status: Option<JobStatus>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub last_run_at: Option<DateTime<chrono::Utc>>,
+    pub next_run_at: Option<DateTime<chrono::Utc>>,
+    pub last_status: Option<String>,
+    pub created_at: DateTime<chrono::Utc>,
+    pub updated_at: DateTime<chrono::Utc>,
 }
 
 impl StoredJob {
+    /// Convert stored fields back to their typed representations.
+    pub fn schedule_type(&self) -> Result<ScheduleType, AgentError> {
+        serde_json::from_str(&self.schedule_type).map_err(|e| AgentError::Storage(format!("Failed to deserialize schedule_type: {e}")))
+    }
+
+    pub fn context_policy(&self) -> Result<JobContextPolicy, AgentError> {
+        serde_json::from_str(&self.context_policy).map_err(|e| AgentError::Storage(format!("Failed to deserialize context_policy: {e}")))
+    }
+
+    pub fn last_status(&self) -> Result<Option<JobStatus>, AgentError> {
+        self.last_status
+            .as_ref()
+            .map(|s| serde_json::from_str(s).map_err(|e| AgentError::Storage(format!("Failed to deserialize last_status: {e}"))))
+            .transpose()
+    }
+}
+
+impl StoredJob {
+    /// Create a new stored job (convenience constructor for tests).
     pub fn new(
         owner_chat_id: i64,
         name: String,
@@ -40,12 +62,12 @@ impl StoredJob {
             owner_chat_id,
             name,
             prompt,
-            schedule_type,
+            schedule_type: serde_json::to_string(&schedule_type).unwrap_or_default(),
             cron_expression: None,
             run_at: None,
             timezone: None,
             notify_on_completion: false,
-            context_policy: JobContextPolicy::default(),
+            context_policy: serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "\"include_creation_snapshot\"".to_string()),
             creation_context_snapshot: None,
             enabled: true,
             last_run_at: None,
@@ -55,4 +77,103 @@ impl StoredJob {
             updated_at: now,
         }
     }
+}
+
+/// Create a job and insert it into the database.
+pub async fn create_job(
+    pool: &SqlitePool,
+    owner_chat_id: i64,
+    name: String,
+    prompt: String,
+    schedule_type: ScheduleType,
+    next_run_at: Option<DateTime<chrono::Utc>>,
+) -> Result<StoredJob, AgentError> {
+    let now = chrono::Utc::now();
+    let id = uuid::Uuid::new_v4().to_string();
+    let schedule_type_json = serde_json::to_string(&schedule_type).map_err(|e| AgentError::Storage(format!("Failed to serialize schedule_type: {e}")))?;
+
+    let context_policy_json = serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "\"include_creation_snapshot\"".to_string());
+
+    sqlx::query(
+        r#"
+        INSERT INTO scheduled_jobs (id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, enabled, created_at, updated_at, next_run_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, 0, ?6, 1, ?7, ?8, ?9)
+        "#,
+    )
+    .bind(&id)
+    .bind(owner_chat_id)
+    .bind(&name)
+    .bind(&prompt)
+    .bind(&schedule_type_json)
+    .bind(&context_policy_json)
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(next_run_at.map(|t| t.to_rfc3339()))
+    .execute(pool)
+    .await
+    .map_err(|e| AgentError::Storage(format!("Failed to create job: {e}")))?;
+
+    debug!(job_id = %id, "created scheduled job");
+    Ok(StoredJob {
+        id,
+        owner_chat_id,
+        name,
+        prompt,
+        schedule_type: schedule_type_json,
+        cron_expression: None,
+        run_at: None,
+        timezone: None,
+        notify_on_completion: false,
+        context_policy: serde_json::to_string(&JobContextPolicy::default()).unwrap_or_else(|_| "null".to_string()),
+        creation_context_snapshot: None,
+        enabled: true,
+        last_run_at: None,
+        next_run_at,
+        last_status: None,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+/// Get a job by ID.
+pub async fn get_job(pool: &SqlitePool, job_id: &str) -> Result<Option<StoredJob>, AgentError> {
+    let row = sqlx::query_as::<_, StoredJob>(
+        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE id = ?1",
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AgentError::Storage(format!("Failed to get job: {e}")))?;
+    Ok(row)
+}
+
+/// List jobs for a chat, ordered by next run.
+pub async fn list_jobs(
+    pool: &SqlitePool,
+    owner_chat_id: i64,
+    enabled_only: bool,
+) -> Result<Vec<StoredJob>, AgentError> {
+    let query = if enabled_only {
+        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_chat_id = ?1 AND enabled = 1 ORDER BY next_run_at ASC"
+    } else {
+        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_chat_id = ?1 ORDER BY next_run_at ASC"
+    };
+
+    sqlx::query_as::<_, StoredJob>(query)
+        .bind(owner_chat_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AgentError::Storage(format!("Failed to list jobs: {e}")))
+}
+
+/// Disable a job by setting enabled = 0.
+pub async fn disable_job(pool: &SqlitePool, job_id: &str) -> Result<(), AgentError> {
+    sqlx::query("UPDATE scheduled_jobs SET enabled = 0, updated_at = ?1 WHERE id = ?2")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(job_id)
+        .execute(pool)
+        .await
+        .map_err(|e| AgentError::Storage(format!("Failed to disable job: {e}")))?;
+
+    Ok(())
 }

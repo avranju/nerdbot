@@ -163,7 +163,7 @@ fn test_stored_message_new_text() {
     );
     assert!(!msg.id.is_empty());
     assert_eq!(msg.chat_session_id, "session-1");
-    assert_eq!(msg.role, Role::User);
+    assert!(matches!(msg.role(), Ok(Role::User)));
     assert_eq!(msg.content, "Hello, agent!");
     assert_eq!(msg.token_estimate, Some(25));
     assert!(msg.structured_content_json.is_none());
@@ -201,6 +201,7 @@ fn test_stored_message_clone() {
     let cloned = msg.clone();
     assert_eq!(msg.content, cloned.content);
     assert_eq!(msg.chat_session_id, cloned.chat_session_id);
+    assert!(matches!((msg.role(), cloned.role()), (Ok(Role::User), Ok(Role::User))));
 }
 
 #[test]
@@ -210,6 +211,12 @@ fn test_stored_message_serialization() {
     assert!(json.contains("s1"));
     assert!(json.contains("hi"));
     assert!(json.contains("user"));
+}
+
+#[test]
+fn test_stored_message_role_deserialization() {
+    let msg = StoredMessage::new("s1".into(), Role::Assistant, "test".into(), Some(5));
+    assert!(matches!(msg.role(), Ok(Role::Assistant)));
 }
 
 // ── StoredJob ────────────────────────────────────────────────────────────
@@ -225,7 +232,7 @@ fn test_stored_job_new_oneshot() {
     assert!(!job.id.is_empty());
     assert_eq!(job.owner_chat_id, 123_456_789i64);
     assert_eq!(job.name, "morning report");
-    assert_eq!(job.schedule_type, ScheduleType::OneShot);
+    assert!(matches!(job.schedule_type(), Ok(ScheduleType::OneShot)));
     assert!(job.enabled);
     assert!(!job.notify_on_completion);
     assert!(job.last_run_at.is_none());
@@ -241,6 +248,12 @@ fn test_stored_job_unique_ids() {
 }
 
 #[test]
+fn test_stored_job_schedule_type_roundtrip() {
+    let job = StoredJob::new(1, "j".into(), "p".into(), ScheduleType::Cron);
+    assert!(matches!(job.schedule_type(), Ok(ScheduleType::Cron)));
+}
+
+#[test]
 fn test_stored_job_created_updated_times() {
     let job = StoredJob::new(1, "job".into(), "prompt".into(), ScheduleType::OneShot);
     assert!(job.created_at <= Utc::now());
@@ -252,7 +265,7 @@ fn test_stored_job_clone() {
     let job = StoredJob::new(1, "j".into(), "p".into(), ScheduleType::Cron);
     let cloned = job.clone();
     assert_eq!(job.name, cloned.name);
-    assert_eq!(job.schedule_type, cloned.schedule_type);
+    assert!(matches!((job.schedule_type(), cloned.schedule_type()), (Ok(ScheduleType::Cron), Ok(ScheduleType::Cron))));
     assert_eq!(job.owner_chat_id, cloned.owner_chat_id);
 }
 
@@ -269,8 +282,8 @@ fn test_stored_job_serialization() {
 fn test_stored_job_context_policy_default() {
     let job = StoredJob::new(1, "j".into(), "p".into(), ScheduleType::OneShot);
     assert!(matches!(
-        job.context_policy,
-        JobContextPolicy::IncludeCreationSnapshot
+        job.context_policy(),
+        Ok(JobContextPolicy::IncludeCreationSnapshot)
     ));
 }
 
