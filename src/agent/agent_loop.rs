@@ -45,10 +45,8 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
-    // Build the initial model request with personality, context, and tools.
-    // We start with a working copy of messages that we can append to.
-    let initial_messages = build_initial_messages(ctx, registry).await?;
-    let mut working_messages = initial_messages.messages.clone();
+    // Build the initial message set and start with a working copy.
+    let mut working_messages = build_initial_messages(ctx).await?;
 
     let mut total_input_tokens: usize = 0;
     let mut total_output_tokens: usize = 0;
@@ -208,29 +206,23 @@ pub async fn run_agent(
 
 /// Build the initial message set from the agent context.
 ///
-/// Currently includes only the user message if provided.
-/// Full implementation will inject personality, summaries, and recent turns.
+/// Includes the user-provided messages plus the personality as a
+/// system message (if present and not already in the list).
 async fn build_initial_messages(
     ctx: &AgentContext,
-    registry: &ToolRegistry,
-) -> Result<ModelRequest, AgentError> {
+) -> Result<Vec<crate::llm::types::Message>, AgentError> {
     let mut messages = ctx.messages.clone();
 
     // Inject personality as system message if not already present
-    if !messages.iter().any(|m| matches!(m.role, crate::llm::types::Role::System)) {
-        if !ctx.personality.is_empty() {
-            messages.insert(
-                0,
-                crate::llm::types::Message::system(&ctx.personality),
-            );
-        }
+    if !ctx.personality.is_empty()
+        && !messages
+            .iter()
+            .any(|m| matches!(m.role, crate::llm::types::Role::System))
+    {
+        messages.insert(0, crate::llm::types::Message::system(&ctx.personality));
     }
 
-    let tools = registry.specs();
-
-    Ok(ModelRequest::default()
-        .with_messages(messages)
-        .with_tools(tools))
+    Ok(messages)
 }
 
 /// Context passed to the agent loop.
