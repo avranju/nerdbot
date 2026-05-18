@@ -4,6 +4,14 @@
 //! Supports Telegram as the user-facing channel with iterative tool use
 //! driven by multiple LLM providers.
 
+// TODO: Remove this allow once all modules are fully implemented (target Phase 5+).
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+
+use std::path::PathBuf;
+
+use clap::Parser;
+use tracing::info;
+
 mod agent;
 mod config;
 mod context;
@@ -16,44 +24,13 @@ mod tools;
 mod web;
 mod workspace;
 
-use std::path::PathBuf;
-
-use tracing::info;
-
-/// Parse command-line arguments.
-struct CliArgs {
+/// NerdBot — a minimal, self-hosted AI agent runtime.
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Cli {
+    /// Path to TOML configuration file.
+    #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
-}
-
-fn parse_args() -> CliArgs {
-    let args: Vec<String> = std::env::args().collect();
-    let mut config = PathBuf::from("config.toml");
-
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                if i < args.len() {
-                    config = PathBuf::from(&args[i]);
-                }
-            }
-            "--help" | "-h" => {
-                println!("NerdBot — AI agent runtime");
-                println!();
-                println!("Usage: nerdbot [OPTIONS]");
-                println!();
-                println!("Options:");
-                println!("  -c, --config <PATH>  Path to TOML config file (default: config.toml)");
-                println!("  -h, --help           Show this help");
-                std::process::exit(0);
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    CliArgs { config }
 }
 
 #[tokio::main]
@@ -66,12 +43,12 @@ async fn main() {
         )
         .init();
 
-    let args = parse_args();
+    let cli = Cli::parse();
 
-    info!(config_path = %args.config.display(), "starting nerdbot");
+    info!(config_path = %cli.config.display(), "starting nerdbot");
 
     // Phase 1: load and validate configuration
-    let config = match config::AppConfig::from_file(&args.config) {
+    let config = match config::AppConfig::from_file(&cli.config) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "no config file found or invalid, using defaults");
@@ -85,23 +62,4 @@ async fn main() {
         model = config.llm.model,
         "configuration loaded"
     );
-
-    // Phase 1: print module layout summary
-    println!("NerdBot v{}", env!("CARGO_PKG_VERSION"));
-    println!();
-    println!("Module layout:");
-    println!("  agent/          — agent loop, run modes, outcomes");
-    println!("  config.rs       — TOML configuration loader");
-    println!("  context/        — bounded context, compaction, budgeting");
-    println!("  error.rs        — application error types");
-    println!("  llm/            — provider-neutral types and trait");
-    println!("  scheduler/      — persistent job scheduling");
-    println!("  storage/        — SQLite persistence layer");
-    println!("  telegram/       — Telegram bot integration");
-    println!("  tools/          — tool registry and built-in tools");
-    println!("  web/            — search backend and page fetcher");
-    println!("  workspace/      — sandboxed file access");
-    println!();
-    println!("Phase 1 complete: core types, traits, and module layout defined.");
-    println!("Next: Phase 2 — fake provider, toy tools, agent loop integration tests.");
 }

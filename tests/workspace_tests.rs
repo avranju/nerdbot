@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for workspace sandbox in `src/workspace/sandbox.rs`.
 
 use std::fs;

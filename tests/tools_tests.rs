@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for tool system: traits, registry, and stub tools.
 
 use std::path::PathBuf;

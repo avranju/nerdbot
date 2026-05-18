@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for LLM provider-neutral types in `src/llm/types.rs`.
 
 use nerdbot::llm::types::*;

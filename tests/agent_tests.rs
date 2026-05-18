@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for agent module: run modes and outcomes.
 
 use std::path::PathBuf;

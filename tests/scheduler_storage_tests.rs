@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for scheduler models, storage models, and Telegram commands.
 
 use chrono::Utc;

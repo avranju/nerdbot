@@ -1,4 +1,5 @@
 //! Access control tests — chat ID and user ID authorization.
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 
 use std::path::PathBuf;
 

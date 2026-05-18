@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for context management: budgeting, summaries, compaction state.
 
 use std::collections::HashMap;

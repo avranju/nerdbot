@@ -1,3 +1,4 @@
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 //! Tests for error types in `src/error.rs`.
 
 use nerdbot::error::{
