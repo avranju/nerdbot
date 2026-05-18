@@ -67,7 +67,9 @@ impl Tool for AppendFile {
         _args: serde_json::Value,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        Err(AgentError::Generic("append_file not yet implemented".into()))
+        Err(AgentError::Generic(
+            "append_file not yet implemented".into(),
+        ))
     }
 }
 
@@ -89,6 +91,8 @@ impl Tool for ListDirectory {
         _args: serde_json::Value,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        Err(AgentError::Generic("list_directory not yet implemented".into()))
+        Err(AgentError::Generic(
+            "list_directory not yet implemented".into(),
+        ))
     }
 }

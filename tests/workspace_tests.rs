@@ -1,4 +1,10 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for workspace sandbox in `src/workspace/sandbox.rs`.
 
 use std::fs;
@@ -10,11 +16,7 @@ use nerdbot::workspace::sandbox::WorkspaceSandbox;
 
 #[test]
 fn test_sandbox_new() {
-    let sandbox = WorkspaceSandbox::new(
-        "/workspace".into(),
-        1024,
-        2048,
-    );
+    let sandbox = WorkspaceSandbox::new("/workspace".into(), 1024, 2048);
     assert_eq!(sandbox.root(), std::path::Path::new("/workspace"));
 }
 

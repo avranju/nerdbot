@@ -8,7 +8,9 @@ use crate::error::WebFetchError;
 ///
 /// Phase 1 stub — full implementation with SSRF protections in Phase 8.
 pub async fn fetch_url(_url: &str) -> Result<FetchedPage, WebFetchError> {
-    Err(WebFetchError::Http("Web fetcher not yet implemented".into()))
+    Err(WebFetchError::Http(
+        "Web fetcher not yet implemented".into(),
+    ))
 }
 
 /// Result of a URL fetch.

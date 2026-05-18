@@ -18,7 +18,9 @@ impl SchedulerService {
     ///
     /// Phase 1 stub.
     pub async fn start(&self) -> Result<(), AgentError> {
-        Err(AgentError::Scheduler("Scheduler not yet implemented".into()))
+        Err(AgentError::Scheduler(
+            "Scheduler not yet implemented".into(),
+        ))
     }
 
     /// Stop the scheduler gracefully.

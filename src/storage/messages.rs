@@ -45,13 +45,17 @@ impl StoredMessage {
 impl StoredMessage {
     /// Deserialize the role from JSON.
     pub fn role(&self) -> Result<Role, AgentError> {
-        serde_json::from_value(self.role.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize role: {e}")))
+        serde_json::from_value(self.role.clone())
+            .map_err(|e| AgentError::Storage(format!("Failed to deserialize role: {e}")))
     }
 
     /// Convert to a full `Message` with role.
     pub fn to_message(&self) -> Result<Message, AgentError> {
         let role = self.role()?;
-        Ok(Message::new(role, MessageContent::Text(self.content.clone())))
+        Ok(Message::new(
+            role,
+            MessageContent::Text(self.content.clone()),
+        ))
     }
 }
 

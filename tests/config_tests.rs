@@ -1,4 +1,10 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for configuration loading in `src/config.rs`.
 
 use std::fs;
@@ -16,7 +22,10 @@ fn test_default_config_agent_name() {
 #[test]
 fn test_default_config_personality_file() {
     let config = AppConfig::default();
-    assert_eq!(config.agent.personality_file, std::path::PathBuf::from("/config/personality.md"));
+    assert_eq!(
+        config.agent.personality_file,
+        std::path::PathBuf::from("/config/personality.md")
+    );
 }
 
 #[test]
@@ -47,13 +56,19 @@ fn test_default_config_telegram_no_allowed_ids() {
 #[test]
 fn test_default_config_sqlite_path() {
     let config = AppConfig::default();
-    assert_eq!(config.storage.sqlite_path, std::path::PathBuf::from("/data/agent.db"));
+    assert_eq!(
+        config.storage.sqlite_path,
+        std::path::PathBuf::from("/data/agent.db")
+    );
 }
 
 #[test]
 fn test_default_config_workspace_root() {
     let config = AppConfig::default();
-    assert_eq!(config.workspace.root, std::path::PathBuf::from("/workspace"));
+    assert_eq!(
+        config.workspace.root,
+        std::path::PathBuf::from("/workspace")
+    );
 }
 
 #[test]
@@ -183,14 +198,23 @@ fn test_parse_full_config() {
 
     // Telegram
     assert_eq!(config.telegram.bot_token_env, "MY_TELEGRAM_TOKEN");
-    assert_eq!(config.telegram.allowed_chat_ids, vec![111_111_111i64, 222_222_222]);
+    assert_eq!(
+        config.telegram.allowed_chat_ids,
+        vec![111_111_111i64, 222_222_222]
+    );
     assert_eq!(config.telegram.allowed_user_ids, vec![333_333_333i64]);
 
     // Storage
-    assert_eq!(config.storage.sqlite_path, std::path::PathBuf::from("/tmp/test.db"));
+    assert_eq!(
+        config.storage.sqlite_path,
+        std::path::PathBuf::from("/tmp/test.db")
+    );
 
     // Workspace
-    assert_eq!(config.workspace.root, std::path::PathBuf::from("/tmp/workspace"));
+    assert_eq!(
+        config.workspace.root,
+        std::path::PathBuf::from("/tmp/workspace")
+    );
     assert_eq!(config.workspace.max_read_bytes, 131_072);
     assert_eq!(config.workspace.max_write_bytes, 65_536);
 
@@ -239,7 +263,10 @@ fn test_parse_minimal_config() {
 fn test_parse_missing_file() {
     let result = AppConfig::from_file(std::path::Path::new("/nonexistent/path.toml"));
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), nerdbot::error::AgentError::Config(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        nerdbot::error::AgentError::Config(_)
+    ));
 }
 
 #[test]
@@ -250,7 +277,10 @@ fn test_parse_invalid_toml() {
 
     let result = AppConfig::from_file(&path);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), nerdbot::error::AgentError::Config(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        nerdbot::error::AgentError::Config(_)
+    ));
 }
 
 #[test]

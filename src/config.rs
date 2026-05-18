@@ -7,8 +7,7 @@ use serde::Deserialize;
 use crate::error::AgentError;
 
 /// Top-level configuration.
-#[derive(Debug, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub agent: AgentConfig,
@@ -141,8 +140,7 @@ impl Default for LlmConfig {
 }
 
 /// Per-provider configuration.
-#[derive(Debug, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Default)]
 pub struct ProvidersConfig {
     #[serde(default)]
     pub anthropic: AnthropicProviderConfig,
@@ -153,7 +151,6 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub openrouter: OpenrouterProviderConfig,
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct AnthropicProviderConfig {
@@ -238,8 +235,7 @@ impl Default for ContextConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Default)]
 pub struct CompactorConfig {
     #[serde(default)]
     pub provider: String,
@@ -247,35 +243,66 @@ pub struct CompactorConfig {
     pub model: String,
 }
 
-
 /// Scheduler configuration.
-#[derive(Debug, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Default)]
 pub struct SchedulerConfig {
     #[serde(default)]
     pub run_overdue_one_shots_on_startup: bool,
 }
 
-
 // Default functions for serde defaults
 
-fn default_agent_name() -> String { "nerdbot".to_string() }
-fn default_personality_file() -> PathBuf { PathBuf::from("/config/personality.md") }
-fn default_max_tool_iterations() -> u32 { 10 }
-fn default_timezone() -> String { "UTC".to_string() }
-fn default_telegram_token_env() -> String { "TELEGRAM_BOT_TOKEN".to_string() }
-fn default_sqlite_path() -> PathBuf { PathBuf::from("/data/agent.db") }
-fn default_workspace_root() -> PathBuf { PathBuf::from("/workspace") }
-fn default_max_read_bytes() -> usize { 262_144 }
-fn default_max_write_bytes() -> usize { 262_144 }
-fn default_temperature() -> f32 { 0.2 }
-fn default_max_output_tokens() -> u32 { 4096 }
-fn default_api_key_env() -> String { "API_KEY".to_string() }
-fn default_openrouter_base_url() -> String { "https://openrouter.ai/api/v1".to_string() }
-fn default_soft_compaction_threshold() -> f32 { 0.60 }
-fn default_hard_context_threshold() -> f32 { 0.85 }
-fn default_recent_turns_to_preserve() -> usize { 30 }
-fn default_llm_provider() -> String { "anthropic".to_string() }
+fn default_agent_name() -> String {
+    "nerdbot".to_string()
+}
+fn default_personality_file() -> PathBuf {
+    PathBuf::from("/config/personality.md")
+}
+fn default_max_tool_iterations() -> u32 {
+    10
+}
+fn default_timezone() -> String {
+    "UTC".to_string()
+}
+fn default_telegram_token_env() -> String {
+    "TELEGRAM_BOT_TOKEN".to_string()
+}
+fn default_sqlite_path() -> PathBuf {
+    PathBuf::from("/data/agent.db")
+}
+fn default_workspace_root() -> PathBuf {
+    PathBuf::from("/workspace")
+}
+fn default_max_read_bytes() -> usize {
+    262_144
+}
+fn default_max_write_bytes() -> usize {
+    262_144
+}
+fn default_temperature() -> f32 {
+    0.2
+}
+fn default_max_output_tokens() -> u32 {
+    4096
+}
+fn default_api_key_env() -> String {
+    "API_KEY".to_string()
+}
+fn default_openrouter_base_url() -> String {
+    "https://openrouter.ai/api/v1".to_string()
+}
+fn default_soft_compaction_threshold() -> f32 {
+    0.60
+}
+fn default_hard_context_threshold() -> f32 {
+    0.85
+}
+fn default_recent_turns_to_preserve() -> usize {
+    30
+}
+fn default_llm_provider() -> String {
+    "anthropic".to_string()
+}
 
 impl AppConfig {
     /// Load configuration from a TOML file.
@@ -290,4 +317,3 @@ impl AppConfig {
         Ok(config)
     }
 }
-

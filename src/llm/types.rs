@@ -81,9 +81,7 @@ pub struct ToolResult {
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum ToolExecutionStatus {
     Success,
-    Error {
-        error: String,
-    },
+    Error { error: String },
 }
 
 impl ToolExecutionStatus {
@@ -93,8 +91,7 @@ impl ToolExecutionStatus {
 }
 
 /// A request sent to an LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelRequest {
     /// Conversation messages.
     pub messages: Vec<Message>,
@@ -109,7 +106,6 @@ pub struct ModelRequest {
     /// Optional provider-agnostic metadata.
     pub metadata: Option<serde_json::Value>,
 }
-
 
 /// Response from an LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,10 +195,7 @@ impl Message {
     }
 
     pub fn assistant_tool_calls(tool_calls: Vec<ToolCall>) -> Self {
-        let parts: Vec<ContentPart> = tool_calls
-            .into_iter()
-            .map(ContentPart::ToolCall)
-            .collect();
+        let parts: Vec<ContentPart> = tool_calls.into_iter().map(ContentPart::ToolCall).collect();
         Self {
             role: Role::Assistant,
             content: MessageContent::Parts(parts),
@@ -210,7 +203,11 @@ impl Message {
         }
     }
 
-    pub fn tool_result(call: &ToolCall, status: ToolExecutionStatus, content: serde_json::Value) -> Self {
+    pub fn tool_result(
+        call: &ToolCall,
+        status: ToolExecutionStatus,
+        content: serde_json::Value,
+    ) -> Self {
         Self {
             role: Role::Tool,
             content: MessageContent::Parts(vec![ContentPart::ToolResult(ToolResult {
@@ -226,10 +223,7 @@ impl Message {
     ///
     /// Each result becomes a separate ContentPart within a single Tool message.
     pub fn with_tool_results(results: Vec<ToolResult>) -> Self {
-        let parts: Vec<ContentPart> = results
-            .into_iter()
-            .map(ContentPart::ToolResult)
-            .collect();
+        let parts: Vec<ContentPart> = results.into_iter().map(ContentPart::ToolResult).collect();
         Self {
             role: Role::Tool,
             content: MessageContent::Parts(parts),
@@ -253,10 +247,7 @@ impl ModelRequest {
 
     /// Add tool results to the request (for the next iteration).
     pub fn with_tool_results(mut self, results: Vec<ToolResult>) -> Self {
-        let parts: Vec<ContentPart> = results
-            .into_iter()
-            .map(ContentPart::ToolResult)
-            .collect();
+        let parts: Vec<ContentPart> = results.into_iter().map(ContentPart::ToolResult).collect();
         self.messages
             .push(Message::new(Role::Assistant, MessageContent::Parts(parts)));
         self
@@ -265,7 +256,11 @@ impl ModelRequest {
 
 impl ToolSpec {
     /// Create a tool spec from a name, description, and JSON schema.
-    pub fn new(name: impl Into<String>, description: impl Into<String>, input_schema: serde_json::Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: serde_json::Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),

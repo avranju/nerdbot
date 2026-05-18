@@ -20,8 +20,12 @@ impl TelegramCommand {
             "/start" => Some(Self::Start),
             "/help" => Some(Self::Help),
             "/jobs" => Some(Self::Jobs),
-            _ if command.starts_with("/run ") => Some(Self::Run(command.trim_start_matches("/run ").to_string())),
-            _ if command.starts_with("/delete ") => Some(Self::Delete(command.trim_start_matches("/delete ").to_string())),
+            _ if command.starts_with("/run ") => {
+                Some(Self::Run(command.trim_start_matches("/run ").to_string()))
+            }
+            _ if command.starts_with("/delete ") => Some(Self::Delete(
+                command.trim_start_matches("/delete ").to_string(),
+            )),
             "/reset-context" => Some(Self::ResetContext),
             _ => None,
         }

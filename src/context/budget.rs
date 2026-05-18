@@ -22,9 +22,7 @@ pub struct ContextBudget {
 impl ContextBudget {
     /// Calculate the usable input budget.
     pub fn usable_input_budget(&self) -> usize {
-        self.context_window_tokens
-            - self.reserved_output_tokens
-            - self.reserved_tool_loop_tokens
+        self.context_window_tokens - self.reserved_output_tokens - self.reserved_tool_loop_tokens
     }
 
     /// Get the soft compaction threshold in tokens.

@@ -28,6 +28,8 @@ pub struct NoopSearchBackend;
 #[async_trait::async_trait]
 impl WebSearchBackend for NoopSearchBackend {
     async fn search(&self, _query: &str) -> Result<Vec<SearchResult>, WebSearchError> {
-        Err(WebSearchError::Backend("No search backend configured".into()))
+        Err(WebSearchError::Backend(
+            "No search backend configured".into(),
+        ))
     }
 }

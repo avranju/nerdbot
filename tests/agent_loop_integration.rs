@@ -8,11 +8,17 @@
 //! - Error handling during tool execution
 //! - Tool results are correctly fed back to the provider
 
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 
 use std::path::PathBuf;
 
-use nerdbot::agent::agent_loop::{run_agent, AgentContext, AgentLoopConfig};
+use nerdbot::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use nerdbot::agent::outcome::{AgentOutcome, AgentResult};
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::error::AgentError;
@@ -58,7 +64,9 @@ async fn test_tool_call_then_final_text() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
@@ -80,7 +88,9 @@ async fn test_final_text_no_tools() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
@@ -102,7 +112,9 @@ async fn test_multiple_tool_calls_in_one_response() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
@@ -123,7 +135,9 @@ async fn test_max_tool_iterations_exceeded() {
 
     let ctx = test_context();
     let registry = toy_registry();
-    let config = AgentLoopConfig { max_tool_iterations: 5 };
+    let config = AgentLoopConfig {
+        max_tool_iterations: 5,
+    };
 
     let result = run_agent(&ctx, &provider, &registry, &config).await;
 
@@ -149,7 +163,9 @@ async fn test_tool_error_produced_as_result() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
@@ -180,10 +196,9 @@ async fn test_echo_tool_execution() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"message": "hello world"}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(serde_json::json!({"message": "hello world"}), ctx)
+        .await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -209,10 +224,9 @@ async fn test_calculator_add() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "add", "a": 2, "b": 3}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(serde_json::json!({"operation": "add", "a": 2, "b": 3}), ctx)
+        .await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -235,10 +249,12 @@ async fn test_calculator_subtract() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "subtract", "a": 10, "b": 4}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(
+            serde_json::json!({"operation": "subtract", "a": 10, "b": 4}),
+            ctx,
+        )
+        .await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -260,10 +276,12 @@ async fn test_calculator_multiply() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "multiply", "a": 7, "b": 6}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(
+            serde_json::json!({"operation": "multiply", "a": 7, "b": 6}),
+            ctx,
+        )
+        .await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -285,10 +303,12 @@ async fn test_calculator_divide() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "divide", "a": 15, "b": 3}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(
+            serde_json::json!({"operation": "divide", "a": 15, "b": 3}),
+            ctx,
+        )
+        .await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -310,10 +330,12 @@ async fn test_calculator_division_by_zero() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "divide", "a": 1, "b": 0}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(
+            serde_json::json!({"operation": "divide", "a": 1, "b": 0}),
+            ctx,
+        )
+        .await;
 
     // Should succeed but return a failure output (not an AgentError)
     assert!(result.is_ok());
@@ -336,13 +358,18 @@ async fn test_calculator_invalid_operation() {
         allowed_user_ids: vec![],
     };
 
-    let result = tool.execute(
-        serde_json::json!({"operation": "modulus", "a": 10, "b": 3}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(
+            serde_json::json!({"operation": "modulus", "a": 10, "b": 3}),
+            ctx,
+        )
+        .await;
 
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AgentError::InvalidToolArgs(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        AgentError::InvalidToolArgs(_)
+    ));
 }
 
 #[tokio::test]
@@ -360,13 +387,15 @@ async fn test_calculator_missing_field() {
     };
 
     // Missing "b" field
-    let result = tool.execute(
-        serde_json::json!({"operation": "add", "a": 5}),
-        ctx,
-    ).await;
+    let result = tool
+        .execute(serde_json::json!({"operation": "add", "a": 5}), ctx)
+        .await;
 
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AgentError::InvalidToolArgs(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        AgentError::InvalidToolArgs(_)
+    ));
 }
 
 // ── Test: Fake Provider Behavior ───────────────────────────────────────
@@ -375,51 +404,67 @@ async fn test_calculator_missing_field() {
 async fn test_fake_provider_returns_sequence() {
     let provider = FakeProvider::new(vec![
         FakeResponse::tool_call("echo", serde_json::json!({"message": "first"})),
-        FakeResponse::tool_call("calculator", serde_json::json!({"operation": "add", "a": 1, "b": 2})),
+        FakeResponse::tool_call(
+            "calculator",
+            serde_json::json!({"operation": "add", "a": 1, "b": 2}),
+        ),
         FakeResponse::final_text("All done."),
     ]);
 
     // First call: tool call
-    let resp1 = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let resp1 = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert!(resp1.has_tool_calls());
     assert_eq!(provider.call_count(), 1);
 
     // Second call: tool call
-    let resp2 = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let resp2 = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert!(resp2.has_tool_calls());
     assert_eq!(provider.call_count(), 2);
 
     // Third call: final text
-    let resp3 = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let resp3 = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert!(!resp3.has_tool_calls());
     assert_eq!(resp3.assistant_text.as_deref(), Some("All done."));
     assert_eq!(provider.call_count(), 3);
 
     // Fourth call: returns last response again (sequence exhausted)
-    let resp4 = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let resp4 = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert!(!resp4.has_tool_calls());
     assert_eq!(provider.call_count(), 4);
 }
 
 #[tokio::test]
 async fn test_fake_provider_error_response() {
-    let provider = FakeProvider::new(vec![
-        FakeResponse::error("something went wrong"),
-    ]);
+    let provider = FakeProvider::new(vec![FakeResponse::error("something went wrong")]);
 
-    let result = provider.complete(nerdbot::llm::types::ModelRequest::default()).await;
+    let result = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::LlmProvider(_)));
 }
 
 #[tokio::test]
 async fn test_fake_provider_inspects_last_request() {
-    let provider = FakeProvider::new(vec![
-        FakeResponse::final_text("test"),
-    ]);
+    let provider = FakeProvider::new(vec![FakeResponse::final_text("test")]);
 
-    let mut request = nerdbot::llm::types::ModelRequest::default()
-        .with_tools(vec![ToolSpec::new("test_tool", "a test tool", serde_json::json!({}))]);
+    let mut request = nerdbot::llm::types::ModelRequest::default().with_tools(vec![ToolSpec::new(
+        "test_tool",
+        "a test tool",
+        serde_json::json!({}),
+    )]);
 
     let _ = provider.complete(request.clone()).await.unwrap();
 
@@ -435,13 +480,19 @@ async fn test_fake_provider_reset() {
         FakeResponse::final_text("world"),
     ]);
 
-    let _ = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let _ = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert_eq!(provider.call_count(), 1);
 
     provider.reset();
     assert_eq!(provider.call_count(), 0);
 
-    let _ = provider.complete(nerdbot::llm::types::ModelRequest::default()).await.unwrap();
+    let _ = provider
+        .complete(nerdbot::llm::types::ModelRequest::default())
+        .await
+        .unwrap();
     assert_eq!(provider.call_count(), 1);
     assert!(provider.last_request().is_some());
 }
@@ -457,7 +508,9 @@ async fn test_fake_provider_total_tool_calls_received() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let _ = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let _ = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     // After the agent loop, the provider should have seen:
     // - 1 tool call from first response (echo)
@@ -503,7 +556,9 @@ async fn test_agent_loop_tool_returns_failure_output() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
         panic!("expected FinalText");
@@ -517,18 +572,23 @@ async fn test_agent_loop_tool_returns_failure_output() {
 #[tokio::test]
 async fn test_agent_context_with_initial_messages() {
     let mut ctx = test_context();
-    ctx.messages.push(nerdbot::llm::types::Message::user("Initial message"));
+    ctx.messages
+        .push(nerdbot::llm::types::Message::user("Initial message"));
 
     let provider = FakeProvider::new(vec![FakeResponse::final_text("Got it.")]);
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     // Verify the provider received the initial user message
     let last_req = provider.last_request().unwrap();
-    let user_msgs: Vec<_> = last_req.messages.iter()
+    let user_msgs: Vec<_> = last_req
+        .messages
+        .iter()
         .filter(|m| matches!(m.role, nerdbot::llm::types::Role::User))
         .collect();
     assert!(user_msgs.len() >= 1);
@@ -549,7 +609,9 @@ async fn test_tool_results_visible_to_provider() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     let AgentOutcome::FinalText(text) = result.outcome else {
@@ -559,10 +621,15 @@ async fn test_tool_results_visible_to_provider() {
 
     // The second call should have received messages with the tool results
     let second_req = provider.last_request().unwrap();
-    let tool_messages: Vec<_> = second_req.messages.iter()
+    let tool_messages: Vec<_> = second_req
+        .messages
+        .iter()
         .filter(|m| matches!(m.role, nerdbot::llm::types::Role::Tool))
         .collect();
-    assert!(!tool_messages.is_empty(), "Provider should have received Tool messages with tool results");
+    assert!(
+        !tool_messages.is_empty(),
+        "Provider should have received Tool messages with tool results"
+    );
 }
 
 // ── Test: Registry with Only One Toy Tool ──────────────────────────────
@@ -589,7 +656,10 @@ fn test_registry_with_calculator_only() {
 
     let specs = registry.specs();
     assert_eq!(specs[0].name, "calculator");
-    let props = specs[0].input_schema.get("properties").and_then(|p| p.as_object());
+    let props = specs[0]
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object());
     assert!(props.is_some());
     let props = props.unwrap();
     assert!(props.contains_key("operation"));
@@ -667,10 +737,13 @@ fn test_echo_tool_spec_generation() {
     assert_eq!(spec.name, "echo");
     assert_eq!(spec.description, tool.description());
     assert!(spec.input_schema.is_object());
-    assert!(spec.input_schema.get("required")
-        .and_then(|r| r.as_array())
-        .map(|a| a.iter().any(|v| v.as_str() == Some("message")))
-        .unwrap_or(false));
+    assert!(
+        spec.input_schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().any(|v| v.as_str() == Some("message")))
+            .unwrap_or(false)
+    );
 }
 
 #[test]
@@ -706,35 +779,42 @@ async fn test_agent_loop_includes_personality() {
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
     // The provider should have received a System message with the personality
     let last_req = provider.last_request().unwrap();
-    let system_msgs: Vec<_> = last_req.messages.iter()
+    let system_msgs: Vec<_> = last_req
+        .messages
+        .iter()
         .filter(|m| matches!(m.role, nerdbot::llm::types::Role::System))
         .collect();
-    assert!(!system_msgs.is_empty(), "Provider should have received a System message");
+    assert!(
+        !system_msgs.is_empty(),
+        "Provider should have received a System message"
+    );
 }
 
 // ── Test: Agent Loop Token Tracking ────────────────────────────────────
 
 #[tokio::test]
 async fn test_agent_loop_tracks_tokens() {
-    let provider = FakeProvider::new(vec![
-        FakeResponse {
-            assistant_text: Some("test".into()),
-            tool_calls: Vec::new(),
-            finish_reason: nerdbot::llm::types::FinishReason::Completed,
-            token_usage: Some((100, 50)),
-        },
-    ]);
+    let provider = FakeProvider::new(vec![FakeResponse {
+        assistant_text: Some("test".into()),
+        tool_calls: Vec::new(),
+        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        token_usage: Some((100, 50)),
+    }]);
 
     let ctx = test_context();
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
 
-    let result = run_agent(&ctx, &provider, &registry, &config).await.unwrap();
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
 
     let tokens = result.metadata.token_estimate.unwrap();
     assert_eq!(tokens.input_tokens, 100);

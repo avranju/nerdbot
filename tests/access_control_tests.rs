@@ -1,13 +1,19 @@
 //! Access control tests — chat ID and user ID authorization.
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 
 use std::path::PathBuf;
 
-use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::agent::AgentContext;
+use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::error::AgentError;
-use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 use nerdbot::tools::registry::ToolRegistry;
+use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 use serde_json::json;
 
 /// A minimal test tool for access control testing.
@@ -15,10 +21,20 @@ struct TestTool;
 
 #[async_trait::async_trait]
 impl Tool for TestTool {
-    fn name(&self) -> &'static str { "test_tool" }
-    fn description(&self) -> &'static str { "Test tool." }
-    fn input_schema(&self) -> serde_json::Value { json!({}) }
-    async fn execute(&self, _args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
+    fn name(&self) -> &'static str {
+        "test_tool"
+    }
+    fn description(&self) -> &'static str {
+        "Test tool."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
         Ok(ToolOutput {
             success: true,
             data: json!({}),
@@ -47,19 +63,24 @@ async fn test_access_allowed_when_no_restrictions() {
     registry.register(TestTool);
 
     let ctx = make_tool_context(
-        AgentRunMode::InteractiveReply { chat_id: 123, user_id: 456 },
+        AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
         vec![], // empty = allow all
         vec![], // empty = allow all
     );
 
-    let result = registry.execute(
-        &nerdbot::llm::types::ToolCall {
-            id: "t1".into(),
-            name: "test_tool".into(),
-            arguments: json!({}),
-        },
-        ctx,
-    ).await;
+    let result = registry
+        .execute(
+            &nerdbot::llm::types::ToolCall {
+                id: "t1".into(),
+                name: "test_tool".into(),
+                arguments: json!({}),
+            },
+            ctx,
+        )
+        .await;
 
     assert!(result.is_ok());
 }
@@ -72,19 +93,24 @@ async fn test_access_denied_when_chat_id_not_allowed() {
     // Config allows chat 999, but request comes from chat 123
     let allowed_chat_ids = vec![999i64];
     let ctx = make_tool_context(
-        AgentRunMode::InteractiveReply { chat_id: 123, user_id: 456 },
+        AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
         allowed_chat_ids.clone(),
         vec![],
     );
 
-    let _ = registry.execute(
-        &nerdbot::llm::types::ToolCall {
-            id: "t1".into(),
-            name: "test_tool".into(),
-            arguments: json!({}),
-        },
-        ctx,
-    ).await;
+    let _ = registry
+        .execute(
+            &nerdbot::llm::types::ToolCall {
+                id: "t1".into(),
+                name: "test_tool".into(),
+                arguments: json!({}),
+            },
+            ctx,
+        )
+        .await;
 
     // ToolRegistry.execute doesn't check access — that's done in run_agent
     // This test verifies that ToolContext correctly carries the IDs
@@ -94,7 +120,10 @@ async fn test_access_denied_when_chat_id_not_allowed() {
 #[test]
 fn test_context_carries_both_id_lists() {
     let ctx = make_tool_context(
-        AgentRunMode::InteractiveReply { chat_id: 123, user_id: 456 },
+        AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
         vec![111, 222],
         vec![333, 444],
     );
@@ -108,7 +137,10 @@ fn test_context_carries_both_id_lists() {
 #[test]
 fn test_agent_context_construction_with_user_ids() {
     let ctx = AgentContext::new(
-        AgentRunMode::InteractiveReply { chat_id: 123, user_id: 456 },
+        AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
         "You are a helpful assistant.".to_string(),
         PathBuf::from("/workspace"),
         "bot-token".into(),
@@ -133,7 +165,9 @@ fn test_run_mode_extract_chat_and_user_ids() {
 
 #[test]
 fn test_internal_run_returns_none_for_chat_and_user() {
-    let mode = AgentRunMode::Internal { reason: "test".into() };
+    let mode = AgentRunMode::Internal {
+        reason: "test".into(),
+    };
 
     assert_eq!(mode.chat_id(), None);
     assert_eq!(mode.user_id(), None);

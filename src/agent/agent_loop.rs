@@ -78,17 +78,15 @@ pub async fn run_agent(
 
         // Track token usage
         if let Some(meta) = &response.provider_metadata
-            && let Some(token_usage) = meta.get("usage") {
-                if let Some(input_tokens) = token_usage.get("input_tokens").and_then(|t| t.as_u64())
-                {
-                    total_input_tokens += input_tokens as usize;
-                }
-                if let Some(output_tokens) =
-                    token_usage.get("output_tokens").and_then(|t| t.as_u64())
-                {
-                    total_output_tokens += output_tokens as usize;
-                }
+            && let Some(token_usage) = meta.get("usage")
+        {
+            if let Some(input_tokens) = token_usage.get("input_tokens").and_then(|t| t.as_u64()) {
+                total_input_tokens += input_tokens as usize;
             }
+            if let Some(output_tokens) = token_usage.get("output_tokens").and_then(|t| t.as_u64()) {
+                total_output_tokens += output_tokens as usize;
+            }
+        }
 
         debug!(
             step = step + 1,
@@ -122,13 +120,17 @@ pub async fn run_agent(
         let chat_id = ctx.run_mode.chat_id();
         let user_id = ctx.run_mode.user_id();
         if let Some(cid) = chat_id
-            && !ctx.allowed_chat_ids.is_empty() && !ctx.allowed_chat_ids.contains(&cid) {
-                return Err(AgentError::PermissionDenied);
-            }
+            && !ctx.allowed_chat_ids.is_empty()
+            && !ctx.allowed_chat_ids.contains(&cid)
+        {
+            return Err(AgentError::PermissionDenied);
+        }
         if let Some(uid) = user_id
-            && !ctx.allowed_user_ids.is_empty() && !ctx.allowed_user_ids.contains(&uid) {
-                return Err(AgentError::PermissionDenied);
-            }
+            && !ctx.allowed_user_ids.is_empty()
+            && !ctx.allowed_user_ids.contains(&uid)
+        {
+            return Err(AgentError::PermissionDenied);
+        }
 
         // Execute tool calls and collect results
         let tool_ctx = ToolContext {

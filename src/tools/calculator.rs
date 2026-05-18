@@ -47,11 +47,17 @@ impl Tool for CalculatorTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
         let operation = args
             .get("operation")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AgentError::InvalidToolArgs("missing or invalid 'operation' field".into()))?;
+            .ok_or_else(|| {
+                AgentError::InvalidToolArgs("missing or invalid 'operation' field".into())
+            })?;
 
         let a = args
             .get("a")

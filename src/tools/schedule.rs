@@ -23,7 +23,9 @@ impl Tool for ScheduleJob {
         _args: serde_json::Value,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        Err(AgentError::Generic("schedule_job not yet implemented".into()))
+        Err(AgentError::Generic(
+            "schedule_job not yet implemented".into(),
+        ))
     }
 }
 
@@ -89,6 +91,8 @@ impl Tool for RunJobNow {
         _args: serde_json::Value,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        Err(AgentError::Generic("run_job_now not yet implemented".into()))
+        Err(AgentError::Generic(
+            "run_job_now not yet implemented".into(),
+        ))
     }
 }

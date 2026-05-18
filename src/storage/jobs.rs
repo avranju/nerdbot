@@ -34,17 +34,23 @@ pub struct StoredJob {
 impl StoredJob {
     /// Convert stored fields back to their typed representations.
     pub fn schedule_type(&self) -> Result<ScheduleType, AgentError> {
-        serde_json::from_value(self.schedule_type.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize schedule_type: {e}")))
+        serde_json::from_value(self.schedule_type.clone())
+            .map_err(|e| AgentError::Storage(format!("Failed to deserialize schedule_type: {e}")))
     }
 
     pub fn context_policy(&self) -> Result<JobContextPolicy, AgentError> {
-        serde_json::from_value(self.context_policy.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize context_policy: {e}")))
+        serde_json::from_value(self.context_policy.clone())
+            .map_err(|e| AgentError::Storage(format!("Failed to deserialize context_policy: {e}")))
     }
 
     pub fn last_status(&self) -> Result<Option<JobStatus>, AgentError> {
         self.last_status
             .as_ref()
-            .map(|v| serde_json::from_value(v.clone()).map_err(|e| AgentError::Storage(format!("Failed to deserialize last_status: {e}"))))
+            .map(|v| {
+                serde_json::from_value(v.clone()).map_err(|e| {
+                    AgentError::Storage(format!("Failed to deserialize last_status: {e}"))
+                })
+            })
             .transpose()
     }
 }
@@ -68,7 +74,8 @@ impl StoredJob {
             run_at: None,
             timezone: None,
             notify_on_completion: false,
-            context_policy: serde_json::to_value(JobContextPolicy::default()).unwrap_or(Value::Null),
+            context_policy: serde_json::to_value(JobContextPolicy::default())
+                .unwrap_or(Value::Null),
             creation_context_snapshot: None,
             enabled: true,
             last_run_at: None,

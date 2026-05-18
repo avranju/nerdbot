@@ -11,9 +11,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self {
-            tools: Vec::new(),
-        }
+        Self { tools: Vec::new() }
     }
 
     /// Register a tool with the registry.

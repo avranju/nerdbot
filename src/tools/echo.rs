@@ -38,11 +38,12 @@ impl Tool for EchoTool {
         })
     }
 
-    async fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
-        let message = args
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
         Ok(ToolOutput {
             success: true,

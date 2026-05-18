@@ -1,15 +1,21 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for scheduler models, storage models, and Telegram commands.
 
 use chrono::Utc;
 
+use nerdbot::llm::types::{Message, MessageContent, Role, ToolExecutionStatus};
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
-use nerdbot::storage::sessions::ChatSession;
-use nerdbot::storage::messages::StoredMessage;
 use nerdbot::storage::jobs::StoredJob;
+use nerdbot::storage::messages::StoredMessage;
+use nerdbot::storage::sessions::ChatSession;
 use nerdbot::storage::summaries::StoredSummary;
 use nerdbot::telegram::commands::TelegramCommand;
-use nerdbot::llm::types::{Message, MessageContent, Role, ToolExecutionStatus};
 
 // ── JobContextPolicy ─────────────────────────────────────────────────────
 
@@ -201,7 +207,10 @@ fn test_stored_message_clone() {
     let cloned = msg.clone();
     assert_eq!(msg.content, cloned.content);
     assert_eq!(msg.chat_session_id, cloned.chat_session_id);
-    assert!(matches!((msg.role(), cloned.role()), (Ok(Role::User), Ok(Role::User))));
+    assert!(matches!(
+        (msg.role(), cloned.role()),
+        (Ok(Role::User), Ok(Role::User))
+    ));
 }
 
 #[test]
@@ -265,7 +274,10 @@ fn test_stored_job_clone() {
     let job = StoredJob::new(1, "j".into(), "p".into(), ScheduleType::Cron);
     let cloned = job.clone();
     assert_eq!(job.name, cloned.name);
-    assert!(matches!((job.schedule_type(), cloned.schedule_type()), (Ok(ScheduleType::Cron), Ok(ScheduleType::Cron))));
+    assert!(matches!(
+        (job.schedule_type(), cloned.schedule_type()),
+        (Ok(ScheduleType::Cron), Ok(ScheduleType::Cron))
+    ));
     assert_eq!(job.owner_chat_id, cloned.owner_chat_id);
 }
 
@@ -319,7 +331,10 @@ fn test_stored_summary_serialization() {
 
 #[test]
 fn test_telegram_command_parse_start() {
-    assert_eq!(TelegramCommand::parse("/start"), Some(TelegramCommand::Start));
+    assert_eq!(
+        TelegramCommand::parse("/start"),
+        Some(TelegramCommand::Start)
+    );
 }
 
 #[test]
@@ -375,12 +390,18 @@ fn test_telegram_command_parse_no_match() {
 
 #[test]
 fn test_telegram_command_parse_run_empty_arg() {
-    assert_eq!(TelegramCommand::parse("/run "), Some(TelegramCommand::Run("".into())));
+    assert_eq!(
+        TelegramCommand::parse("/run "),
+        Some(TelegramCommand::Run("".into()))
+    );
 }
 
 #[test]
 fn test_telegram_command_parse_delete_empty_arg() {
-    assert_eq!(TelegramCommand::parse("/delete "), Some(TelegramCommand::Delete("".into())));
+    assert_eq!(
+        TelegramCommand::parse("/delete "),
+        Some(TelegramCommand::Delete("".into()))
+    );
 }
 
 #[test]
@@ -425,7 +446,9 @@ fn test_role_roundtrip() {
 
 #[test]
 fn test_tool_execution_status_roundtrip() {
-    let status = ToolExecutionStatus::Error { error: "fail".into() };
+    let status = ToolExecutionStatus::Error {
+        error: "fail".into(),
+    };
     let json = serde_json::to_string(&status).unwrap();
     let restored: ToolExecutionStatus = serde_json::from_str(&json).unwrap();
     assert_eq!(status, restored);

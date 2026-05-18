@@ -1,4 +1,10 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for tool system: traits, registry, and stub tools.
 
 use std::path::PathBuf;
@@ -146,7 +152,10 @@ fn test_registry_specs_are_unique() {
     let specs = registry.specs();
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     // All names should be unique
-    assert_eq!(names.len(), names.iter().collect::<std::collections::HashSet<_>>().len());
+    assert_eq!(
+        names.len(),
+        names.iter().collect::<std::collections::HashSet<_>>().len()
+    );
 }
 
 #[tokio::test]
@@ -212,7 +221,10 @@ fn test_registry_tool_spec_validation() {
 
     let spec = &specs[0];
     assert_eq!(spec.name, "schedule_job");
-    assert_eq!(spec.description, "Schedule a one-shot or recurring agent task.");
+    assert_eq!(
+        spec.description,
+        "Schedule a one-shot or recurring agent task."
+    );
     assert!(spec.input_schema.is_object());
 }
 
@@ -308,8 +320,16 @@ fn test_stub_tool_descriptions_non_empty() {
 
     for tool in tools {
         let desc = tool.description();
-        assert!(!desc.is_empty(), "tool {} should have a non-empty description", tool.name());
-        assert!(desc.len() > 5, "tool {} description should be descriptive enough", tool.name());
+        assert!(
+            !desc.is_empty(),
+            "tool {} should have a non-empty description",
+            tool.name()
+        );
+        assert!(
+            desc.len() > 5,
+            "tool {} description should be descriptive enough",
+            tool.name()
+        );
     }
 }
 

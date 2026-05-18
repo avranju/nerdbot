@@ -19,11 +19,9 @@ impl TelegramService {
     /// Send a text message to a chat.
     ///
     /// Phase 1 stub.
-    pub async fn send_message(
-        &self,
-        _chat_id: i64,
-        _text: &str,
-    ) -> Result<(), AgentError> {
-        Err(AgentError::Telegram("Telegram service not yet implemented".into()))
+    pub async fn send_message(&self, _chat_id: i64, _text: &str) -> Result<(), AgentError> {
+        Err(AgentError::Telegram(
+            "Telegram service not yet implemented".into(),
+        ))
     }
 }

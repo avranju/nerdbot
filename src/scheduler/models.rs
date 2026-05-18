@@ -18,7 +18,6 @@ pub enum JobContextPolicy {
     IncludeChatSummary,
 }
 
-
 /// Type of schedule for a job.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

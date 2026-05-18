@@ -1,6 +1,5 @@
 //! Application-wide error types.
 
-
 /// All errors the agent runtime can produce.
 #[derive(thiserror::Error, Debug)]
 pub enum AgentError {
@@ -135,5 +134,3 @@ pub enum CompactionError {
     #[error("Storage error during compaction: {0}")]
     Storage(String),
 }
-
-

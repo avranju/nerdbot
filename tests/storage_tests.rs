@@ -1,21 +1,44 @@
 //! Integration tests for the storage layer.
 //!
-//! Uses an in-memory SQLite database to test CRUD operations
+//! Uses temporary SQLite files to test CRUD operations
 //! for sessions, messages, summaries, and jobs.
 
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use tempfile::NamedTempFile;
+use tokio::sync::Mutex;
 
 use nerdbot::error::AgentError;
 use nerdbot::llm::types::{Message, MessageContent, Role};
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
 use nerdbot::storage::{ChatSession, Database, StoredJob, StoredMessage, StoredSummary};
 
-/// Create an in-memory database and initialize it.
+/// A global lock to prevent parallel temp file cleanup races.
+static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Get the test lock (creates it lazily).
+fn test_lock() -> &'static Mutex<()> {
+    TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Create a database backed by a temporary file and initialize it.
 async fn setup_db() -> Database {
-    let db = Database::new(PathBuf::from(":memory:")).await.unwrap();
+    let _lock = test_lock().lock().await;
+    let tmp = NamedTempFile::new().unwrap();
+    let path = tmp.path().to_path_buf();
+    let db = Database::new(path.clone()).await.unwrap();
     db.init().await.unwrap();
+    // Leak the temp file so it doesn't get deleted while the DB is in use
+    std::mem::forget(tmp);
     db
 }
 
@@ -144,25 +167,15 @@ async fn test_create_and_list_messages() {
         .unwrap();
 
     // Create messages
-    let msg1 = Message::new(
-        Role::User,
-        MessageContent::Text("Hello".into()),
-    );
-    let msg2 = Message::new(
-        Role::Assistant,
-        MessageContent::Text("Hi there!".into()),
-    );
+    let msg1 = Message::new(Role::User, MessageContent::Text("Hello".into()));
+    let msg2 = Message::new(Role::Assistant, MessageContent::Text("Hi there!".into()));
 
-    let stored1 = nerdbot::storage::messages::create_message(
-        pool, &session.id, &msg1, Some(10),
-    )
-    .await
-    .unwrap();
-    let stored2 = nerdbot::storage::messages::create_message(
-        pool, &session.id, &msg2, Some(15),
-    )
-    .await
-    .unwrap();
+    let stored1 = nerdbot::storage::messages::create_message(pool, &session.id, &msg1, Some(10))
+        .await
+        .unwrap();
+    let stored2 = nerdbot::storage::messages::create_message(pool, &session.id, &msg2, Some(15))
+        .await
+        .unwrap();
 
     // List messages
     let messages = nerdbot::storage::messages::list_messages(pool, &session.id, None)
@@ -183,15 +196,10 @@ async fn test_list_messages_with_limit() {
         .unwrap();
 
     for i in 0..5 {
-        let msg = Message::new(
-            Role::User,
-            MessageContent::Text(format!("Message {i}")),
-        );
-        nerdbot::storage::messages::create_message(
-            pool, &session.id, &msg, None,
-        )
-        .await
-        .unwrap();
+        let msg = Message::new(Role::User, MessageContent::Text(format!("Message {i}")));
+        nerdbot::storage::messages::create_message(pool, &session.id, &msg, None)
+            .await
+            .unwrap();
     }
 
     let messages = nerdbot::storage::messages::list_messages(pool, &session.id, Some(3))
@@ -224,15 +232,10 @@ async fn test_message_to_message_conversion() {
         .await
         .unwrap();
 
-    let original = Message::new(
-        Role::User,
-        MessageContent::Text("test content".into()),
-    );
-    let stored = nerdbot::storage::messages::create_message(
-        pool, &session.id, &original, Some(5),
-    )
-    .await
-    .unwrap();
+    let original = Message::new(Role::User, MessageContent::Text("test content".into()));
+    let stored = nerdbot::storage::messages::create_message(pool, &session.id, &original, Some(5))
+        .await
+        .unwrap();
 
     let converted = stored.to_message().unwrap();
     assert_eq!(converted.role, Role::User);
@@ -264,7 +267,10 @@ async fn test_create_and_get_summary() {
         .unwrap();
 
     assert_eq!(stored.chat_session_id, session.id);
-    assert_eq!(stored.summary_text, "Conversation was about Rust programming.");
+    assert_eq!(
+        stored.summary_text,
+        "Conversation was about Rust programming."
+    );
 
     let found = nerdbot::storage::summaries::get_latest_summary(pool, &session.id)
         .await
@@ -372,19 +378,34 @@ async fn test_list_jobs_for_chat() {
 
     // Create jobs for chat 1
     nerdbot::storage::jobs::create_job(
-        pool, 1, "Job A".into(), "Prompt A".into(), ScheduleType::OneShot, None,
+        pool,
+        1,
+        "Job A".into(),
+        "Prompt A".into(),
+        ScheduleType::OneShot,
+        None,
     )
     .await
     .unwrap();
     nerdbot::storage::jobs::create_job(
-        pool, 1, "Job B".into(), "Prompt B".into(), ScheduleType::Cron, None,
+        pool,
+        1,
+        "Job B".into(),
+        "Prompt B".into(),
+        ScheduleType::Cron,
+        None,
     )
     .await
     .unwrap();
 
     // Create a job for chat 2
     nerdbot::storage::jobs::create_job(
-        pool, 2, "Job C".into(), "Prompt C".into(), ScheduleType::OneShot, None,
+        pool,
+        2,
+        "Job C".into(),
+        "Prompt C".into(),
+        ScheduleType::OneShot,
+        None,
     )
     .await
     .unwrap();
@@ -410,7 +431,12 @@ async fn test_list_jobs_enabled_only() {
     let pool = pool(&db);
 
     let job = nerdbot::storage::jobs::create_job(
-        pool, 1, "Enabled".into(), "Prompt".into(), ScheduleType::OneShot, None,
+        pool,
+        1,
+        "Enabled".into(),
+        "Prompt".into(),
+        ScheduleType::OneShot,
+        None,
     )
     .await
     .unwrap();
@@ -439,13 +465,21 @@ async fn test_job_typed_accessors() {
     let pool = pool(&db);
 
     let job = nerdbot::storage::jobs::create_job(
-        pool, 42, "Test Job".into(), "Test Prompt".into(), ScheduleType::Cron, None,
+        pool,
+        42,
+        "Test Job".into(),
+        "Test Prompt".into(),
+        ScheduleType::Cron,
+        None,
     )
     .await
     .unwrap();
 
     assert!(matches!(job.schedule_type(), Ok(ScheduleType::Cron)));
-    assert!(matches!(job.context_policy(), Ok(JobContextPolicy::IncludeCreationSnapshot)));
+    assert!(matches!(
+        job.context_policy(),
+        Ok(JobContextPolicy::IncludeCreationSnapshot)
+    ));
     assert!(job.last_status().unwrap().is_none());
     assert!(job.enabled);
     assert!(!job.notify_on_completion);
@@ -470,16 +504,14 @@ async fn test_session_message_summary_flow() {
         MessageContent::Text("Rust is a systems programming language.".into()),
     );
 
-    let user_stored = nerdbot::storage::messages::create_message(
-        pool, &session.id, &user_msg, Some(8),
-    )
-    .await
-    .unwrap();
-    let assistant_stored = nerdbot::storage::messages::create_message(
-        pool, &session.id, &assistant_msg, Some(12),
-    )
-    .await
-    .unwrap();
+    let user_stored =
+        nerdbot::storage::messages::create_message(pool, &session.id, &user_msg, Some(8))
+            .await
+            .unwrap();
+    let assistant_stored =
+        nerdbot::storage::messages::create_message(pool, &session.id, &assistant_msg, Some(12))
+            .await
+            .unwrap();
 
     // List messages
     let messages = nerdbot::storage::messages::list_messages(pool, &session.id, None)
@@ -528,10 +560,8 @@ async fn test_message_create_with_no_session_fails() {
 
     // This should not panic
     let msg = Message::new(Role::User, MessageContent::Text("orphan".into()));
-    let result = nerdbot::storage::messages::create_message(
-        pool, "nonexistent-session", &msg, None,
-    )
-    .await;
+    let result =
+        nerdbot::storage::messages::create_message(pool, "nonexistent-session", &msg, None).await;
     // May succeed or fail depending on FK enforcement — just check no panic
     let _ = result;
 }
@@ -555,12 +585,7 @@ fn test_stored_job_serialization_roundtrip() {
 
 #[test]
 fn test_stored_message_serialization_roundtrip() {
-    let msg = StoredMessage::new(
-        "session-1".into(),
-        Role::User,
-        "Hello".into(),
-        Some(5),
-    );
+    let msg = StoredMessage::new("session-1".into(), Role::User, "Hello".into(), Some(5));
     let json = serde_json::to_string(&msg).unwrap();
     let restored: StoredMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.chat_session_id, "session-1");

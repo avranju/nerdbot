@@ -119,13 +119,13 @@ impl FakeProvider {
                 })
                 .flat_map(|m| match &m.content {
                     crate::llm::types::MessageContent::Parts(parts) => parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        crate::llm::types::ContentPart::ToolCall(_) => Some(()),
-                        crate::llm::types::ContentPart::ToolResult(_) => Some(()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
+                        .iter()
+                        .filter_map(|p| match p {
+                            crate::llm::types::ContentPart::ToolCall(_) => Some(()),
+                            crate::llm::types::ContentPart::ToolResult(_) => Some(()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
                     crate::llm::types::MessageContent::Text(_) => Vec::new(),
                 })
                 .count()
@@ -136,7 +136,8 @@ impl FakeProvider {
 
     /// Reset the call count and last request (useful for multiple test scenarios).
     pub fn reset(&self) {
-        self.call_count.store(0, std::sync::atomic::Ordering::SeqCst);
+        self.call_count
+            .store(0, std::sync::atomic::Ordering::SeqCst);
         *self.last_request.write().unwrap() = None;
     }
 
@@ -175,12 +176,11 @@ impl FakeProvider {
 #[async_trait::async_trait]
 impl LlmProvider for FakeProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, AgentError> {
-        self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *self.last_request.write().unwrap() = Some(request.clone());
 
-        let idx = self
-            .index
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let idx = self.index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let response = if idx < self.responses.len() {
             self.responses[idx].clone()
@@ -216,10 +216,7 @@ impl LlmProvider for FakeProvider {
         Ok(model_response)
     }
 
-    async fn estimate_tokens(
-        &self,
-        _request: &ModelRequest,
-    ) -> Result<TokenEstimate, AgentError> {
+    async fn estimate_tokens(&self, _request: &ModelRequest) -> Result<TokenEstimate, AgentError> {
         // Simple heuristic: ~4 chars per token
         let total_chars: usize = _request
             .messages

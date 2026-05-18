@@ -18,7 +18,9 @@ impl CompactionWorker {
     ///
     /// Phase 1 stub.
     pub async fn compact(&self, _session_id: &str) -> Result<String, AgentError> {
-        Err(AgentError::Compaction("Compaction worker not yet implemented".into()))
+        Err(AgentError::Compaction(
+            "Compaction worker not yet implemented".into(),
+        ))
     }
 }
 

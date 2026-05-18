@@ -1,9 +1,14 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for error types in `src/error.rs`.
 
 use nerdbot::error::{
-    AgentError, CompactionError, TokenEstimationError, ToolError, WebFetchError,
-    WebSearchError,
+    AgentError, CompactionError, TokenEstimationError, ToolError, WebFetchError, WebSearchError,
 };
 
 // ── AgentError display ───────────────────────────────────────────────────
@@ -29,7 +34,10 @@ fn test_agent_error_display_tool_not_found() {
 #[test]
 fn test_agent_error_display_invalid_tool_args() {
     let err = AgentError::InvalidToolArgs("missing 'path' field".into());
-    assert_eq!(err.to_string(), "Invalid tool arguments: missing 'path' field");
+    assert_eq!(
+        err.to_string(),
+        "Invalid tool arguments: missing 'path' field"
+    );
 }
 
 #[test]
@@ -47,7 +55,10 @@ fn test_agent_error_display_storage() {
 #[test]
 fn test_agent_error_display_config() {
     let err = AgentError::Config("missing 'provider' field".into());
-    assert_eq!(err.to_string(), "Configuration error: missing 'provider' field");
+    assert_eq!(
+        err.to_string(),
+        "Configuration error: missing 'provider' field"
+    );
 }
 
 #[test]
@@ -245,7 +256,10 @@ fn test_token_estimation_error_display_failed() {
 #[test]
 fn test_compaction_error_display_model_call() {
     let err = CompactionError::ModelCall("context overflow".into());
-    assert_eq!(err.to_string(), "Compaction model call failed: context overflow");
+    assert_eq!(
+        err.to_string(),
+        "Compaction model call failed: context overflow"
+    );
 }
 
 #[test]
@@ -263,5 +277,8 @@ fn test_compaction_error_display_already_running() {
 #[test]
 fn test_compaction_error_display_storage() {
     let err = CompactionError::Storage("write failed".into());
-    assert_eq!(err.to_string(), "Storage error during compaction: write failed");
+    assert_eq!(
+        err.to_string(),
+        "Storage error during compaction: write failed"
+    );
 }

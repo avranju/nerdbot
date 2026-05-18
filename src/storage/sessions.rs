@@ -51,7 +51,10 @@ pub async fn create_session(pool: &SqlitePool, chat_id: i64) -> Result<ChatSessi
 }
 
 /// Find a chat session by its database ID.
-pub async fn get_session(pool: &SqlitePool, session_id: &str) -> Result<Option<ChatSession>, AgentError> {
+pub async fn get_session(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Option<ChatSession>, AgentError> {
     let row = sqlx::query_as::<_, ChatSession>(
         "SELECT id, telegram_chat_id, created_at, updated_at FROM chat_sessions WHERE id = ?1",
     )

@@ -46,11 +46,7 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> Value;
 
     /// Execute the tool with the given arguments.
-    async fn execute(
-        &self,
-        args: Value,
-        ctx: ToolContext,
-    ) -> Result<ToolOutput, AgentError>;
+    async fn execute(&self, args: Value, ctx: ToolContext) -> Result<ToolOutput, AgentError>;
 }
 
 /// A boxed tool, stored as Arc for cheap cloning.

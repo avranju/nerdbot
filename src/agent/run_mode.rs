@@ -28,9 +28,7 @@ pub enum AgentRunMode {
         notify_on_completion: bool,
     },
     /// Internal harness-initiated run (e.g. compaction, maintenance).
-    Internal {
-        reason: String,
-    },
+    Internal { reason: String },
 }
 
 impl AgentRunMode {
@@ -38,7 +36,9 @@ impl AgentRunMode {
     pub fn chat_id(&self) -> Option<TelegramChatId> {
         match self {
             AgentRunMode::InteractiveReply { chat_id, .. } => Some(*chat_id),
-            AgentRunMode::ScheduledJob { default_chat_id, .. } => Some(*default_chat_id),
+            AgentRunMode::ScheduledJob {
+                default_chat_id, ..
+            } => Some(*default_chat_id),
             AgentRunMode::Internal { .. } => None,
         }
     }

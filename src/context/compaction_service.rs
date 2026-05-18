@@ -10,13 +10,9 @@ pub enum CompactionState {
     /// No compaction is happening.
     Idle,
     /// Compaction is running, targeting a specific boundary.
-    Running {
-        target_through_message_id: String,
-    },
+    Running { target_through_message_id: String },
     /// Compaction is running but more messages arrived (needs another pass).
-    RunningAndDirty {
-        target_through_message_id: String,
-    },
+    RunningAndDirty { target_through_message_id: String },
 }
 
 /// Manages background compaction for all sessions.
@@ -31,7 +27,9 @@ impl CompactionService {
 
     /// Check if a session needs compaction and enqueue if so.
     pub async fn check_session(&self, _session_id: &str) -> Result<(), AgentError> {
-        Err(AgentError::Compaction("Compaction not yet implemented".into()))
+        Err(AgentError::Compaction(
+            "Compaction not yet implemented".into(),
+        ))
     }
 
     /// Get the compaction state for a session.

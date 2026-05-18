@@ -1,4 +1,10 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for LLM provider-neutral types in `src/llm/types.rs`.
 
 use nerdbot::llm::types::*;
@@ -10,7 +16,10 @@ use serde_json::json;
 fn test_role_serialization() {
     assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
     assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
-    assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+    assert_eq!(
+        serde_json::to_string(&Role::Assistant).unwrap(),
+        "\"assistant\""
+    );
     assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
 }
 
@@ -282,8 +291,16 @@ fn test_message_assistant() {
 #[test]
 fn test_message_assistant_tool_calls() {
     let calls = vec![
-        ToolCall { id: "1".into(), name: "read_file".into(), arguments: json!({"path": "a"}) },
-        ToolCall { id: "2".into(), name: "web_search".into(), arguments: json!({"query": "b"}) },
+        ToolCall {
+            id: "1".into(),
+            name: "read_file".into(),
+            arguments: json!({"path": "a"}),
+        },
+        ToolCall {
+            id: "2".into(),
+            name: "web_search".into(),
+            arguments: json!({"query": "b"}),
+        },
     ];
     let msg = Message::assistant_tool_calls(calls.clone());
     assert_eq!(msg.role, Role::Assistant);
@@ -395,7 +412,11 @@ fn test_model_request_with_tool_results() {
 fn test_model_response_has_tool_calls() {
     let response = ModelResponse {
         assistant_text: None,
-        tool_calls: vec![ToolCall { id: "1".into(), name: "x".into(), arguments: json!({}) }],
+        tool_calls: vec![ToolCall {
+            id: "1".into(),
+            name: "x".into(),
+            arguments: json!({}),
+        }],
         finish_reason: FinishReason::ToolUse,
         provider_metadata: None,
     };
@@ -428,7 +449,11 @@ fn test_model_response_is_final() {
 fn test_model_response_is_not_final_with_tools() {
     let response = ModelResponse {
         assistant_text: Some("I'll check...".into()),
-        tool_calls: vec![ToolCall { id: "1".into(), name: "x".into(), arguments: json!({}) }],
+        tool_calls: vec![ToolCall {
+            id: "1".into(),
+            name: "x".into(),
+            arguments: json!({}),
+        }],
         finish_reason: FinishReason::ToolUse,
         provider_metadata: None,
     };
@@ -555,11 +580,14 @@ fn test_tool_call_clone() {
 
 #[test]
 fn test_tool_call_debug() {
-    let debug_str = format!("{:?}", ToolCall {
-        id: "1".into(),
-        name: "test".into(),
-        arguments: json!({}),
-    });
+    let debug_str = format!(
+        "{:?}",
+        ToolCall {
+            id: "1".into(),
+            name: "test".into(),
+            arguments: json!({}),
+        }
+    );
     assert!(debug_str.contains("ToolCall"));
 }
 

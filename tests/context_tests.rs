@@ -1,11 +1,17 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for context management: budgeting, summaries, compaction state.
 
 use std::collections::HashMap;
 
 use nerdbot::context::budget::ContextBudget;
-use nerdbot::context::summaries::ContextSummary;
 use nerdbot::context::compaction_service::CompactionState;
+use nerdbot::context::summaries::ContextSummary;
 
 // ── ContextBudget ────────────────────────────────────────────────────────
 
@@ -89,7 +95,10 @@ fn test_thresholds_ordering() {
     let soft = budget.soft_threshold_tokens();
     let hard = budget.hard_threshold_tokens();
     // soft threshold should always be less than hard threshold
-    assert!(soft < hard, "soft threshold ({soft}) must be less than hard threshold ({hard})");
+    assert!(
+        soft < hard,
+        "soft threshold ({soft}) must be less than hard threshold ({hard})"
+    );
 }
 
 #[test]
@@ -112,7 +121,10 @@ fn test_budget_clone() {
     let cloned = budget.clone();
     assert_eq!(budget.context_window_tokens, cloned.context_window_tokens);
     assert_eq!(budget.reserved_output_tokens, cloned.reserved_output_tokens);
-    assert_eq!(budget.soft_compaction_threshold, cloned.soft_compaction_threshold);
+    assert_eq!(
+        budget.soft_compaction_threshold,
+        cloned.soft_compaction_threshold
+    );
 }
 
 // ── ContextSummary ───────────────────────────────────────────────────────
@@ -135,11 +147,7 @@ fn test_context_summary_new() {
 
 #[test]
 fn test_context_summary_fields() {
-    let summary = ContextSummary::new(
-        "s1".into(),
-        "Summary text here.".into(),
-        "msg-100".into(),
-    );
+    let summary = ContextSummary::new("s1".into(), "Summary text here.".into(), "msg-100".into());
     assert!(summary.created_at > chrono::DateTime::<chrono::Utc>::MIN_UTC);
 }
 
@@ -176,7 +184,10 @@ fn test_context_summary_roundtrip() {
     let restored: ContextSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary.chat_session_id, restored.chat_session_id);
     assert_eq!(summary.summary_text, restored.summary_text);
-    assert_eq!(summary.covers_through_message_id, restored.covers_through_message_id);
+    assert_eq!(
+        summary.covers_through_message_id,
+        restored.covers_through_message_id
+    );
 }
 
 // ── CompactionState ──────────────────────────────────────────────────────
@@ -193,7 +204,9 @@ fn test_compaction_state_running() {
     let state = CompactionState::Running {
         target_through_message_id: "msg-50".into(),
     };
-    assert!(matches!(state, CompactionState::Running { target_through_message_id } if target_through_message_id == "msg-50"));
+    assert!(
+        matches!(state, CompactionState::Running { target_through_message_id } if target_through_message_id == "msg-50")
+    );
 }
 
 #[test]

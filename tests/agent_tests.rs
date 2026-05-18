@@ -1,10 +1,16 @@
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 //! Tests for agent module: run modes and outcomes.
 
 use std::path::PathBuf;
 
-use nerdbot::agent::run_mode::{AgentRunMode, JobId, TelegramChatId, TelegramUserId};
 use nerdbot::agent::outcome::{AgentOutcome, AgentResult, RunMetadata};
+use nerdbot::agent::run_mode::{AgentRunMode, JobId, TelegramChatId, TelegramUserId};
 use nerdbot::llm::types::TokenEstimate;
 
 // ── AgentRunMode: InteractiveReply ───────────────────────────────────────

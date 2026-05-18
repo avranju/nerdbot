@@ -5,7 +5,13 @@
 //! driven by multiple LLM providers.
 
 // TODO: Remove this allow once all modules are fully implemented (target Phase 5+).
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 
 use std::path::PathBuf;
 
@@ -38,8 +44,7 @@ async fn main() {
     // Initialize structured logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
