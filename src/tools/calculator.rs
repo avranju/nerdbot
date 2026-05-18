@@ -15,6 +15,7 @@ use crate::tools::traits::{Tool, ToolContext, ToolOutput};
 /// Returns the result and the operation performed.
 pub struct CalculatorTool;
 
+#[async_trait::async_trait]
 impl Tool for CalculatorTool {
     fn name(&self) -> &'static str {
         "calculator"
@@ -46,7 +47,7 @@ impl Tool for CalculatorTool {
         })
     }
 
-    fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
+    async fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
         let operation = args
             .get("operation")
             .and_then(|v| v.as_str())

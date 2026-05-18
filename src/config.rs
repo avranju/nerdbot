@@ -8,6 +8,7 @@ use crate::error::AgentError;
 
 /// Top-level configuration.
 #[derive(Debug, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub agent: AgentConfig,
@@ -141,6 +142,7 @@ impl Default for LlmConfig {
 
 /// Per-provider configuration.
 #[derive(Debug, Deserialize)]
+#[derive(Default)]
 pub struct ProvidersConfig {
     #[serde(default)]
     pub anthropic: AnthropicProviderConfig,
@@ -152,16 +154,6 @@ pub struct ProvidersConfig {
     pub openrouter: OpenrouterProviderConfig,
 }
 
-impl Default for ProvidersConfig {
-    fn default() -> Self {
-        Self {
-            anthropic: AnthropicProviderConfig::default(),
-            openai: OpenaiProviderConfig::default(),
-            gemini: GeminiProviderConfig::default(),
-            openrouter: OpenrouterProviderConfig::default(),
-        }
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct AnthropicProviderConfig {
@@ -247,6 +239,7 @@ impl Default for ContextConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[derive(Default)]
 pub struct CompactorConfig {
     #[serde(default)]
     pub provider: String,
@@ -254,29 +247,15 @@ pub struct CompactorConfig {
     pub model: String,
 }
 
-impl Default for CompactorConfig {
-    fn default() -> Self {
-        Self {
-            provider: String::new(),
-            model: String::new(),
-        }
-    }
-}
 
 /// Scheduler configuration.
 #[derive(Debug, Deserialize)]
+#[derive(Default)]
 pub struct SchedulerConfig {
     #[serde(default)]
     pub run_overdue_one_shots_on_startup: bool,
 }
 
-impl Default for SchedulerConfig {
-    fn default() -> Self {
-        Self {
-            run_overdue_one_shots_on_startup: false,
-        }
-    }
-}
 
 // Default functions for serde defaults
 
@@ -312,17 +291,3 @@ impl AppConfig {
     }
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentConfig::default(),
-            telegram: TelegramConfig::default(),
-            storage: StorageConfig::default(),
-            workspace: WorkspaceConfig::default(),
-            llm: LlmConfig::default(),
-            providers: ProvidersConfig::default(),
-            context: ContextConfig::default(),
-            scheduler: SchedulerConfig::default(),
-        }
-    }
-}

@@ -15,6 +15,7 @@ use crate::tools::traits::{Tool, ToolContext, ToolOutput};
 /// verify that tool arguments are correctly passed through the system.
 pub struct EchoTool;
 
+#[async_trait::async_trait]
 impl Tool for EchoTool {
     fn name(&self) -> &'static str {
         "echo"
@@ -37,7 +38,7 @@ impl Tool for EchoTool {
         })
     }
 
-    fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
+    async fn execute(&self, args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
         let message = args
             .get("message")
             .and_then(|v| v.as_str())

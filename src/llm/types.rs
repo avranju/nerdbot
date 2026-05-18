@@ -94,6 +94,7 @@ impl ToolExecutionStatus {
 
 /// A request sent to an LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ModelRequest {
     /// Conversation messages.
     pub messages: Vec<Message>,
@@ -109,18 +110,6 @@ pub struct ModelRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-impl Default for ModelRequest {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            tools: Vec::new(),
-            model: String::new(),
-            temperature: None,
-            max_output_tokens: None,
-            metadata: None,
-        }
-    }
-}
 
 /// Response from an LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,7 +255,7 @@ impl ModelRequest {
     pub fn with_tool_results(mut self, results: Vec<ToolResult>) -> Self {
         let parts: Vec<ContentPart> = results
             .into_iter()
-            .map(|r| ContentPart::ToolResult(r))
+            .map(ContentPart::ToolResult)
             .collect();
         self.messages
             .push(Message::new(Role::Assistant, MessageContent::Parts(parts)));

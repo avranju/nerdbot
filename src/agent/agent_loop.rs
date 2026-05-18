@@ -12,8 +12,8 @@ use crate::agent::run_mode::AgentRunMode;
 use crate::error::AgentError;
 use crate::llm::provider::LlmProvider;
 use crate::llm::types::ModelRequest;
-use crate::tools::traits::ToolContext;
 use crate::tools::registry::ToolRegistry;
+use crate::tools::traits::ToolContext;
 
 /// Configuration for the agent loop.
 #[derive(Debug, Clone)]
@@ -45,8 +45,15 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
-    // Build the initial message set and start with a working copy.
-    let mut working_messages = build_initial_messages(ctx).await?;
+    // Build the initial message set: personality as system message + user messages.
+    let mut working_messages = ctx.messages.clone();
+    if !ctx.personality.is_empty()
+        && !working_messages
+            .iter()
+            .any(|m| matches!(m.role, crate::llm::types::Role::System))
+    {
+        working_messages.insert(0, crate::llm::types::Message::system(&ctx.personality));
+    }
 
     let mut total_input_tokens: usize = 0;
     let mut total_output_tokens: usize = 0;
@@ -67,19 +74,21 @@ pub async fn run_agent(
             .with_tools(registry.specs());
 
         // Call the LLM
-        let response = provider.complete(request.clone()).await?;
+        let response = provider.complete(request).await?;
 
         // Track token usage
-        if let Some(meta) = &response.provider_metadata {
-            if let Some(token_usage) = meta.get("usage") {
-                if let Some(input_tokens) = token_usage.get("input_tokens").and_then(|t| t.as_u64()) {
+        if let Some(meta) = &response.provider_metadata
+            && let Some(token_usage) = meta.get("usage") {
+                if let Some(input_tokens) = token_usage.get("input_tokens").and_then(|t| t.as_u64())
+                {
                     total_input_tokens += input_tokens as usize;
                 }
-                if let Some(output_tokens) = token_usage.get("output_tokens").and_then(|t| t.as_u64()) {
+                if let Some(output_tokens) =
+                    token_usage.get("output_tokens").and_then(|t| t.as_u64())
+                {
                     total_output_tokens += output_tokens as usize;
                 }
             }
-        }
 
         debug!(
             step = step + 1,
@@ -112,16 +121,14 @@ pub async fn run_agent(
         // Check access before executing tool calls
         let chat_id = ctx.run_mode.chat_id();
         let user_id = ctx.run_mode.user_id();
-        if let Some(cid) = chat_id {
-            if !ctx.allowed_chat_ids.is_empty() && !ctx.allowed_chat_ids.contains(&cid) {
+        if let Some(cid) = chat_id
+            && !ctx.allowed_chat_ids.is_empty() && !ctx.allowed_chat_ids.contains(&cid) {
                 return Err(AgentError::PermissionDenied);
             }
-        }
-        if let Some(uid) = user_id {
-            if !ctx.allowed_user_ids.is_empty() && !ctx.allowed_user_ids.contains(&uid) {
+        if let Some(uid) = user_id
+            && !ctx.allowed_user_ids.is_empty() && !ctx.allowed_user_ids.contains(&uid) {
                 return Err(AgentError::PermissionDenied);
             }
-        }
 
         // Execute tool calls and collect results
         let tool_ctx = ToolContext {
@@ -135,7 +142,7 @@ pub async fn run_agent(
         let mut tool_results = Vec::new();
 
         for tool_call in &response.tool_calls {
-            match registry.execute(tool_call, tool_ctx.clone()) {
+            match registry.execute(tool_call, tool_ctx.clone()).await {
                 Ok(output) => {
                     debug!(
                         tool = tool_call.name,
@@ -179,7 +186,9 @@ pub async fn run_agent(
 
         // Append tool call messages and results to working messages
         // so the provider can see them on the next iteration.
-        working_messages.push(crate::llm::types::Message::assistant_tool_calls(response.tool_calls.clone()));
+        working_messages.push(crate::llm::types::Message::assistant_tool_calls(
+            response.tool_calls.clone(),
+        ));
 
         let results_count = tool_results.len();
         if !tool_results.is_empty() {
@@ -201,28 +210,9 @@ pub async fn run_agent(
         "agent loop exceeded max tool iterations"
     );
 
-    Err(AgentError::MaxToolIterationsExceeded(config.max_tool_iterations))
-}
-
-/// Build the initial message set from the agent context.
-///
-/// Includes the user-provided messages plus the personality as a
-/// system message (if present and not already in the list).
-async fn build_initial_messages(
-    ctx: &AgentContext,
-) -> Result<Vec<crate::llm::types::Message>, AgentError> {
-    let mut messages = ctx.messages.clone();
-
-    // Inject personality as system message if not already present
-    if !ctx.personality.is_empty()
-        && !messages
-            .iter()
-            .any(|m| matches!(m.role, crate::llm::types::Role::System))
-    {
-        messages.insert(0, crate::llm::types::Message::system(&ctx.personality));
-    }
-
-    Ok(messages)
+    Err(AgentError::MaxToolIterationsExceeded(
+        config.max_tool_iterations,
+    ))
 }
 
 /// Context passed to the agent loop.

@@ -5,33 +5,90 @@ use serde_json::json;
 use crate::error::AgentError;
 use crate::tools::traits::{Tool, ToolContext, ToolOutput};
 
-macro_rules! stub_tool {
-    ($name:expr, $desc:expr, $schema:expr) => {
-        fn name(&self) -> &'static str { $name }
-        fn description(&self) -> &'static str { $desc }
-        fn input_schema(&self) -> serde_json::Value { $schema }
-        fn execute(&self, _args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
-            Err(AgentError::Generic(concat!($name, " not yet implemented").into()))
-        }
-    };
-}
-
 pub struct ScheduleJob;
+
+#[async_trait::async_trait]
 impl Tool for ScheduleJob {
-    stub_tool!("schedule_job", "Schedule a one-shot or recurring agent task.", json!({}));
+    fn name(&self) -> &'static str {
+        "schedule_job"
+    }
+    fn description(&self) -> &'static str {
+        "Schedule a one-shot or recurring agent task."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Err(AgentError::Generic("schedule_job not yet implemented".into()))
+    }
 }
 
 pub struct ListJobs;
+
+#[async_trait::async_trait]
 impl Tool for ListJobs {
-    stub_tool!("list_jobs", "List scheduled jobs.", json!({}));
+    fn name(&self) -> &'static str {
+        "list_jobs"
+    }
+    fn description(&self) -> &'static str {
+        "List scheduled jobs."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Err(AgentError::Generic("list_jobs not yet implemented".into()))
+    }
 }
 
 pub struct DeleteJob;
+
+#[async_trait::async_trait]
 impl Tool for DeleteJob {
-    stub_tool!("delete_job", "Delete a scheduled job.", json!({}));
+    fn name(&self) -> &'static str {
+        "delete_job"
+    }
+    fn description(&self) -> &'static str {
+        "Delete a scheduled job."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Err(AgentError::Generic("delete_job not yet implemented".into()))
+    }
 }
 
 pub struct RunJobNow;
+
+#[async_trait::async_trait]
 impl Tool for RunJobNow {
-    stub_tool!("run_job_now", "Immediately trigger a scheduled job once.", json!({}));
+    fn name(&self) -> &'static str {
+        "run_job_now"
+    }
+    fn description(&self) -> &'static str {
+        "Immediately trigger a scheduled job once."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Err(AgentError::Generic("run_job_now not yet implemented".into()))
+    }
 }

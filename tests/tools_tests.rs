@@ -149,8 +149,8 @@ fn test_registry_specs_are_unique() {
     assert_eq!(names.len(), names.iter().collect::<std::collections::HashSet<_>>().len());
 }
 
-#[test]
-fn test_registry_execute_unknown_tool() {
+#[tokio::test]
+async fn test_registry_execute_unknown_tool() {
     let registry = ToolRegistry::new();
     let call = ToolCall {
         id: "1".into(),
@@ -167,13 +167,13 @@ fn test_registry_execute_unknown_tool() {
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
     };
-    let result = registry.execute(&call, ctx);
+    let result = registry.execute(&call, ctx).await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::ToolNotFound(_)));
 }
 
-#[test]
-fn test_registry_execute_stub_tool_returns_not_implemented() {
+#[tokio::test]
+async fn test_registry_execute_stub_tool_returns_not_implemented() {
     let mut registry = ToolRegistry::new();
     registry.register(nerdbot::tools::files::ReadFile);
 
@@ -192,7 +192,7 @@ fn test_registry_execute_stub_tool_returns_not_implemented() {
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
     };
-    let result = registry.execute(&call, ctx);
+    let result = registry.execute(&call, ctx).await;
     assert!(result.is_err());
     // The stub returns a Generic error with "not yet implemented"
     if let Err(AgentError::Generic(msg)) = result {
@@ -333,8 +333,8 @@ fn test_stub_tool_input_schema_is_object() {
     }
 }
 
-#[test]
-fn test_stub_tool_execute_fails_gracefully() {
+#[tokio::test]
+async fn test_stub_tool_execute_fails_gracefully() {
     let tool = nerdbot::tools::files::ReadFile;
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
@@ -346,7 +346,7 @@ fn test_stub_tool_execute_fails_gracefully() {
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
     };
-    let result = Tool::execute(&tool, serde_json::json!({}), ctx);
+    let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
     assert!(result.is_err());
 }
 
@@ -366,8 +366,8 @@ fn test_registry_mixed_tools() {
     assert!(names.contains(&"web_fetch"));
 }
 
-#[test]
-fn test_registry_execute_with_invalid_args() {
+#[tokio::test]
+async fn test_registry_execute_with_invalid_args() {
     let mut registry = ToolRegistry::new();
     registry.register(nerdbot::tools::files::ReadFile);
 
@@ -387,7 +387,7 @@ fn test_registry_execute_with_invalid_args() {
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
     };
-    let result = registry.execute(&call, ctx);
+    let result = registry.execute(&call, ctx).await;
     // Should fail since it's a stub, but should not panic
     assert!(result.is_err());
 }

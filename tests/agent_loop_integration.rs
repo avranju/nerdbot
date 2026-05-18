@@ -183,7 +183,7 @@ async fn test_echo_tool_execution() {
     let result = tool.execute(
         serde_json::json!({"message": "hello world"}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -212,7 +212,7 @@ async fn test_calculator_add() {
     let result = tool.execute(
         serde_json::json!({"operation": "add", "a": 2, "b": 3}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -238,7 +238,7 @@ async fn test_calculator_subtract() {
     let result = tool.execute(
         serde_json::json!({"operation": "subtract", "a": 10, "b": 4}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -263,7 +263,7 @@ async fn test_calculator_multiply() {
     let result = tool.execute(
         serde_json::json!({"operation": "multiply", "a": 7, "b": 6}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -288,7 +288,7 @@ async fn test_calculator_divide() {
     let result = tool.execute(
         serde_json::json!({"operation": "divide", "a": 15, "b": 3}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
     let output = result.unwrap();
@@ -313,7 +313,7 @@ async fn test_calculator_division_by_zero() {
     let result = tool.execute(
         serde_json::json!({"operation": "divide", "a": 1, "b": 0}),
         ctx,
-    );
+    ).await;
 
     // Should succeed but return a failure output (not an AgentError)
     assert!(result.is_ok());
@@ -339,7 +339,7 @@ async fn test_calculator_invalid_operation() {
     let result = tool.execute(
         serde_json::json!({"operation": "modulus", "a": 10, "b": 3}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::InvalidToolArgs(_)));
@@ -363,7 +363,7 @@ async fn test_calculator_missing_field() {
     let result = tool.execute(
         serde_json::json!({"operation": "add", "a": 5}),
         ctx,
-    );
+    ).await;
 
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::InvalidToolArgs(_)));
@@ -531,8 +531,8 @@ fn test_registry_with_calculator_only() {
 
 // ── Test: Registry Execute Echo Tool ───────────────────────────────────
 
-#[test]
-fn test_registry_execute_echo() {
+#[tokio::test]
+async fn test_registry_execute_echo() {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
@@ -553,7 +553,7 @@ fn test_registry_execute_echo() {
         allowed_user_ids: vec![],
     };
 
-    let result = registry.execute(&call, ctx);
+    let result = registry.execute(&call, ctx).await;
     assert!(result.is_ok());
     let output = result.unwrap();
     assert!(output.success);
@@ -561,8 +561,8 @@ fn test_registry_execute_echo() {
 
 // ── Test: Registry Execute Calculator Tool ─────────────────────────────
 
-#[test]
-fn test_registry_execute_calculator() {
+#[tokio::test]
+async fn test_registry_execute_calculator() {
     let mut registry = ToolRegistry::new();
     registry.register(CalculatorTool);
 
@@ -583,7 +583,7 @@ fn test_registry_execute_calculator() {
         allowed_user_ids: vec![],
     };
 
-    let result = registry.execute(&call, ctx);
+    let result = registry.execute(&call, ctx).await;
     assert!(result.is_ok());
     let output = result.unwrap();
     assert!(output.success);

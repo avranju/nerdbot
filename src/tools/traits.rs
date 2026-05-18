@@ -1,7 +1,4 @@
 //! Tool trait — all tools must implement this interface.
-//!
-//! For Phase 1, execute() is synchronous. Real async tools (I/O)
-//! will be added in Phase 8 with a proper async trait.
 
 use std::sync::Arc;
 
@@ -37,6 +34,7 @@ pub struct ToolOutput {
 }
 
 /// All tools must implement this trait.
+#[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     /// Unique name of the tool (must match what the LLM will call).
     fn name(&self) -> &'static str;
@@ -48,10 +46,11 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> Value;
 
     /// Execute the tool with the given arguments.
-    ///
-    /// Phase 1: synchronous execution. Phase 8: real I/O tools
-    /// will use async.
-    fn execute(&self, args: Value, ctx: ToolContext) -> Result<ToolOutput, AgentError>;
+    async fn execute(
+        &self,
+        args: Value,
+        ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError>;
 }
 
 /// A boxed tool, stored as Arc for cheap cloning.

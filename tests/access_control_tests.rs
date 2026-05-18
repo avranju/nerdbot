@@ -13,11 +13,12 @@ use serde_json::json;
 /// A minimal test tool for access control testing.
 struct TestTool;
 
+#[async_trait::async_trait]
 impl Tool for TestTool {
     fn name(&self) -> &'static str { "test_tool" }
     fn description(&self) -> &'static str { "Test tool." }
     fn input_schema(&self) -> serde_json::Value { json!({}) }
-    fn execute(&self, _args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
+    async fn execute(&self, _args: serde_json::Value, _ctx: ToolContext) -> Result<ToolOutput, AgentError> {
         Ok(ToolOutput {
             success: true,
             data: json!({}),
@@ -40,8 +41,8 @@ fn make_tool_context(
     }
 }
 
-#[test]
-fn test_access_allowed_when_no_restrictions() {
+#[tokio::test]
+async fn test_access_allowed_when_no_restrictions() {
     let mut registry = ToolRegistry::new();
     registry.register(TestTool);
 
@@ -58,13 +59,13 @@ fn test_access_allowed_when_no_restrictions() {
             arguments: json!({}),
         },
         ctx,
-    );
+    ).await;
 
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_access_denied_when_chat_id_not_allowed() {
+#[tokio::test]
+async fn test_access_denied_when_chat_id_not_allowed() {
     let mut registry = ToolRegistry::new();
     registry.register(TestTool);
 
@@ -76,14 +77,14 @@ fn test_access_denied_when_chat_id_not_allowed() {
         vec![],
     );
 
-    let result = registry.execute(
+    let _ = registry.execute(
         &nerdbot::llm::types::ToolCall {
             id: "t1".into(),
             name: "test_tool".into(),
             arguments: json!({}),
         },
         ctx,
-    );
+    ).await;
 
     // ToolRegistry.execute doesn't check access — that's done in run_agent
     // This test verifies that ToolContext correctly carries the IDs

@@ -31,7 +31,7 @@ impl ToolRegistry {
     }
 
     /// Execute a tool call by name.
-    pub fn execute(
+    pub async fn execute(
         &self,
         call: &ToolCall,
         ctx: ToolContext,
@@ -49,7 +49,7 @@ impl ToolRegistry {
             "executing tool call"
         );
 
-        tool.execute(call.arguments.clone(), ctx)
+        tool.execute(call.arguments.clone(), ctx).await
     }
 
     pub fn len(&self) -> usize {
