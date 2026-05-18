@@ -100,12 +100,27 @@ pub async fn run_agent(
             });
         }
 
+        // Check access before executing tool calls
+        let chat_id = ctx.run_mode.chat_id();
+        let user_id = ctx.run_mode.user_id();
+        if let Some(cid) = chat_id {
+            if !ctx.allowed_chat_ids.is_empty() && !ctx.allowed_chat_ids.contains(&cid) {
+                return Err(AgentError::PermissionDenied);
+            }
+        }
+        if let Some(uid) = user_id {
+            if !ctx.allowed_user_ids.is_empty() && !ctx.allowed_user_ids.contains(&uid) {
+                return Err(AgentError::PermissionDenied);
+            }
+        }
+
         // Execute tool calls
         let tool_ctx = ToolContext {
             run_mode: ctx.run_mode.clone(),
             workspace_root: ctx.workspace_root.clone(),
             telegram_token: ctx.telegram_token.clone(),
             allowed_chat_ids: ctx.allowed_chat_ids.clone(),
+            allowed_user_ids: ctx.allowed_user_ids.clone(),
         };
 
         for tool_call in &response.tool_calls {
@@ -183,8 +198,10 @@ pub struct AgentContext {
     pub workspace_root: std::path::PathBuf,
     /// Telegram bot token.
     pub telegram_token: String,
-    /// Allowed Telegram chat IDs.
+    /// Allowed Telegram conversation IDs (chats, groups, channels).
     pub allowed_chat_ids: Vec<i64>,
+    /// Allowed Telegram account IDs (individual users).
+    pub allowed_user_ids: Vec<i64>,
 }
 
 impl AgentContext {
@@ -194,6 +211,7 @@ impl AgentContext {
         workspace_root: std::path::PathBuf,
         telegram_token: String,
         allowed_chat_ids: Vec<i64>,
+        allowed_user_ids: Vec<i64>,
     ) -> Self {
         Self {
             run_mode,
@@ -202,6 +220,7 @@ impl AgentContext {
             workspace_root,
             telegram_token,
             allowed_chat_ids,
+            allowed_user_ids,
         }
     }
 }

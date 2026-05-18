@@ -19,8 +19,10 @@ pub struct ToolContext {
     pub workspace_root: std::path::PathBuf,
     /// Telegram bot token (for messaging tools).
     pub telegram_token: String,
-    /// Allowed chat IDs (for security).
+    /// Allowed conversation IDs (private chats, groups, channels).
     pub allowed_chat_ids: Vec<i64>,
+    /// Allowed account IDs (individual Telegram users).
+    pub allowed_user_ids: Vec<i64>,
 }
 
 /// Output from a tool execution.

@@ -19,6 +19,7 @@ fn test_tool_context_clone() {
         workspace_root: PathBuf::from("/workspace"),
         telegram_token: "bot-token".into(),
         allowed_chat_ids: vec![123, 456],
+        allowed_user_ids: vec![],
     };
     let cloned = ctx.clone();
     assert_eq!(ctx.workspace_root, cloned.workspace_root);
@@ -37,6 +38,7 @@ fn test_tool_context_clone_run_mode() {
         workspace_root: PathBuf::from("/data"),
         telegram_token: "token".into(),
         allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
     };
     let cloned = ctx.clone();
     assert_eq!(ctx.run_mode, cloned.run_mode);
@@ -162,6 +164,7 @@ fn test_registry_execute_unknown_tool() {
         workspace_root: PathBuf::from("/tmp"),
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
     };
     let result = registry.execute(&call, ctx);
     assert!(result.is_err());
@@ -186,6 +189,7 @@ fn test_registry_execute_stub_tool_returns_not_implemented() {
         workspace_root: PathBuf::from("/tmp"),
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
     };
     let result = registry.execute(&call, ctx);
     assert!(result.is_err());
@@ -339,6 +343,7 @@ fn test_stub_tool_execute_fails_gracefully() {
         workspace_root: PathBuf::from("/tmp"),
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
     };
     let result = Tool::execute(&tool, serde_json::json!({}), ctx);
     assert!(result.is_err());
@@ -379,6 +384,7 @@ fn test_registry_execute_with_invalid_args() {
         workspace_root: PathBuf::from("/tmp"),
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
     };
     let result = registry.execute(&call, ctx);
     // Should fail since it's a stub, but should not panic

@@ -54,10 +54,17 @@ impl Default for AgentConfig {
 /// Telegram-specific configuration.
 #[derive(Debug, Deserialize)]
 pub struct TelegramConfig {
+    /// Environment variable name holding the bot token.
     #[serde(default = "default_telegram_token_env")]
     pub bot_token_env: String,
+    /// Allowed Telegram **conversation** IDs (private chats, groups, channels).
+    /// Messages from chats not in this list are ignored. If empty, all chats
+    /// are allowed (useful for local development).
     #[serde(default)]
     pub allowed_chat_ids: Vec<i64>,
+    /// Allowed Telegram **account** (user) IDs. Messages from users not in
+    /// this list are ignored regardless of which chat they send from.
+    /// If empty, all users are allowed (useful for local development).
     #[serde(default)]
     pub allowed_user_ids: Vec<i64>,
 }
