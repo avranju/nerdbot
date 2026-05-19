@@ -142,17 +142,20 @@ impl TelegramBot {
     ) -> Result<Vec<Update>, AgentError> {
         let url = format!("{}/getUpdates", self.base_url);
 
-        let mut params: Vec<(&str, String)> = vec![
-            ("timeout", timeout_secs.to_string()),
-        ];
+        let mut params: Vec<(&str, String)> = vec![("timeout", timeout_secs.to_string())];
 
         // Only include offset if it's > 0 (Telegram uses 0-based +1 to acknowledge)
-        if let Some(o) = offset && o > 0 {
+        if let Some(o) = offset
+            && o > 0
+        {
             params.push(("offset", o.to_string()));
         }
 
         // Allow only message updates for now
-        params.push(("allowed_updates", r#"["message","edited_message"]"#.to_string()));
+        params.push((
+            "allowed_updates",
+            r#"["message","edited_message"]"#.to_string(),
+        ));
 
         debug!(?offset, timeout_secs, "polling for Telegram updates");
 
@@ -289,8 +292,8 @@ impl TelegramBot {
             .await
             .map_err(|e| AgentError::Telegram(format!("Failed to read deleteWebhook body: {e}")))?;
 
-        let api_response: TelegramApiResponse<serde_json::Value> =
-            serde_json::from_str(&body_text).map_err(|e| {
+        let api_response: TelegramApiResponse<serde_json::Value> = serde_json::from_str(&body_text)
+            .map_err(|e| {
                 AgentError::Telegram(format!(
                     "Failed to parse deleteWebhook response: {e}. Body: {body_text}"
                 ))
@@ -340,9 +343,9 @@ impl TelegramBot {
             )));
         }
 
-        let user = api_response.result.ok_or_else(|| {
-            AgentError::Telegram("getMe response had no result field".into())
-        })?;
+        let user = api_response
+            .result
+            .ok_or_else(|| AgentError::Telegram("getMe response had no result field".into()))?;
 
         info!(
             bot_id = user.id,
@@ -396,7 +399,13 @@ fn find_split_point(text: &str, limit: usize) -> usize {
 
     // Look for a newline in the last third of the limit range
     let search_start = limit - (limit / 3);
-    for (i, c) in chars.iter().enumerate().take(limit).skip(search_start).rev() {
+    for (i, c) in chars
+        .iter()
+        .enumerate()
+        .take(limit)
+        .skip(search_start)
+        .rev()
+    {
         if *c == '\n' {
             return i + 1; // Include the newline in the current chunk
         }

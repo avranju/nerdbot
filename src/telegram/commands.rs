@@ -36,9 +36,7 @@ impl TelegramCommand {
 
         // Split into command part and argument part.
         // Handle bot mentions: "/run@MyBot abc123" -> command="/run", arg="abc123"
-        let (command_with_mention, rest_after_command) = text
-            .split_once(' ')
-            .unwrap_or((text, ""));
+        let (command_with_mention, rest_after_command) = text.split_once(' ').unwrap_or((text, ""));
 
         // Did the original text have a space after the command?
         let had_space = !rest_after_command.is_empty() || text.ends_with(' ');
@@ -89,11 +87,7 @@ impl CommandHandler {
         _user_id: i64,
         pool: &SqlitePool,
     ) -> Result<String, AgentError> {
-        debug!(
-            ?command,
-            chat_id,
-            "handling Telegram command"
-        );
+        debug!(?command, chat_id, "handling Telegram command");
 
         match command {
             TelegramCommand::Start => Ok(Self::start()),
@@ -137,7 +131,11 @@ impl CommandHandler {
 
         let mut response = String::from("📋 **Your Scheduled Jobs**\n\n");
         for job in &jobs {
-            let status = if job.enabled { "✅ active" } else { "❌ disabled" };
+            let status = if job.enabled {
+                "✅ active"
+            } else {
+                "❌ disabled"
+            };
             let next_run = job
                 .next_run_at
                 .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
@@ -200,7 +198,10 @@ mod tests {
 
     #[test]
     fn test_parse_start() {
-        assert_eq!(TelegramCommand::parse("/start"), Some(TelegramCommand::Start));
+        assert_eq!(
+            TelegramCommand::parse("/start"),
+            Some(TelegramCommand::Start)
+        );
     }
 
     #[test]

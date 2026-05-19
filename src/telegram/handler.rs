@@ -77,30 +77,23 @@ impl MessageHandler {
 
         // 3. Persist the incoming user message
         let user_message = crate::llm::types::Message::user(text);
-        let _ = storage::messages::create_message(
-            &self.pool,
-            &session.id,
-            &user_message,
-            None,
-        )
-        .await?;
+        let _ =
+            storage::messages::create_message(&self.pool, &session.id, &user_message, None).await?;
 
         // 4. Update session timestamp
         storage::sessions::update_session(&self.pool, &session.id).await?;
 
         // 5. Route: command or agent loop
-        let response = self.route_message(chat_id, user_id, text, &session.id).await;
+        let response = self
+            .route_message(chat_id, user_id, text, &session.id)
+            .await;
 
         // 6. Persist response if one was generated
         if let Ok(Some(ref reply_text)) = response {
             let assistant_msg = crate::llm::types::Message::assistant(reply_text);
-            let _ = storage::messages::create_message(
-                &self.pool,
-                &session.id,
-                &assistant_msg,
-                None,
-            )
-            .await;
+            let _ =
+                storage::messages::create_message(&self.pool, &session.id, &assistant_msg, None)
+                    .await;
         }
 
         response
@@ -111,24 +104,14 @@ impl MessageHandler {
         let telegram = &self.config.telegram;
 
         // Check chat allowlist
-        if !telegram.allowed_chat_ids.is_empty()
-            && !telegram.allowed_chat_ids.contains(&chat_id)
-        {
-            warn!(
-                chat_id, user_id,
-                "rejected message: chat not in allowlist"
-            );
+        if !telegram.allowed_chat_ids.is_empty() && !telegram.allowed_chat_ids.contains(&chat_id) {
+            warn!(chat_id, user_id, "rejected message: chat not in allowlist");
             return Err(AgentError::PermissionDenied);
         }
 
         // Check user allowlist
-        if !telegram.allowed_user_ids.is_empty()
-            && !telegram.allowed_user_ids.contains(&user_id)
-        {
-            warn!(
-                chat_id, user_id,
-                "rejected message: user not in allowlist"
-            );
+        if !telegram.allowed_user_ids.is_empty() && !telegram.allowed_user_ids.contains(&user_id) {
+            warn!(chat_id, user_id, "rejected message: user not in allowlist");
             return Err(AgentError::PermissionDenied);
         }
 
@@ -136,10 +119,7 @@ impl MessageHandler {
     }
 
     /// Find or create a chat session for the given chat_id.
-    async fn ensure_session(
-        &self,
-        chat_id: i64,
-    ) -> Result<storage::ChatSession, AgentError> {
+    async fn ensure_session(&self, chat_id: i64) -> Result<storage::ChatSession, AgentError> {
         let existing = storage::sessions::get_session_for_chat(&self.pool, chat_id).await?;
 
         match existing {
@@ -172,13 +152,9 @@ impl MessageHandler {
 
         // Check for /reset-context without slash (heuristic)
         if text.trim().eq_ignore_ascii_case("reset context") {
-            let response = CommandHandler::handle(
-                TelegramCommand::ResetContext,
-                chat_id,
-                user_id,
-                &self.pool,
-            )
-            .await?;
+            let response =
+                CommandHandler::handle(TelegramCommand::ResetContext, chat_id, user_id, &self.pool)
+                    .await?;
             return Ok(Some(response));
         }
 
@@ -195,7 +171,12 @@ impl MessageHandler {
         text: &str,
         session_id: &str,
     ) -> Result<Option<String>, AgentError> {
-        info!(chat_id, user_id, text_len = text.len(), "running agent loop");
+        info!(
+            chat_id,
+            user_id,
+            text_len = text.len(),
+            "running agent loop"
+        );
 
         // Load recent messages for context
         let recent_messages = self.load_recent_messages(session_id).await?;
@@ -215,41 +196,42 @@ impl MessageHandler {
         };
 
         // Run the agent loop
-        let result = run_agent(&ctx, self.provider.as_ref(), &self.registry, &self.loop_config)
-            .await;
+        let result = run_agent(
+            &ctx,
+            self.provider.as_ref(),
+            &self.registry,
+            &self.loop_config,
+        )
+        .await;
 
         match result {
-            Ok(agent_result) => {
-                match agent_result.outcome {
-                    AgentOutcome::FinalText(text) => {
-                        info!(
-                            chat_id,
-                            iterations = agent_result.metadata.iterations,
-                            text_len = text.len(),
-                            "agent completed successfully"
-                        );
-                        Ok(Some(text))
-                    }
-                    AgentOutcome::Silent => {
-                        debug!(chat_id, "agent completed silently");
-                        Ok(None)
-                    }
-                    AgentOutcome::Cancelled => {
-                        Ok(Some("The operation was cancelled.".to_string()))
-                    }
+            Ok(agent_result) => match agent_result.outcome {
+                AgentOutcome::FinalText(text) => {
+                    info!(
+                        chat_id,
+                        iterations = agent_result.metadata.iterations,
+                        text_len = text.len(),
+                        "agent completed successfully"
+                    );
+                    Ok(Some(text))
                 }
-            }
+                AgentOutcome::Silent => {
+                    debug!(chat_id, "agent completed silently");
+                    Ok(None)
+                }
+                AgentOutcome::Cancelled => Ok(Some("The operation was cancelled.".to_string())),
+            },
             Err(e) => {
                 error!(chat_id, error = %e, "agent loop failed");
 
                 // Provide a user-friendly error message
                 let user_msg = match &e {
                     AgentError::MaxToolIterationsExceeded(max) => {
-                        format!("⚠️ I tried to complete the task but it required more steps than allowed (max {max} tool iterations). Please try simplifying your request.")
+                        format!(
+                            "⚠️ I tried to complete the task but it required more steps than allowed (max {max} tool iterations). Please try simplifying your request."
+                        )
                     }
-                    AgentError::PermissionDenied => {
-                        "🚫 Access denied.".to_string()
-                    }
+                    AgentError::PermissionDenied => "🚫 Access denied.".to_string(),
                     _ => {
                         format!("❌ I encountered an error: {e}")
                     }
@@ -291,13 +273,11 @@ impl MessageHandler {
 
         if !path.exists() {
             // No personality file — use a reasonable default
-            return Ok(
-                "You are NerdBot, a helpful and concise AI assistant. \
+            return Ok("You are NerdBot, a helpful and concise AI assistant. \
                 You respond in plain text. You use tools when they would help \
                 answer the user's question more accurately. \
                 When you don't know something, you say so honestly."
-                    .to_string(),
-            );
+                .to_string());
         }
 
         tokio::fs::read_to_string(path)
@@ -307,7 +287,6 @@ impl MessageHandler {
 
     /// Extract the Telegram bot token from environment.
     fn get_bot_token(&self) -> String {
-        std::env::var(&self.config.telegram.bot_token_env)
-            .unwrap_or_else(|_| String::new())
+        std::env::var(&self.config.telegram.bot_token_env).unwrap_or_else(|_| String::new())
     }
 }

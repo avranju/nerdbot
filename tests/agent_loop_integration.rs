@@ -591,7 +591,7 @@ async fn test_agent_context_with_initial_messages() {
         .iter()
         .filter(|m| matches!(m.role, nerdbot::llm::types::Role::User))
         .collect();
-    assert!(user_msgs.len() >= 1);
+    assert!(!user_msgs.is_empty());
 }
 
 // ── Test: Tool Results Feeded Back to Provider ─────────────────────────

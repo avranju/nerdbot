@@ -46,8 +46,7 @@ async fn main() {
     // Initialize structured logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -138,9 +137,11 @@ async fn main() {
     let registry = Arc::new(registry);
 
     // Phase 4: use fake provider (real providers come in Phase 7)
-    let provider: Arc<dyn llm::provider::LlmProvider> = Arc::new(llm::fake::FakeProvider::new(vec![
-        llm::fake::FakeResponse::final_text("Hello! I'm NerdBot, running on a fake provider. Real LLM integration is coming in Phase 7. How can I help you today?"),
-    ]));
+    let provider: Arc<dyn llm::provider::LlmProvider> = Arc::new(llm::fake::FakeProvider::new(
+        vec![llm::fake::FakeResponse::final_text(
+            "Hello! I'm NerdBot, running on a fake provider. Real LLM integration is coming in Phase 7. How can I help you today?",
+        )],
+    ));
 
     // Phase 4: create the message handler
     let handler = Arc::new(telegram::MessageHandler::new(
@@ -165,7 +166,7 @@ async fn main() {
                 for update in updates {
                     // Track the latest update_id to acknowledge it
                     let new_offset = update.update_id + 1;
-                    if offset.map_or(true, |o| new_offset > o) {
+                    if offset.is_none_or(|o| new_offset > o) {
                         offset = Some(new_offset);
                     }
 

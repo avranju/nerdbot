@@ -25,10 +25,10 @@ use nerdbot::error::AgentError;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::llm::provider::LlmProvider;
 use nerdbot::storage;
+use nerdbot::telegram::TelegramBot;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
 use nerdbot::telegram::handler::MessageHandler;
 use nerdbot::telegram::service::TelegramService;
-use nerdbot::telegram::TelegramBot;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
 
@@ -36,8 +36,14 @@ use nerdbot::tools::registry::ToolRegistry;
 
 #[test]
 fn test_parse_commands_with_leading_whitespace() {
-    assert_eq!(TelegramCommand::parse("  /help"), Some(TelegramCommand::Help));
-    assert_eq!(TelegramCommand::parse("\t/start"), Some(TelegramCommand::Start));
+    assert_eq!(
+        TelegramCommand::parse("  /help"),
+        Some(TelegramCommand::Help)
+    );
+    assert_eq!(
+        TelegramCommand::parse("\t/start"),
+        Some(TelegramCommand::Start)
+    );
 }
 
 #[test]
@@ -193,14 +199,9 @@ async fn test_command_handler_delete_job() {
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(
-        TelegramCommand::Delete(job.id.clone()),
-        1,
-        1,
-        &pool,
-    )
-    .await
-    .unwrap();
+    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool)
+        .await
+        .unwrap();
     assert!(response.contains("deleted"));
 
     // Verify job is disabled
@@ -212,14 +213,10 @@ async fn test_command_handler_delete_job() {
 async fn test_command_handler_delete_nonexistent_job() {
     let pool = setup_test_db().await;
 
-    let response = CommandHandler::handle(
-        TelegramCommand::Delete("nonexistent".into()),
-        1,
-        1,
-        &pool,
-    )
-    .await
-    .unwrap();
+    let response =
+        CommandHandler::handle(TelegramCommand::Delete("nonexistent".into()), 1, 1, &pool)
+            .await
+            .unwrap();
     assert!(response.contains("No job found"));
 }
 
@@ -239,14 +236,9 @@ async fn test_command_handler_delete_wrong_chat() {
     .unwrap();
 
     // Chat 2 tries to delete it
-    let response = CommandHandler::handle(
-        TelegramCommand::Delete(job.id.clone()),
-        2,
-        2,
-        &pool,
-    )
-    .await
-    .unwrap();
+    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool)
+        .await
+        .unwrap();
     assert!(response.contains("belongs to a different chat"));
 }
 
@@ -254,14 +246,9 @@ async fn test_command_handler_delete_wrong_chat() {
 async fn test_command_handler_run_nonexistent_job() {
     let pool = setup_test_db().await;
 
-    let response = CommandHandler::handle(
-        TelegramCommand::Run("nonexistent".into()),
-        1,
-        1,
-        &pool,
-    )
-    .await
-    .unwrap();
+    let response = CommandHandler::handle(TelegramCommand::Run("nonexistent".into()), 1, 1, &pool)
+        .await
+        .unwrap();
     assert!(response.contains("No job found"));
 }
 
@@ -284,9 +271,10 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider::new(vec![
-        FakeResponse::final_text("Hello from the agent loop!"),
-    ]));
+    let provider: Arc<dyn LlmProvider> =
+        Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
+            "Hello from the agent loop!",
+        )]));
 
     MessageHandler::new(pool, provider, Arc::new(registry), make_test_config())
 }
@@ -326,10 +314,7 @@ async fn test_message_handler_reset_context_via_text() {
     let handler = make_handler(pool);
 
     // "reset context" (without slash) should be treated as a command
-    let response = handler
-        .handle_message(1, 1, "reset context")
-        .await
-        .unwrap();
+    let response = handler.handle_message(1, 1, "reset context").await.unwrap();
     assert!(response.is_some());
     assert!(response.unwrap().contains("fresh conversation"));
 }
@@ -382,9 +367,10 @@ async fn test_message_handler_allowlist_blocks_chat() {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider::new(vec![
-        FakeResponse::final_text("should not be reached"),
-    ]));
+    let provider: Arc<dyn LlmProvider> =
+        Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
+            "should not be reached",
+        )]));
 
     let handler = MessageHandler::new(pool, provider, Arc::new(registry), config);
 
@@ -404,9 +390,10 @@ async fn test_message_handler_allowlist_blocks_user() {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider::new(vec![
-        FakeResponse::final_text("should not be reached"),
-    ]));
+    let provider: Arc<dyn LlmProvider> =
+        Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
+            "should not be reached",
+        )]));
 
     let handler = MessageHandler::new(pool, provider, Arc::new(registry), config);
 
