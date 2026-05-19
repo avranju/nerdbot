@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::error::AgentError;
 
 /// Top-level configuration.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub agent: AgentConfig,
@@ -28,7 +28,7 @@ pub struct AppConfig {
 }
 
 /// Agent-specific configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct AgentConfig {
     #[serde(default = "default_agent_name")]
     pub name: String,
@@ -52,7 +52,7 @@ impl Default for AgentConfig {
 }
 
 /// Telegram-specific configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TelegramConfig {
     /// Environment variable name holding the bot token.
     #[serde(default = "default_telegram_token_env")]
@@ -80,7 +80,7 @@ impl Default for TelegramConfig {
 }
 
 /// Storage configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct StorageConfig {
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: PathBuf,
@@ -95,7 +95,7 @@ impl Default for StorageConfig {
 }
 
 /// Workspace configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct WorkspaceConfig {
     #[serde(default = "default_workspace_root")]
     pub root: PathBuf,
@@ -116,7 +116,7 @@ impl Default for WorkspaceConfig {
 }
 
 /// LLM default configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct LlmConfig {
     #[serde(default = "default_llm_provider")]
     pub provider: String,
@@ -140,7 +140,7 @@ impl Default for LlmConfig {
 }
 
 /// Per-provider configuration.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct ProvidersConfig {
     #[serde(default)]
     pub anthropic: AnthropicProviderConfig,
@@ -152,7 +152,7 @@ pub struct ProvidersConfig {
     pub openrouter: OpenrouterProviderConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct AnthropicProviderConfig {
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
@@ -166,7 +166,7 @@ impl Default for AnthropicProviderConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OpenaiProviderConfig {
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
@@ -180,7 +180,7 @@ impl Default for OpenaiProviderConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct GeminiProviderConfig {
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
@@ -194,7 +194,7 @@ impl Default for GeminiProviderConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OpenrouterProviderConfig {
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
@@ -212,7 +212,7 @@ impl Default for OpenrouterProviderConfig {
 }
 
 /// Context management configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ContextConfig {
     #[serde(default = "default_soft_compaction_threshold")]
     pub soft_compaction_threshold: f32,
@@ -235,7 +235,7 @@ impl Default for ContextConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct CompactorConfig {
     #[serde(default)]
     pub provider: String,
@@ -244,7 +244,7 @@ pub struct CompactorConfig {
 }
 
 /// Scheduler configuration.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct SchedulerConfig {
     #[serde(default)]
     pub run_overdue_one_shots_on_startup: bool,

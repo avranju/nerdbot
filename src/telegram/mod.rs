@@ -1,9 +1,11 @@
-//! Telegram integration — long polling, commands, messaging.
-//!
-//! Implementations come in Phase 4.
+//! Telegram integration — long polling, commands, messaging, and message routing.
 
 pub mod bot;
 pub mod commands;
+pub mod handler;
 pub mod service;
 
-pub use commands::*;
+pub use bot::TelegramBot;
+pub use commands::{CommandHandler, TelegramCommand};
+pub use handler::MessageHandler;
+pub use service::TelegramService;
