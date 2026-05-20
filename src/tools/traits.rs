@@ -20,6 +20,10 @@ pub struct ToolContext {
     pub allowed_chat_ids: Vec<i64>,
     /// Allowed account IDs (individual Telegram users).
     pub allowed_user_ids: Vec<i64>,
+    /// Database pool for tools needing access to storage (like scheduling)
+    pub pool: Option<sqlx::SqlitePool>,
+    /// Notifier to wake up the scheduler service loop instantly
+    pub scheduler_notifier: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 /// Output from a tool execution.

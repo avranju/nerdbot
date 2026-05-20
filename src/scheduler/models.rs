@@ -27,7 +27,7 @@ pub enum ScheduleType {
 }
 
 /// Status of a scheduled job.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
     Pending,

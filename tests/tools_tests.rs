@@ -27,6 +27,8 @@ fn test_tool_context_clone() {
         telegram_token: "bot-token".into(),
         allowed_chat_ids: vec![123, 456],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let cloned = ctx.clone();
     assert_eq!(ctx.workspace_root, cloned.workspace_root);
@@ -46,6 +48,8 @@ fn test_tool_context_clone_run_mode() {
         telegram_token: "token".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let cloned = ctx.clone();
     assert_eq!(ctx.run_mode, cloned.run_mode);
@@ -175,6 +179,8 @@ async fn test_registry_execute_unknown_tool() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let result = registry.execute(&call, ctx).await;
     assert!(result.is_err());
@@ -200,6 +206,8 @@ async fn test_registry_execute_stub_tool_returns_not_implemented() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let result = registry.execute(&call, ctx).await;
     assert!(result.is_err());
@@ -226,6 +234,19 @@ fn test_registry_tool_spec_validation() {
         "Schedule a one-shot or recurring agent task."
     );
     assert!(spec.input_schema.is_object());
+}
+
+#[test]
+fn test_schedule_job_schema_documents_host_timezone_default() {
+    let tool = nerdbot::tools::schedule::ScheduleJob;
+    let schema = tool.input_schema();
+
+    let description = schema["properties"]["timezone"]["description"]
+        .as_str()
+        .expect("timezone description should be present");
+
+    assert!(description.contains("host system timezone"));
+    assert!(description.contains("falling back to UTC"));
 }
 
 #[test]
@@ -365,6 +386,8 @@ async fn test_stub_tool_execute_fails_gracefully() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
     assert!(result.is_err());
@@ -406,6 +429,8 @@ async fn test_registry_execute_with_invalid_args() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
     let result = registry.execute(&call, ctx).await;
     // Should fail since it's a stub, but should not panic

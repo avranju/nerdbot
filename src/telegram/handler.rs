@@ -40,6 +40,8 @@ pub struct MessageHandler {
     config: AppConfig,
     /// Cached Telegram bot token from the environment.
     bot_token: String,
+    /// Notifier to wake up the scheduler loop immediately on job updates.
+    scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl MessageHandler {
@@ -48,6 +50,7 @@ impl MessageHandler {
         provider: Arc<dyn LlmProvider>,
         registry: Arc<ToolRegistry>,
         config: AppConfig,
+        scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
     ) -> Self {
         let loop_config = AgentLoopConfig {
             max_tool_iterations: config.agent.max_tool_iterations,
@@ -60,6 +63,7 @@ impl MessageHandler {
             loop_config,
             config,
             bot_token,
+            scheduler_notifier,
         }
     }
 
@@ -150,14 +154,14 @@ impl MessageHandler {
         // Check for bot commands
         if let Some(command) = TelegramCommand::parse(text) {
             debug!(?command, chat_id, "handling bot command");
-            let response = CommandHandler::handle(command, chat_id, user_id, &self.pool).await?;
+            let response = CommandHandler::handle(command, chat_id, user_id, &self.pool, self.scheduler_notifier.as_deref()).await?;
             return Ok(Some(response));
         }
 
         // Check for /reset-context without slash (heuristic)
         if text.trim().eq_ignore_ascii_case("reset context") {
             let response =
-                CommandHandler::handle(TelegramCommand::ResetContext, chat_id, user_id, &self.pool)
+                CommandHandler::handle(TelegramCommand::ResetContext, chat_id, user_id, &self.pool, self.scheduler_notifier.as_deref())
                     .await?;
             return Ok(Some(response));
         }
@@ -197,6 +201,8 @@ impl MessageHandler {
             telegram_token: self.get_bot_token(),
             allowed_chat_ids: self.config.telegram.allowed_chat_ids.clone(),
             allowed_user_ids: self.config.telegram.allowed_user_ids.clone(),
+            pool: Some(self.pool.clone()),
+            scheduler_notifier: self.scheduler_notifier.clone(),
         };
 
         // Run the agent loop

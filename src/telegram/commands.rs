@@ -86,6 +86,7 @@ impl CommandHandler {
         chat_id: i64,
         _user_id: i64,
         pool: &SqlitePool,
+        scheduler_notifier: Option<&tokio::sync::Notify>,
     ) -> Result<String, AgentError> {
         debug!(?command, chat_id, "handling Telegram command");
 
@@ -93,8 +94,8 @@ impl CommandHandler {
             TelegramCommand::Start => Ok(Self::start()),
             TelegramCommand::Help => Ok(Self::help()),
             TelegramCommand::Jobs => Self::jobs(chat_id, pool).await,
-            TelegramCommand::Run(job_id) => Self::run_job(chat_id, &job_id, pool).await,
-            TelegramCommand::Delete(job_id) => Self::delete_job(chat_id, &job_id, pool).await,
+            TelegramCommand::Run(job_id) => Self::run_job(chat_id, &job_id, pool, scheduler_notifier).await,
+            TelegramCommand::Delete(job_id) => Self::delete_job(chat_id, &job_id, pool, scheduler_notifier).await,
             TelegramCommand::ResetContext => {
                 crate::storage::sessions::create_session(pool, chat_id).await?;
                 Ok(Self::reset_context())
@@ -152,7 +153,12 @@ impl CommandHandler {
         Ok(response)
     }
 
-    async fn run_job(chat_id: i64, job_id: &str, pool: &SqlitePool) -> Result<String, AgentError> {
+    async fn run_job(
+        chat_id: i64,
+        job_id: &str,
+        pool: &SqlitePool,
+        scheduler_notifier: Option<&tokio::sync::Notify>,
+    ) -> Result<String, AgentError> {
         let job = crate::storage::jobs::get_job(pool, job_id).await?;
 
         match job {
@@ -160,11 +166,20 @@ impl CommandHandler {
             Some(job) if job.owner_chat_id != chat_id => {
                 Ok("❌ That job belongs to a different chat.".to_string())
             }
+            Some(job) if !job.enabled => {
+                Ok(format!("❌ Job `{job_id}` is disabled or deleted and cannot be run."))
+            }
             Some(_job) => {
-                // Phase 5 will wire the actual job runner here.
-                // For now we acknowledge the intent.
+                // Update the job to run immediately and ensure it is enabled
+                crate::storage::jobs::update_job_next_run(pool, job_id, Some(chrono::Utc::now()), true).await?;
+                
+                // Wake up the scheduler
+                if let Some(notifier) = scheduler_notifier {
+                    notifier.notify_one();
+                }
+
                 Ok(format!(
-                    "⏳ Job `{job_id}` will be triggered shortly.\n\n(Job runner coming in Phase 5.)"
+                    "⏳ Job `{job_id}` has been scheduled to run immediately."
                 ))
             }
         }
@@ -174,6 +189,7 @@ impl CommandHandler {
         chat_id: i64,
         job_id: &str,
         pool: &SqlitePool,
+        scheduler_notifier: Option<&tokio::sync::Notify>,
     ) -> Result<String, AgentError> {
         let job = crate::storage::jobs::get_job(pool, job_id).await?;
 
@@ -184,6 +200,12 @@ impl CommandHandler {
             }
             Some(_job) => {
                 crate::storage::jobs::disable_job(pool, job_id).await?;
+                
+                // Wake up the scheduler to adjust its timer
+                if let Some(notifier) = scheduler_notifier {
+                    notifier.notify_one();
+                }
+
                 Ok(format!("🗑️ Job `{job_id}` has been deleted."))
             }
         }

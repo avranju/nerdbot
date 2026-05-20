@@ -110,7 +110,7 @@ async fn setup_test_db() -> sqlx::SqlitePool {
 #[tokio::test]
 async fn test_command_handler_start() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Start, 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Start, 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("Welcome"));
@@ -120,7 +120,7 @@ async fn test_command_handler_start() {
 #[tokio::test]
 async fn test_command_handler_help() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Help, 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Help, 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("/start"));
@@ -132,7 +132,7 @@ async fn test_command_handler_help() {
 #[tokio::test]
 async fn test_command_handler_jobs_empty() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("no scheduled jobs"));
@@ -154,7 +154,7 @@ async fn test_command_handler_jobs_with_job() {
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("Test Job"));
@@ -178,7 +178,7 @@ async fn test_command_handler_jobs_only_own_chat() {
     .unwrap();
 
     // Chat 2 sees no jobs
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 2, 2, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, 2, 2, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("no scheduled jobs"));
@@ -199,7 +199,7 @@ async fn test_command_handler_delete_job() {
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("deleted"));
@@ -214,7 +214,7 @@ async fn test_command_handler_delete_nonexistent_job() {
     let pool = setup_test_db().await;
 
     let response =
-        CommandHandler::handle(TelegramCommand::Delete("nonexistent".into()), 1, 1, &pool)
+        CommandHandler::handle(TelegramCommand::Delete("nonexistent".into()), 1, 1, &pool, None)
             .await
             .unwrap();
     assert!(response.contains("No job found"));
@@ -236,7 +236,7 @@ async fn test_command_handler_delete_wrong_chat() {
     .unwrap();
 
     // Chat 2 tries to delete it
-    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("belongs to a different chat"));
@@ -246,7 +246,7 @@ async fn test_command_handler_delete_wrong_chat() {
 async fn test_command_handler_run_nonexistent_job() {
     let pool = setup_test_db().await;
 
-    let response = CommandHandler::handle(TelegramCommand::Run("nonexistent".into()), 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::Run("nonexistent".into()), 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("No job found"));
@@ -255,7 +255,7 @@ async fn test_command_handler_run_nonexistent_job() {
 #[tokio::test]
 async fn test_command_handler_reset_context() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::ResetContext, 1, 1, &pool)
+    let response = CommandHandler::handle(TelegramCommand::ResetContext, 1, 1, &pool, None)
         .await
         .unwrap();
     assert!(response.contains("fresh conversation"));
@@ -276,7 +276,7 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
             "Hello from the agent loop!",
         )]));
 
-    MessageHandler::new(pool, provider, Arc::new(registry), make_test_config())
+    MessageHandler::new(pool, provider, Arc::new(registry), make_test_config(), None)
 }
 
 #[tokio::test]
@@ -410,7 +410,7 @@ async fn test_message_handler_allowlist_blocks_chat() {
             "should not be reached",
         )]));
 
-    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config);
+    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config, None);
 
     // Chat 200 is not in the allowlist
     let result = handler.handle_message(200, 200, "blocked").await;
@@ -433,7 +433,7 @@ async fn test_message_handler_allowlist_blocks_user() {
             "should not be reached",
         )]));
 
-    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config);
+    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config, None);
 
     // User 200 is not in the allowlist
     let result = handler.handle_message(1, 200, "blocked").await;
@@ -514,7 +514,7 @@ async fn test_get_me_returns_error_on_404() {
     let bot = make_mock_bot(&server).await;
 
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .and(wiremock::matchers::path(mock_path("/getMe")))
         .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
         .mount(&server)
         .await;
@@ -532,7 +532,7 @@ async fn test_get_me_returns_error_on_401() {
     let bot = make_mock_bot(&server).await;
 
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .and(wiremock::matchers::path(mock_path("/getMe")))
         .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"ok":false,"description":"Unauthorized"}"#))
         .mount(&server)
         .await;
@@ -551,7 +551,7 @@ async fn test_get_me_succeeds_on_200() {
 
     let response_body = r#"{"ok":true,"result":{"id":12345,"first_name":"TestBot","username":"@testbot"}}"#;
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .and(wiremock::matchers::path(mock_path("/getMe")))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&server)
         .await;
@@ -568,7 +568,7 @@ async fn test_delete_webhook_returns_error_on_500() {
     let bot = make_mock_bot(&server).await;
 
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/deleteWebhook")))
+        .and(wiremock::matchers::path(mock_path("/deleteWebhook")))
         .respond_with(ResponseTemplate::new(500).set_body_string(r#"{"ok":false,"description":"Internal Server Error"}"#))
         .mount(&server)
         .await;
@@ -586,7 +586,7 @@ async fn test_delete_webhook_returns_error_on_404() {
     let bot = make_mock_bot(&server).await;
 
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/deleteWebhook")))
+        .and(wiremock::matchers::path(mock_path("/deleteWebhook")))
         .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
         .mount(&server)
         .await;
@@ -604,7 +604,7 @@ async fn test_get_updates_returns_error_on_503() {
     let bot = make_mock_bot(&server).await;
 
     Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path(&mock_path("/getUpdates")))
+        .and(wiremock::matchers::path(mock_path("/getUpdates")))
         .respond_with(ResponseTemplate::new(503).set_body_string(r#"{"ok":false,"description":"Service Unavailable"}"#))
         .mount(&server)
         .await;
@@ -629,6 +629,8 @@ fn test_tool_context_carries_telegram_config() {
         telegram_token: "bot123".into(),
         allowed_chat_ids: vec![1, 2],
         allowed_user_ids: vec![10, 20],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     assert_eq!(ctx.telegram_token, "bot123");

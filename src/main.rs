@@ -134,6 +134,11 @@ async fn main() {
     let mut registry = tools::registry::ToolRegistry::new();
     registry.register(tools::echo::EchoTool);
     registry.register(tools::calculator::CalculatorTool);
+    // Phase 5: register scheduling tools
+    registry.register(tools::schedule::ScheduleJob);
+    registry.register(tools::schedule::ListJobs);
+    registry.register(tools::schedule::DeleteJob);
+    registry.register(tools::schedule::RunJobNow);
     let registry = Arc::new(registry);
 
     // Phase 4: use fake provider (real providers come in Phase 7)
@@ -143,16 +148,37 @@ async fn main() {
         )],
     ));
 
+    let bot = Arc::new(bot);
+    let service = telegram::TelegramService::new(bot.clone());
+
+    // Phase 5: initialize the scheduler service
+    let scheduler = Arc::new(scheduler::service::SchedulerService::new(
+        db.pool().clone(),
+        provider.clone(),
+        registry.clone(),
+        config.clone(),
+        service.clone(),
+    ));
+
+    // Create a drop guard to guarantee scheduler shutdown when the main execution exits or panics
+    let _scheduler_guard = SchedulerGuard {
+        scheduler: scheduler.clone(),
+    };
+
     // Phase 4: create the message handler
     let handler = Arc::new(telegram::MessageHandler::new(
         db.pool().clone(),
         provider,
         registry,
         config.clone(),
+        Some(scheduler.notifier()),
     ));
 
-    let bot = Arc::new(bot);
-    let service = telegram::TelegramService::new(bot.clone());
+    // Phase 5: start scheduler
+    if let Err(e) = scheduler.start().await {
+        error!(error = %e, "Failed to start scheduler");
+        return;
+    }
 
     info!("starting Telegram long polling...");
 
@@ -161,59 +187,98 @@ async fn main() {
     let timeout_secs: u32 = 30;
 
     loop {
-        match bot.get_updates(offset, timeout_secs).await {
-            Ok(updates) => {
-                for update in updates {
-                    // Track the latest update_id to acknowledge it
-                    let new_offset = update.update_id + 1;
-                    if offset.is_none_or(|o| new_offset > o) {
-                        offset = Some(new_offset);
-                    }
+        tokio::select! {
+            res = bot.get_updates(offset, timeout_secs) => {
+                match res {
+                    Ok(updates) => {
+                        for update in updates {
+                            // Track the latest update_id to acknowledge it
+                            let new_offset = update.update_id + 1;
+                            if offset.is_none_or(|o| new_offset > o) {
+                                offset = Some(new_offset);
+                            }
 
-                    // Extract message data
-                    let msg = match update.message {
-                        Some(ref m) => m,
-                        None => continue, // Skip non-message updates for now
-                    };
+                            // Extract message data
+                            let msg = match update.message {
+                                Some(ref m) => m,
+                                None => continue, // Skip non-message updates for now
+                            };
 
-                    let chat_id = msg.chat.id;
-                    let text = match &msg.text {
-                        Some(t) => t.clone(),
-                        None => continue, // Skip non-text messages
-                    };
+                            let chat_id = msg.chat.id;
+                            let text = match &msg.text {
+                                Some(t) => t.clone(),
+                                None => continue, // Skip non-text messages
+                            };
 
-                    let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
+                            let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
 
-                    // Dispatch to handler
-                    let handler = handler.clone();
-                    let service = service.clone();
+                            // Dispatch to handler
+                            let handler = handler.clone();
+                            let service = service.clone();
 
-                    tokio::spawn(async move {
-                        match handler.handle_message(chat_id, user_id, &text).await {
-                            Ok(Some(response)) => {
-                                if let Err(e) = service.send_message(chat_id, &response).await {
-                                    error!(chat_id, error = %e, "failed to send reply");
+                            tokio::spawn(async move {
+                                match handler.handle_message(chat_id, user_id, &text).await {
+                                    Ok(Some(response)) => {
+                                        if let Err(e) = service.send_message(chat_id, &response).await {
+                                            error!(chat_id, error = %e, "failed to send reply");
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        // No reply needed (e.g., silent command)
+                                    }
+                                    Err(AgentError::PermissionDenied) => {
+                                        // Silently ignore unauthorized messages
+                                    }
+                                    Err(e) => {
+                                        error!(chat_id, error = %e, "message handler error");
+                                        let err_msg = format!("❌ Internal error: {e}");
+                                        let _ = service.send_message(chat_id, &err_msg).await;
+                                    }
                                 }
-                            }
-                            Ok(None) => {
-                                // No reply needed (e.g., silent command)
-                            }
-                            Err(AgentError::PermissionDenied) => {
-                                // Silently ignore unauthorized messages
-                            }
-                            Err(e) => {
-                                error!(chat_id, error = %e, "message handler error");
-                                let err_msg = format!("❌ Internal error: {e}");
-                                let _ = service.send_message(chat_id, &err_msg).await;
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "getUpdates failed, retrying in 5s");
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = tokio::signal::ctrl_c() => {
+                                info!("received Ctrl-C during retry sleep, shutting down...");
+                                break;
                             }
                         }
-                    });
+                    }
                 }
             }
-            Err(e) => {
-                error!(error = %e, "getUpdates failed, retrying in 5s");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            _ = tokio::signal::ctrl_c() => {
+                info!("received Ctrl-C, shutting down...");
+                break;
             }
         }
+    }
+
+    info!("Gracefully shutting down services...");
+    if let Err(e) = scheduler.stop().await {
+        error!(error = %e, "Failed to stop scheduler gracefully");
+    }
+    info!("Shutdown complete.");
+}
+
+/// Drop guard to guarantee scheduler shutdown when the main execution exits or panics.
+struct SchedulerGuard {
+    scheduler: Arc<scheduler::service::SchedulerService>,
+}
+
+impl Drop for SchedulerGuard {
+    fn drop(&mut self) {
+        let scheduler = self.scheduler.clone();
+        tokio::spawn(async move {
+            info!("SchedulerGuard: stopping scheduler background loop...");
+            if let Err(e) = scheduler.stop().await {
+                error!(error = %e, "SchedulerGuard: failed to stop scheduler gracefully");
+            } else {
+                info!("SchedulerGuard: scheduler background loop stopped successfully");
+            }
+        });
     }
 }

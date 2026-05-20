@@ -54,6 +54,8 @@ fn make_tool_context(
         telegram_token: "test-token".into(),
         allowed_chat_ids,
         allowed_user_ids,
+        pool: None,
+        scheduler_notifier: None,
     }
 }
 

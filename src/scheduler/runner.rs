@@ -1,14 +1,145 @@
 //! Scheduler runner — executes scheduled jobs.
-//!
-//! Implementations come in Phase 5.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use tracing::info;
 
 use crate::error::AgentError;
+use crate::scheduler::models::JobContextPolicy;
 
-/// Runs a scheduled job.
+/// Input arguments required to execute a scheduled job runner.
+pub struct RunScheduledJobInput {
+    pub pool: sqlx::SqlitePool,
+    pub provider: Arc<dyn crate::llm::provider::LlmProvider>,
+    pub registry: Arc<crate::tools::registry::ToolRegistry>,
+    pub loop_config: crate::agent::agent_loop::AgentLoopConfig,
+    pub personality: String,
+    pub workspace_root: PathBuf,
+    pub telegram_token: String,
+    pub telegram_service: crate::telegram::service::TelegramService,
+    pub allowed_chat_ids: Vec<i64>,
+    pub allowed_user_ids: Vec<i64>,
+}
+
+/// Runs a scheduled job by assembling context, running the agent loop,
+/// and notifying the user via Telegram on completion or error.
 ///
-/// Phase 1 stub.
-pub async fn run_scheduled_job(_job_id: &str, _prompt: &str) -> Result<(), AgentError> {
-    Err(AgentError::Scheduler(
-        "Scheduler not yet implemented".into(),
-    ))
+/// NOTE: The background job runner intentionally sets `scheduler_notifier` to `None` in the `AgentContext`
+/// to prevent self-wake loops. For example, if a job's prompt instructs the agent to schedule
+/// another job, the tool's wakeup call will be a no-op here since the runner is already executing.
+pub async fn run_scheduled_job(
+    input: RunScheduledJobInput,
+    job_id: &str,
+) -> Result<(), AgentError> {
+    let RunScheduledJobInput {
+        pool,
+        provider,
+        registry,
+        loop_config,
+        personality,
+        workspace_root,
+        telegram_token,
+        telegram_service,
+        allowed_chat_ids,
+        allowed_user_ids,
+    } = input;
+    info!(job_id = %job_id, "retrieving job details for run");
+
+    // 1. Get job details from SQLite
+    let job = crate::storage::jobs::get_job(&pool, job_id)
+        .await?
+        .ok_or_else(|| AgentError::Scheduler(format!("Job {} not found in database", job_id)))?;
+
+    // 2. Locate or create chat session
+    let session = match crate::storage::sessions::get_session_for_chat(&pool, job.owner_chat_id).await? {
+        Some(s) => s,
+        None => crate::storage::sessions::create_session(&pool, job.owner_chat_id).await?,
+    };
+
+    // 3. Assemble message context according to policy
+    let policy = job.context_policy()?;
+    let mut messages = match policy {
+        JobContextPolicy::Isolated => vec![],
+        JobContextPolicy::IncludeCreationSnapshot => {
+            if let Some(ref snapshot) = job.creation_context_snapshot {
+                serde_json::from_str::<Vec<crate::llm::types::Message>>(snapshot)
+                    .map_err(|e| AgentError::Scheduler(format!("Corrupted context snapshot for job {job_id}: {e}")))?
+            } else {
+                vec![]
+            }
+        }
+        JobContextPolicy::IncludeChatSummary => {
+            let mut msgs = vec![];
+            if let Some(summary) = crate::storage::summaries::get_latest_summary(&pool, &session.id).await? {
+                msgs.push(crate::llm::types::Message::system(format!(
+                    "System Conversation Summary (covers older context):\n{}",
+                    summary.summary_text
+                )));
+            }
+            msgs
+        }
+    };
+
+    // Save scheduled prompt to DB history and append to message context
+    let user_msg = crate::llm::types::Message::user(&job.prompt);
+    let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;
+    messages.push(user_msg);
+
+    // 4. Construct AgentContext
+    let mut agent_ctx = crate::agent::agent_loop::AgentContext {
+        run_mode: crate::agent::run_mode::AgentRunMode::ScheduledJob {
+            job_id: job_id.to_string(),
+            default_chat_id: job.owner_chat_id,
+            notify_on_completion: job.notify_on_completion,
+        },
+        personality,
+        messages,
+        workspace_root,
+        telegram_token: telegram_token.clone(),
+        allowed_chat_ids,
+        allowed_user_ids,
+        pool: Some(pool.clone()),
+        scheduler_notifier: None, // No immediate wakeup loop notifier inside background runner itself
+    };
+
+    // 5. Execute the agent loop
+    let result = crate::agent::agent_loop::run_agent(
+        &agent_ctx,
+        provider.as_ref(),
+        registry.as_ref(),
+        &loop_config,
+    )
+    .await;
+
+    match result {
+        Ok(agent_result) => {
+            if let crate::agent::outcome::AgentOutcome::FinalText(text) = agent_result.outcome {
+                // Save assistant message to DB history
+                let assistant_msg = crate::llm::types::Message::assistant(&text);
+                let _ = crate::storage::messages::create_message(&pool, &session.id, &assistant_msg, None).await?;
+
+                if job.notify_on_completion {
+                    let notification = format!("🔔 **Job \"{}\" executed successfully**\n\n{}", job.name, text);
+                    if let Err(e) = telegram_service.send_message(job.owner_chat_id, &notification).await {
+                        tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
+                    }
+                }
+            } else if job.notify_on_completion {
+                let notification = format!("🔔 **Job \"{}\" completed with no output**", job.name);
+                let _ = telegram_service.send_message(job.owner_chat_id, &notification).await;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Notify Telegram of the failure
+            let err_notification = format!(
+                "⚠️ **Job \"{}\" failed to execute**\n\nError: {}",
+                job.name, e
+            );
+            if let Err(send_err) = telegram_service.send_message(job.owner_chat_id, &err_notification).await {
+                tracing::error!(job_id = %job_id, error = %send_err, "Failed to send error notification");
+            }
+            Err(e)
+        }
+    }
 }

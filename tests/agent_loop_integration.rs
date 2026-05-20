@@ -194,6 +194,8 @@ async fn test_echo_tool_execution() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -222,6 +224,8 @@ async fn test_calculator_add() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -247,6 +251,8 @@ async fn test_calculator_subtract() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -274,6 +280,8 @@ async fn test_calculator_multiply() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -301,6 +309,8 @@ async fn test_calculator_divide() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -328,6 +338,8 @@ async fn test_calculator_division_by_zero() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -356,6 +368,8 @@ async fn test_calculator_invalid_operation() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = tool
@@ -384,6 +398,8 @@ async fn test_calculator_missing_field() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     // Missing "b" field
@@ -687,6 +703,8 @@ async fn test_registry_execute_echo() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = registry.execute(&call, ctx).await;
@@ -717,6 +735,8 @@ async fn test_registry_execute_calculator() {
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
     };
 
     let result = registry.execute(&call, ctx).await;

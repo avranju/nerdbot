@@ -139,6 +139,8 @@ pub async fn run_agent(
             telegram_token: ctx.telegram_token.clone(),
             allowed_chat_ids: ctx.allowed_chat_ids.clone(),
             allowed_user_ids: ctx.allowed_user_ids.clone(),
+            pool: ctx.pool.clone(),
+            scheduler_notifier: ctx.scheduler_notifier.clone(),
         };
 
         let mut tool_results = Vec::new();
@@ -235,6 +237,10 @@ pub struct AgentContext {
     pub allowed_chat_ids: Vec<i64>,
     /// Allowed Telegram account IDs (individual users).
     pub allowed_user_ids: Vec<i64>,
+    /// Database pool for tools needing access to storage
+    pub pool: Option<sqlx::SqlitePool>,
+    /// Notifier to wake up the scheduler service loop instantly
+    pub scheduler_notifier: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 impl AgentContext {
@@ -254,6 +260,8 @@ impl AgentContext {
             telegram_token,
             allowed_chat_ids,
             allowed_user_ids,
+            pool: None,
+            scheduler_notifier: None,
         }
     }
 }
