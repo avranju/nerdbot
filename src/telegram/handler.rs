@@ -38,6 +38,8 @@ pub struct MessageHandler {
     loop_config: AgentLoopConfig,
     /// Application configuration.
     config: AppConfig,
+    /// Cached Telegram bot token from the environment.
+    bot_token: String,
 }
 
 impl MessageHandler {
@@ -50,12 +52,14 @@ impl MessageHandler {
         let loop_config = AgentLoopConfig {
             max_tool_iterations: config.agent.max_tool_iterations,
         };
+        let bot_token = std::env::var(&config.telegram.bot_token_env).unwrap_or_else(|_| String::new());
         Self {
             pool,
             provider,
             registry,
             loop_config,
             config,
+            bot_token,
         }
     }
 
@@ -285,8 +289,8 @@ impl MessageHandler {
             .map_err(|e| AgentError::Config(format!("Failed to read personality file: {e}")))
     }
 
-    /// Extract the Telegram bot token from environment.
+    /// Get the cached Telegram bot token.
     fn get_bot_token(&self) -> String {
-        std::env::var(&self.config.telegram.bot_token_env).unwrap_or_else(|_| String::new())
+        self.bot_token.clone()
     }
 }

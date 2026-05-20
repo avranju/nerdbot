@@ -52,10 +52,18 @@ impl StoredMessage {
     /// Convert to a full `Message` with role.
     pub fn to_message(&self) -> Result<Message, AgentError> {
         let role = self.role()?;
-        Ok(Message::new(
-            role,
-            MessageContent::Text(self.content.clone()),
-        ))
+        let content = if let Some(ref json) = self.structured_content_json {
+            if json.is_null() {
+                MessageContent::Text(self.content.clone())
+            } else {
+                let parts = serde_json::from_value(json.clone())
+                    .map_err(|e| AgentError::Storage(format!("Failed to deserialize structured content: {e}")))?;
+                MessageContent::Parts(parts)
+            }
+        } else {
+            MessageContent::Text(self.content.clone())
+        };
+        Ok(Message::new(role, content))
     }
 }
 
@@ -74,12 +82,13 @@ pub async fn create_message(
         }
     };
 
-    let stored = StoredMessage::new(
+    let mut stored = StoredMessage::new(
         session_id.to_string(),
         message.role.clone(),
         content.clone(),
         token_estimate,
     );
+    stored.structured_content_json = structured_json;
 
     sqlx::query(
         r#"
@@ -91,7 +100,7 @@ pub async fn create_message(
     .bind(session_id)
     .bind(&stored.role)
     .bind(content)
-    .bind(structured_json)
+    .bind(&stored.structured_content_json)
     .bind(stored.token_estimate)
     .bind(stored.created_at.to_rfc3339())
     .execute(pool)

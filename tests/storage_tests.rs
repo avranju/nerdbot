@@ -245,6 +245,55 @@ async fn test_message_to_message_conversion() {
     }
 }
 
+#[tokio::test]
+async fn test_message_to_message_conversion_structured() {
+    use nerdbot::llm::types::{ContentPart, ToolCall};
+    let db = setup_db().await;
+    let pool = pool(&db);
+
+    let session = nerdbot::storage::sessions::create_session(pool, 1)
+        .await
+        .unwrap();
+
+    let tool_call = ToolCall {
+        id: "call-123".into(),
+        name: "web_search".into(),
+        arguments: serde_json::json!({"query": "rust language"}),
+    };
+    let original = Message::new(
+        Role::Assistant,
+        MessageContent::Parts(vec![
+            ContentPart::Text("Let me look that up.".into()),
+            ContentPart::ToolCall(tool_call),
+        ]),
+    );
+
+    let stored = nerdbot::storage::messages::create_message(pool, &session.id, &original, Some(25))
+        .await
+        .unwrap();
+
+    let converted = stored.to_message().unwrap();
+    assert_eq!(converted.role, Role::Assistant);
+    match converted.content {
+        MessageContent::Parts(parts) => {
+            assert_eq!(parts.len(), 2);
+            match &parts[0] {
+                ContentPart::Text(t) => assert_eq!(t, "Let me look that up."),
+                _ => panic!("expected first part to be text"),
+            }
+            match &parts[1] {
+                ContentPart::ToolCall(tc) => {
+                    assert_eq!(tc.id, "call-123");
+                    assert_eq!(tc.name, "web_search");
+                    assert_eq!(tc.arguments["query"], "rust language");
+                }
+                _ => panic!("expected second part to be a tool call"),
+            }
+        }
+        _ => panic!("expected parts content"),
+    }
+}
+
 // ── Summary CRUD ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -552,18 +601,21 @@ async fn test_session_create_error_handling() {
 
 #[tokio::test]
 async fn test_message_create_with_no_session_fails() {
-    // SQLite should enforce the foreign key — but we haven't enabled FK.
-    // This test verifies that creating a message for a nonexistent session
-    // still works (FK enforcement is optional in SQLite).
+    // SQLite now enforces foreign key constraints.
+    // Creating a message for a nonexistent session must return a Storage error.
     let db = setup_db().await;
     let pool = pool(&db);
 
-    // This should not panic
     let msg = Message::new(Role::User, MessageContent::Text("orphan".into()));
     let result =
         nerdbot::storage::messages::create_message(pool, "nonexistent-session", &msg, None).await;
-    // May succeed or fail depending on FK enforcement — just check no panic
-    let _ = result;
+    assert!(result.is_err(), "Expected an error because session does not exist");
+    match result {
+        Err(AgentError::Storage(e)) => {
+            assert!(e.contains("foreign key constraint failed") || e.contains("FOREIGN KEY constraint failed"), "Expected foreign key violation error, got: {}", e);
+        }
+        other => panic!("Expected Storage error, got: {:?}", other),
+    }
 }
 
 // ── Storage Model Serialization ───────────────────────────────────────

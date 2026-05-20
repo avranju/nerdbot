@@ -1,7 +1,9 @@
 //! SQLite database connection, schema, and migration.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
 use tracing::info;
 
@@ -15,7 +17,12 @@ pub struct Database {
 impl Database {
     /// Create a new database handle and connect.
     pub async fn new(path: PathBuf) -> Result<Self, AgentError> {
-        let pool = SqlitePool::connect(format!("sqlite://{}", path.display()).as_str())
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .map_err(|e| AgentError::Storage(format!("Failed to parse connection options: {e}")))?
+            .create_if_missing(true)
+            .foreign_keys(true);
+
+        let pool = SqlitePool::connect_with(options)
             .await
             .map_err(|e| AgentError::Storage(format!("Failed to connect to database: {e}")))?;
 

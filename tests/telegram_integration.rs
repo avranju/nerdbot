@@ -358,6 +358,44 @@ async fn test_message_handler_persists_messages() {
 }
 
 #[tokio::test]
+async fn test_message_handler_active_reset_context() {
+    let pool = setup_test_db().await;
+    let handler = make_handler(pool.clone());
+
+    // 1. Send first message to initialize session
+    let _ = handler.handle_message(42, 100, "hello").await.unwrap();
+
+    let session1 = storage::sessions::get_session_for_chat(&pool, 42)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // 2. Call reset context
+    let _ = handler.handle_message(42, 100, "/reset-context").await.unwrap();
+
+    // 3. Verify a new session has been created for the chat
+    let session2 = storage::sessions::get_session_for_chat(&pool, 42)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_ne!(session1.id, session2.id, "Expected a new session ID to be generated");
+
+    // 4. Verify that subsequent message goes to the new session
+    let _ = handler.handle_message(42, 100, "new conversation starting").await.unwrap();
+
+    let messages1 = storage::messages::list_messages(&pool, &session1.id, None)
+        .await
+        .unwrap();
+    let messages2 = storage::messages::list_messages(&pool, &session2.id, None)
+        .await
+        .unwrap();
+
+    assert!(messages2.iter().any(|m| m.content == "new conversation starting"), "Expected subsequent message to be persisted under the new session");
+    assert!(!messages1.iter().any(|m| m.content == "new conversation starting"), "Subsequent message should not be in the old session");
+}
+
+#[tokio::test]
 async fn test_message_handler_allowlist_blocks_chat() {
     let pool = setup_test_db().await;
 

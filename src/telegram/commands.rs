@@ -95,7 +95,10 @@ impl CommandHandler {
             TelegramCommand::Jobs => Self::jobs(chat_id, pool).await,
             TelegramCommand::Run(job_id) => Self::run_job(chat_id, &job_id, pool).await,
             TelegramCommand::Delete(job_id) => Self::delete_job(chat_id, &job_id, pool).await,
-            TelegramCommand::ResetContext => Ok(Self::reset_context()),
+            TelegramCommand::ResetContext => {
+                crate::storage::sessions::create_session(pool, chat_id).await?;
+                Ok(Self::reset_context())
+            }
         }
     }
 
