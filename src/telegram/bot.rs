@@ -116,9 +116,13 @@ pub struct TelegramBot {
 }
 
 impl TelegramBot {
-    /// Create a new bot client.
+    /// Create a new bot client with the default Telegram API base URL.
     pub fn new(token: String) -> Self {
-        let base_url = format!("{TELEGRAM_API_BASE}{token}");
+        Self::new_with_base_url(token, TELEGRAM_API_BASE.to_string())
+    }
+
+    /// Create a new bot client with a custom base URL (useful for testing).
+    pub fn new_with_base_url(token: String, base_url: String) -> Self {
         Self {
             token,
             http: reqwest::Client::new(),
@@ -287,10 +291,17 @@ impl TelegramBot {
             .await
             .map_err(|e| AgentError::Telegram(format!("HTTP error during deleteWebhook: {e}")))?;
 
+        let status = response.status();
         let body_text = response
             .text()
             .await
             .map_err(|e| AgentError::Telegram(format!("Failed to read deleteWebhook body: {e}")))?;
+
+        if !status.is_success() {
+            return Err(AgentError::Telegram(format!(
+                "deleteWebhook returned HTTP {status}: {body_text}"
+            )));
+        }
 
         let api_response: TelegramApiResponse<serde_json::Value> = serde_json::from_str(&body_text)
             .map_err(|e| {
@@ -324,10 +335,17 @@ impl TelegramBot {
             .await
             .map_err(|e| AgentError::Telegram(format!("HTTP error during getMe: {e}")))?;
 
+        let status = response.status();
         let body_text = response
             .text()
             .await
             .map_err(|e| AgentError::Telegram(format!("Failed to read getMe body: {e}")))?;
+
+        if !status.is_success() {
+            return Err(AgentError::Telegram(format!(
+                "getMe returned HTTP {status}: {body_text}"
+            )));
+        }
 
         let api_response: TelegramApiResponse<User> =
             serde_json::from_str(&body_text).map_err(|e| {

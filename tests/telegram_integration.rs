@@ -453,6 +453,131 @@ fn test_bot_new_sets_token() {
     assert_eq!(bot.token(), "my-test-token");
 }
 
+// ── TelegramBot HTTP status checks ───────────────────────────────────
+
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Create a TelegramBot pointing at the given mock server.
+async fn make_mock_bot(server: &MockServer) -> TelegramBot {
+    let base_url = format!("{}/bottest", server.uri());
+    TelegramBot::new_with_base_url("test-token".into(), base_url)
+}
+
+/// Build the expected path for a Telegram API endpoint.
+/// The mock bot uses base URL `http://host:port/bottest`, so
+/// the code appends `/getMe` → full path `/bottest/getMe`.
+fn mock_path(endpoint: &str) -> String {
+    format!("/bottest{endpoint}")
+}
+
+#[tokio::test]
+async fn test_get_me_returns_error_on_404() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot.get_me().await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("getMe returned HTTP 404"), "unexpected error: {err_str}");
+}
+
+#[tokio::test]
+async fn test_get_me_returns_error_on_401() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"ok":false,"description":"Unauthorized"}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot.get_me().await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("getMe returned HTTP 401"), "unexpected error: {err_str}");
+}
+
+#[tokio::test]
+async fn test_get_me_succeeds_on_200() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"id":12345,"first_name":"TestBot","username":"@testbot"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/getMe")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = bot.get_me().await.unwrap();
+    assert_eq!(result.id, 12345);
+    assert_eq!(result.first_name, "TestBot");
+    assert_eq!(result.username, Some("@testbot".into()));
+}
+
+#[tokio::test]
+async fn test_delete_webhook_returns_error_on_500() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/deleteWebhook")))
+        .respond_with(ResponseTemplate::new(500).set_body_string(r#"{"ok":false,"description":"Internal Server Error"}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot.delete_webhook().await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("deleteWebhook returned HTTP 500"), "unexpected error: {err_str}");
+}
+
+#[tokio::test]
+async fn test_delete_webhook_returns_error_on_404() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/deleteWebhook")))
+        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot.delete_webhook().await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("deleteWebhook returned HTTP 404"), "unexpected error: {err_str}");
+}
+
+#[tokio::test]
+async fn test_get_updates_returns_error_on_503() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(&mock_path("/getUpdates")))
+        .respond_with(ResponseTemplate::new(503).set_body_string(r#"{"ok":false,"description":"Service Unavailable"}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot.get_updates(None, 0).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("getUpdates returned HTTP 503"), "unexpected error: {err_str}");
+}
+
 // ── Tool context ──────────────────────────────────────────────────────
 
 #[test]
