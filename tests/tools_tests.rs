@@ -436,3 +436,244 @@ async fn test_registry_execute_with_invalid_args() {
     // Should fail since it's a stub, but should not panic
     assert!(result.is_err());
 }
+
+// ── send_user_message Tool Tests ───────────────────────────────────────
+
+#[test]
+fn test_send_user_message_schema_has_required_text() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let schema = tool.input_schema();
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(required.contains(&"text"));
+}
+
+#[test]
+fn test_send_user_message_schema_has_optional_fields() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let schema = tool.input_schema();
+    let props = &schema["properties"];
+    assert!(props.get("chat_id").is_some());
+    assert!(props.get("formatting").is_some());
+    assert!(props.get("disable_notification").is_some());
+}
+
+#[tokio::test]
+async fn test_send_user_message_requires_text() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "bot-token".into(),
+        allowed_chat_ids: vec![123],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // Missing text should fail
+    let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::Generic(msg)) = result {
+        assert!(msg.contains("text is required"));
+    } else {
+        panic!("expected Generic error, got {:?}", result);
+    }
+}
+
+#[tokio::test]
+async fn test_send_user_message_uses_context_chat_id_when_missing() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 999,
+            user_id: 100,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(), // Empty token = mock mode
+        allowed_chat_ids: vec![999],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // With empty token, should succeed in mock mode and use chat_id from context
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello"}),
+        ctx,
+    )
+    .await
+    .unwrap();
+    assert!(result.success);
+    assert!(result.data["sent"].is_boolean());
+    assert_eq!(result.data["chat_id"].as_i64(), Some(999));
+}
+
+#[tokio::test]
+async fn test_send_user_message_uses_explicit_chat_id() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 111,
+            user_id: 100,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(), // Mock mode
+        allowed_chat_ids: vec![222], // Different from both context and explicit
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // Explicit chat_id should be used
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello", "chat_id": 222}),
+        ctx,
+    )
+    .await
+    .unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["chat_id"].as_i64(), Some(222));
+}
+
+#[tokio::test]
+async fn test_send_user_message_enforces_chat_allowlist() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 111,
+            user_id: 100,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(),
+        allowed_chat_ids: vec![999], // Only 999 allowed
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // Target chat 222 is not in allowlist
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello", "chat_id": 222}),
+        ctx,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::PermissionDenied));
+}
+
+#[tokio::test]
+async fn test_send_user_message_enforces_user_allowlist() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 111,
+            user_id: 100,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(),
+        allowed_chat_ids: vec![111],
+        allowed_user_ids: vec![999], // Only user 999 allowed
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // User 100 is not in allowlist
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello", "chat_id": 111}),
+        ctx,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::PermissionDenied));
+}
+
+#[tokio::test]
+async fn test_send_user_message_formatting_markdown() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(), // Empty = mock mode
+        allowed_chat_ids: vec![123],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello", "formatting": "markdown"}),
+        ctx,
+    )
+    .await
+    .unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["formatting"].as_str(), Some("markdown"));
+}
+
+#[tokio::test]
+async fn test_send_user_message_disable_notification() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(), // Empty = mock mode
+        allowed_chat_ids: vec![123],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"text": "hello", "disable_notification": true}),
+        ctx,
+    )
+    .await
+    .unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["disable_notification"].as_bool(), Some(true));
+}
+
+#[tokio::test]
+async fn test_send_user_message_no_chat_id_in_internal_run() {
+    let tool = nerdbot::tools::telegram::SendTelegramMessage;
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::Internal {
+            reason: "test".into(),
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // No chat_id in context and none provided explicitly
+    let result = Tool::execute(&tool, serde_json::json!({"text": "hello"}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::Generic(msg)) = result {
+        assert!(msg.contains("chat_id is required"));
+    } else {
+        panic!("expected Generic error, got {:?}", result);
+    }
+}

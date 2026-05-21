@@ -35,9 +35,31 @@ impl TelegramService {
     /// If the message exceeds Telegram's 4096-char limit, it is split into
     /// multiple messages and each is sent separately.
     pub async fn send_message(&self, chat_id: i64, text: &str) -> Result<(), AgentError> {
+        self.send_message_with_options(chat_id, text, None, None).await
+    }
+
+    /// Send a text message to a chat with optional formatting and notification settings.
+    ///
+    /// If the message exceeds Telegram's 4096-char limit, it is split into
+    /// multiple messages and each is sent separately.
+    ///
+    /// # Arguments
+    /// * `chat_id` - Target Telegram chat ID
+    /// * `text` - Message text
+    /// * `parse_mode` - Optional formatting: `"MarkdownV2"` for markdown, or `None` for plain text
+    /// * `disable_notification` - If true, send without triggering notification sounds
+    pub async fn send_message_with_options(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+        disable_notification: Option<bool>,
+    ) -> Result<(), AgentError> {
         // Check if the message needs to be split
         if text.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
-            self.bot.send_message(chat_id, text, None).await?;
+            self.bot
+                .send_message(chat_id, text, parse_mode, disable_notification)
+                .await?;
             return Ok(());
         }
 
@@ -58,7 +80,9 @@ impl TelegramService {
             };
 
             let message = format!("{prefix}{chunk}");
-            self.bot.send_message(chat_id, &message, None).await?;
+            self.bot
+                .send_message(chat_id, &message, parse_mode, disable_notification)
+                .await?;
             debug!(chunk = i + 1, total = chunks.len(), "chunk sent");
         }
 

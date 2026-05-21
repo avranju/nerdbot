@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::error::AgentError;
+use crate::llm::types::ContentPart;
 use crate::scheduler::models::JobContextPolicy;
 
 /// Input arguments required to execute a scheduled job runner.
@@ -99,6 +100,7 @@ pub async fn run_scheduled_job(
         allowed_chat_ids,
         allowed_user_ids,
         pool: Some(pool.clone()),
+        session_id: session.id.clone(),
         scheduler_notifier: None, // No immediate wakeup loop notifier inside background runner itself
     };
 
@@ -118,20 +120,27 @@ pub async fn run_scheduled_job(
                 let assistant_msg = crate::llm::types::Message::assistant(&text);
                 let _ = crate::storage::messages::create_message(&pool, &session.id, &assistant_msg, None).await?;
 
-                if job.notify_on_completion {
+                // Check whether the agent already sent a notification via send_user_message
+                let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
+
+                if job.notify_on_completion && !agent_notified {
                     let notification = format!("🔔 **Job \"{}\" executed successfully**\n\n{}", job.name, text);
                     if let Err(e) = telegram_service.send_message(job.owner_chat_id, &notification).await {
                         tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
                     }
                 }
             } else if job.notify_on_completion {
-                let notification = format!("🔔 **Job \"{}\" completed with no output**", job.name);
-                let _ = telegram_service.send_message(job.owner_chat_id, &notification).await;
+                // Silent completion — check if agent already notified
+                let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
+                if !agent_notified {
+                    let notification = format!("🔔 **Job \"{}\" completed with no output**", job.name);
+                    let _ = telegram_service.send_message(job.owner_chat_id, &notification).await;
+                }
             }
             Ok(())
         }
         Err(e) => {
-            // Notify Telegram of the failure
+            // Notify Telegram of the failure (always, regardless of notify_on_completion)
             let err_notification = format!(
                 "⚠️ **Job \"{}\" failed to execute**\n\nError: {}",
                 job.name, e
@@ -142,4 +151,65 @@ pub async fn run_scheduled_job(
             Err(e)
         }
     }
+}
+
+/// Check whether the agent already sent a notification via `send_user_message` during this run.
+///
+/// Scans recent tool-result messages in the session for `tool_name: "send_user_message"`
+/// with `sent: true` in the structured content.
+///
+/// Returns `false` on any DB or parse error (fail-open: prefer sending a duplicate
+/// notification over silently suppressing one).
+async fn agent_already_sent_notification(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> bool {
+    // Load recent messages (tool results are stored in reverse chronological order)
+    let stored = match crate::storage::messages::list_messages(pool, session_id, Some(50)).await {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "failed to list messages for notification dedup, assuming not notified"
+            );
+            return false;
+        }
+    };
+
+    for sm in stored {
+        // We're looking for Tool-role messages that contain send_user_message results
+        if let Ok(role) = sm.role()
+            && matches!(role, crate::llm::types::Role::Tool)
+        {
+            // Parse structured content to check for send_user_message tool results.
+            // Storage writes Vec<ContentPart>, not MessageContent.
+            if let Some(ref json) = sm.structured_content_json
+                && let Ok(parts) =
+                    serde_json::from_value::<Vec<ContentPart>>(json.clone())
+            {
+                for part in parts {
+                    if let ContentPart::ToolResult(tr) = part {
+                        // Check that this is a successful send_user_message call
+                        // (not mock-mode or failed execution)
+                        let is_send_user_message = tr
+                            .content
+                            .get("tool_name")
+                            .and_then(|v| v.as_str())
+                            == Some("send_user_message");
+                        let actually_sent = tr
+                            .content
+                            .get("sent")
+                            .and_then(|v| v.as_bool())
+                            == Some(true);
+                        if is_send_user_message && actually_sent {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }

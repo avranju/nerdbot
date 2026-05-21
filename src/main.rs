@@ -139,6 +139,8 @@ async fn main() {
     registry.register(tools::schedule::ListJobs);
     registry.register(tools::schedule::DeleteJob);
     registry.register(tools::schedule::RunJobNow);
+    // Phase 6: register messaging tool
+    registry.register(tools::telegram::SendTelegramMessage);
     let registry = Arc::new(registry);
 
     // Phase 4: use fake provider (real providers come in Phase 7)

@@ -841,3 +841,52 @@ async fn test_agent_loop_tracks_tokens() {
     assert_eq!(tokens.output_tokens, 50);
     assert_eq!(tokens.total_tokens, 150);
 }
+
+// ── Test: Silent Completion (Phase 6) ──────────────────────────────────
+
+#[tokio::test]
+async fn test_silent_completion_when_no_text_and_no_tools() {
+    // Provider returns no tool calls and no assistant text
+    let provider = FakeProvider::new(vec![FakeResponse {
+        assistant_text: None,
+        tool_calls: Vec::new(),
+        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        token_usage: None,
+    }]);
+
+    let ctx = test_context();
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
+
+    // Should return Silent, not FinalText("")
+    assert!(matches!(result.outcome, AgentOutcome::Silent));
+    assert_eq!(result.metadata.iterations, 1);
+    assert_eq!(provider.call_count(), 1);
+}
+
+#[tokio::test]
+async fn test_silent_completion_with_empty_text() {
+    // Provider returns empty assistant text (edge case)
+    let provider = FakeProvider::new(vec![FakeResponse {
+        assistant_text: Some("".into()),
+        tool_calls: Vec::new(),
+        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        token_usage: None,
+    }]);
+
+    let ctx = test_context();
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
+
+    // Empty text should also be treated as Silent
+    assert!(matches!(result.outcome, AgentOutcome::Silent));
+    assert_eq!(result.metadata.iterations, 1);
+}

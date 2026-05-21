@@ -210,6 +210,7 @@ impl TelegramBot {
         chat_id: i64,
         text: &str,
         parse_mode: Option<&str>,
+        disable_notification: Option<bool>,
     ) -> Result<SentMessage, AgentError> {
         // Validate text length — Telegram limit is 4096 UTF-8 code points
         if text.chars().count() > TELEGRAM_MAX_MESSAGE_LENGTH {
@@ -225,7 +226,7 @@ impl TelegramBot {
             chat_id,
             text: text.to_string(),
             parse_mode: parse_mode.map(|s| s.to_string()),
-            disable_notification: None,
+            disable_notification,
             reply_to_message_id: None,
         };
 

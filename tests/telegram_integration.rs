@@ -483,6 +483,62 @@ fn test_service_splits_on_space_preference() {
     assert!(chunks[0].ends_with(' '));
 }
 
+// ── Service: send_message_with_options ─────────────────────────────────
+
+/// Create a TelegramService pointing at the given mock server.
+async fn make_mock_service(server: &MockServer) -> TelegramService {
+    let base_url = format!("{}/bottest", server.uri());
+    let bot = TelegramBot::new_with_base_url("test-token".into(), base_url);
+    TelegramService::new(std::sync::Arc::new(bot))
+}
+
+#[tokio::test]
+async fn test_send_message_with_options_sends_markdown() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"hello world"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "hello world",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, "hello world", Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_with_options_disable_notification() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"silent message"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "silent message",
+            "disable_notification": true
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, "silent message", None, Some(true))
+        .await;
+    assert!(result.is_ok());
+}
+
 // ── TelegramBot helpers ──────────────────────────────────────────────
 
 #[test]

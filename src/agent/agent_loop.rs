@@ -97,23 +97,44 @@ pub async fn run_agent(
 
         // Check if the model returned final text (no tool calls)
         if !response.has_tool_calls() {
-            let text = response.assistant_text.unwrap_or_default();
-            info!(
-                iterations = iterations,
-                final_text_length = text.len(),
-                "agent completed with final text"
-            );
+            match &response.assistant_text {
+                Some(text) if !text.is_empty() => {
+                    info!(
+                        iterations = iterations,
+                        final_text_length = text.len(),
+                        "agent completed with final text"
+                    );
 
-            return Ok(AgentResult {
-                outcome: AgentOutcome::FinalText(text),
-                metadata: RunMetadata {
-                    iterations,
-                    token_estimate: Some(crate::llm::types::TokenEstimate::new(
-                        total_input_tokens,
-                        total_output_tokens,
-                    )),
-                },
-            });
+                    return Ok(AgentResult {
+                        outcome: AgentOutcome::FinalText(text.clone()),
+                        metadata: RunMetadata {
+                            iterations,
+                            token_estimate: Some(crate::llm::types::TokenEstimate::new(
+                                total_input_tokens,
+                                total_output_tokens,
+                            )),
+                        },
+                    });
+                }
+                _ => {
+                    // No tool calls and no text (or empty text) — silent completion
+                    info!(
+                        iterations = iterations,
+                        "agent completed silently (no tool calls, no final text)"
+                    );
+
+                    return Ok(AgentResult {
+                        outcome: AgentOutcome::Silent,
+                        metadata: RunMetadata {
+                            iterations,
+                            token_estimate: Some(crate::llm::types::TokenEstimate::new(
+                                total_input_tokens,
+                                total_output_tokens,
+                            )),
+                        },
+                    });
+                }
+            }
         }
 
         // Check access before executing tool calls
@@ -196,7 +217,28 @@ pub async fn run_agent(
 
         let results_count = tool_results.len();
         if !tool_results.is_empty() {
-            working_messages.push(crate::llm::types::Message::with_tool_results(tool_results));
+            let tool_result_msg =
+                crate::llm::types::Message::with_tool_results(tool_results);
+            working_messages.push(tool_result_msg.clone());
+
+            // Persist tool results to the database so callers (e.g. scheduler)
+            // can inspect them for notification deduplication.
+            if !ctx.session_id.is_empty()
+                && let Some(ref pool) = ctx.pool
+                && let Err(e) = crate::storage::messages::create_message(
+                    pool,
+                    &ctx.session_id,
+                    &tool_result_msg,
+                    None,
+                )
+                .await
+            {
+                warn!(
+                    step = step + 1,
+                    error = %e,
+                    "failed to persist tool result messages"
+                );
+            }
         }
 
         debug!(
@@ -239,6 +281,9 @@ pub struct AgentContext {
     pub allowed_user_ids: Vec<i64>,
     /// Database pool for tools needing access to storage
     pub pool: Option<sqlx::SqlitePool>,
+    /// Chat session ID for persisting tool results.
+    /// When non-empty, tool-result messages are persisted to the database.
+    pub session_id: String,
     /// Notifier to wake up the scheduler service loop instantly
     pub scheduler_notifier: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
@@ -261,6 +306,7 @@ impl AgentContext {
             allowed_chat_ids,
             allowed_user_ids,
             pool: None,
+            session_id: String::new(),
             scheduler_notifier: None,
         }
     }

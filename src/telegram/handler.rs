@@ -202,6 +202,7 @@ impl MessageHandler {
             allowed_chat_ids: self.config.telegram.allowed_chat_ids.clone(),
             allowed_user_ids: self.config.telegram.allowed_user_ids.clone(),
             pool: Some(self.pool.clone()),
+            session_id: session_id.to_string(),
             scheduler_notifier: self.scheduler_notifier.clone(),
         };
 
