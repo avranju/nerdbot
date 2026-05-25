@@ -29,7 +29,9 @@ impl ContextManager {
         tools: Vec<Tool>,
         _model: &str,
     ) -> Result<ChatRequest, AgentError> {
-        let mut request = ChatRequest::new(vec![ChatMessage::system(MessageContent::from_text(personality))]);
+        let mut request = ChatRequest::new(vec![ChatMessage::system(MessageContent::from_text(
+            personality,
+        ))]);
         if !tools.is_empty() {
             request = request.with_tools(tools);
         }

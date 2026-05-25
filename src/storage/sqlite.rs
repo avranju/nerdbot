@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
 use tracing::info;
 
 use crate::error::AgentError;

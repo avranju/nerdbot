@@ -1,8 +1,8 @@
 //! Cron utilities for timezone-aware scheduling.
 
+use crate::error::AgentError;
 use chrono::TimeZone;
 use chrono_tz::Tz;
-use crate::error::AgentError;
 
 /// Detect the local system timezone using TZ environment variable or common Linux files.
 fn detect_system_timezone() -> Option<String> {
@@ -40,35 +40,45 @@ pub fn get_next_cron_run(
         cron_str.to_string()
     };
 
-    let schedule = padded.parse::<cron::Schedule>()
-        .map_err(|e| AgentError::Scheduler(format!("Invalid cron expression '{}': {e}", cron_str)))?;
+    let schedule = padded.parse::<cron::Schedule>().map_err(|e| {
+        AgentError::Scheduler(format!("Invalid cron expression '{}': {e}", cron_str))
+    })?;
 
     // Determine target timezone
     let tz: Tz = match timezone_name {
-        Some(name) => name.parse().map_err(|e| {
-            AgentError::Scheduler(format!("Invalid timezone '{}': {}", name, e))
-        })?,
+        Some(name) => name
+            .parse()
+            .map_err(|e| AgentError::Scheduler(format!("Invalid timezone '{}': {}", name, e)))?,
         None => {
             // Attempt to find from runtime environment
             if let Some(detected) = detect_system_timezone() {
                 match detected.parse::<Tz>() {
                     Ok(detected_tz) => detected_tz,
                     Err(e) => {
-                        tracing::warn!("System timezone '{}' detected but could not be parsed: {}. Falling back to UTC.", detected, e);
+                        tracing::warn!(
+                            "System timezone '{}' detected but could not be parsed: {}. Falling back to UTC.",
+                            detected,
+                            e
+                        );
                         chrono_tz::UTC
                     }
                 }
             } else {
-                tracing::warn!("No timezone provided and system timezone could not be detected. Falling back to UTC.");
+                tracing::warn!(
+                    "No timezone provided and system timezone could not be detected. Falling back to UTC."
+                );
                 chrono_tz::UTC
             }
         }
     };
 
     // Calculate next local run time in that timezone
-    let next_in_tz = schedule.upcoming(tz)
-        .next()
-        .ok_or_else(|| AgentError::Scheduler(format!("Could not calculate next run time for cron '{}'", cron_str)))?;
+    let next_in_tz = schedule.upcoming(tz).next().ok_or_else(|| {
+        AgentError::Scheduler(format!(
+            "Could not calculate next run time for cron '{}'",
+            cron_str
+        ))
+    })?;
 
     // Convert next run time back to Utc
     Ok(next_in_tz.with_timezone(&chrono::Utc))

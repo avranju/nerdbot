@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use nerdbot::error::AgentError;
 use genai::chat::ToolCall;
+use nerdbot::error::AgentError;
 use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 
@@ -508,13 +508,9 @@ async fn test_send_user_message_uses_context_chat_id_when_missing() {
     };
 
     // With empty token, should succeed in mock mode and use chat_id from context
-    let result = Tool::execute(
-        &tool,
-        serde_json::json!({"text": "hello"}),
-        ctx,
-    )
-    .await
-    .unwrap();
+    let result = Tool::execute(&tool, serde_json::json!({"text": "hello"}), ctx)
+        .await
+        .unwrap();
     assert!(result.success);
     assert!(result.data["sent"].is_boolean());
     assert_eq!(result.data["chat_id"].as_i64(), Some(999));
@@ -529,7 +525,7 @@ async fn test_send_user_message_uses_explicit_chat_id() {
             user_id: 100,
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "".into(), // Mock mode
+        telegram_token: "".into(),   // Mock mode
         allowed_chat_ids: vec![222], // Different from both context and explicit
         allowed_user_ids: vec![],
         pool: None,
@@ -685,17 +681,15 @@ async fn test_send_user_message_no_chat_id_in_internal_run() {
 
 #[test]
 fn test_shell_execute_name() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     assert_eq!(tool.name(), "shell_execute");
 }
 
 #[test]
 fn test_shell_execute_description_non_empty() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let desc = tool.description();
     assert!(!desc.is_empty());
     assert!(desc.len() > 50);
@@ -704,9 +698,8 @@ fn test_shell_execute_description_non_empty() {
 
 #[test]
 fn test_shell_execute_schema_has_required_command() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let schema = tool.input_schema();
     let required: Vec<&str> = schema["required"]
         .as_array()
@@ -719,9 +712,8 @@ fn test_shell_execute_schema_has_required_command() {
 
 #[test]
 fn test_shell_execute_schema_has_optional_fields() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let schema = tool.input_schema();
     let props = &schema["properties"];
     assert!(props.get("command").is_some());
@@ -732,9 +724,8 @@ fn test_shell_execute_schema_has_optional_fields() {
 
 #[tokio::test]
 async fn test_shell_execute_requires_command() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -760,9 +751,8 @@ async fn test_shell_execute_requires_command() {
 
 #[tokio::test]
 async fn test_shell_execute_denied_command() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -777,12 +767,7 @@ async fn test_shell_execute_denied_command() {
     };
 
     // 'rm' is in the default denylist
-    let result = Tool::execute(
-        &tool,
-        serde_json::json!({ "command": "rm -rf /" }),
-        ctx,
-    )
-    .await;
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "rm -rf /" }), ctx).await;
     assert!(result.is_err());
     if let Err(AgentError::ToolExecution(msg)) = result {
         assert!(msg.contains("denied"));
@@ -793,9 +778,8 @@ async fn test_shell_execute_denied_command() {
 
 #[tokio::test]
 async fn test_shell_execute_allows_safe_command() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -820,7 +804,12 @@ async fn test_shell_execute_allows_safe_command() {
     let output = result.unwrap();
     assert!(output.success);
     assert!(output.summary.contains("successfully"));
-    assert!(output.data["output"].as_str().unwrap().contains("hello world"));
+    assert!(
+        output.data["output"]
+            .as_str()
+            .unwrap()
+            .contains("hello world")
+    );
 }
 
 #[tokio::test]
@@ -873,7 +862,7 @@ async fn test_shell_execute_allows_specific_command_with_allowlist() {
 async fn test_shell_execute_respects_denylist_over_allowlist() {
     let config = nerdbot::tools::shell::ShellConfig {
         allowed_commands: vec!["rm".into()], // rm is in allowlist
-        denied_commands: vec!["rm".into()], // but also in denylist
+        denied_commands: vec!["rm".into()],  // but also in denylist
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
     };
@@ -892,12 +881,7 @@ async fn test_shell_execute_respects_denylist_over_allowlist() {
     };
 
     // Denylist should take precedence
-    let result = Tool::execute(
-        &tool,
-        serde_json::json!({ "command": "rm -rf /" }),
-        ctx,
-    )
-    .await;
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "rm -rf /" }), ctx).await;
     assert!(result.is_err());
     if let Err(AgentError::ToolExecution(msg)) = result {
         assert!(msg.contains("denied"));
@@ -939,14 +923,18 @@ async fn test_shell_execute_output_truncation() {
     let output = result.unwrap();
     assert!(!output.success); // Should be non-success due to truncation
     assert!(output.data["truncated"].as_bool().unwrap());
-    assert!(output.data["output"].as_str().unwrap().contains("truncated"));
+    assert!(
+        output.data["output"]
+            .as_str()
+            .unwrap()
+            .contains("truncated")
+    );
 }
 
 #[tokio::test]
 async fn test_shell_execute_custom_timeout() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -982,9 +970,8 @@ async fn test_shell_execute_working_directory() {
     let sub = tmp.path().join("subdir");
     std::fs::create_dir(&sub).unwrap();
 
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -1009,14 +996,18 @@ async fn test_shell_execute_working_directory() {
     .await;
     assert!(result.is_ok());
     let output = result.unwrap();
-    assert!(output.data["working_directory"].as_str().unwrap().contains("subdir"));
+    assert!(
+        output.data["working_directory"]
+            .as_str()
+            .unwrap()
+            .contains("subdir")
+    );
 }
 
 #[tokio::test]
 async fn test_shell_execute_empty_command() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -1031,12 +1022,7 @@ async fn test_shell_execute_empty_command() {
     };
 
     // Empty command string
-    let result = Tool::execute(
-        &tool,
-        serde_json::json!({ "command": "" }),
-        ctx,
-    )
-    .await;
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "" }), ctx).await;
     assert!(result.is_err());
     // Empty string is caught by argument parsing (InvalidToolArgs) or by command validation (ToolExecution)
     match result.unwrap_err() {
@@ -1044,7 +1030,10 @@ async fn test_shell_execute_empty_command() {
             assert!(msg.contains("empty"));
         }
         other => {
-            panic!("expected InvalidToolArgs or ToolExecution error, got {:?}", other);
+            panic!(
+                "expected InvalidToolArgs or ToolExecution error, got {:?}",
+                other
+            );
         }
     }
 }
@@ -1061,9 +1050,8 @@ fn test_shell_config_default_denylist() {
 
 #[test]
 fn test_shell_execute_schema_type_constraints() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let schema = tool.input_schema();
 
     // command should be string type
@@ -1074,20 +1062,23 @@ fn test_shell_execute_schema_type_constraints() {
 
     // timeout_seconds should have min/max
     assert_eq!(
-        schema["properties"]["timeout_seconds"]["minimum"].as_u64().unwrap(),
+        schema["properties"]["timeout_seconds"]["minimum"]
+            .as_u64()
+            .unwrap(),
         1
     );
     assert_eq!(
-        schema["properties"]["timeout_seconds"]["maximum"].as_u64().unwrap(),
+        schema["properties"]["timeout_seconds"]["maximum"]
+            .as_u64()
+            .unwrap(),
         300
     );
 }
 
 #[tokio::test]
 async fn test_shell_execute_shell_special_chars() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -1153,10 +1144,7 @@ async fn test_shell_execute_multiple_denylisted_commands() {
             ctx.clone(),
         )
         .await;
-        assert!(
-            result.is_err(),
-            "command '{cmd}' should be denied"
-        );
+        assert!(result.is_err(), "command '{cmd}' should be denied");
     }
 }
 
@@ -1199,9 +1187,8 @@ async fn test_shell_execute_custom_max_output_bytes() {
 
 #[tokio::test]
 async fn test_shell_execute_non_zero_exit_code() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -1216,12 +1203,7 @@ async fn test_shell_execute_non_zero_exit_code() {
     };
 
     // 'false' always exits with code 1
-    let result = Tool::execute(
-        &tool,
-        serde_json::json!({ "command": "false" }),
-        ctx,
-    )
-    .await;
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "false" }), ctx).await;
     assert!(result.is_ok());
     let output = result.unwrap();
     assert!(!output.success);
@@ -1231,9 +1213,8 @@ async fn test_shell_execute_non_zero_exit_code() {
 
 #[tokio::test]
 async fn test_shell_execute_timeout_enforcement() {
-    let tool = nerdbot::tools::shell::ShellExecute::new(
-        nerdbot::tools::shell::ShellConfig::default(),
-    );
+    let tool =
+        nerdbot::tools::shell::ShellExecute::new(nerdbot::tools::shell::ShellConfig::default());
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -1263,5 +1244,9 @@ async fn test_shell_execute_timeout_enforcement() {
     let output = result.unwrap();
     assert!(!output.success);
     assert_eq!(output.data["exit_code"].as_i64(), Some(-1));
-    assert!(elapsed.as_secs() < 3, "timeout should fire quickly, took {:?}", elapsed);
+    assert!(
+        elapsed.as_secs() < 3,
+        "timeout should fire quickly, took {:?}",
+        elapsed
+    );
 }

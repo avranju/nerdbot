@@ -211,7 +211,10 @@ fn test_parse_full_config() {
 
     // LLM
     assert_eq!(config.llm.model, "gpt-4o");
-    assert_eq!(config.llm.endpoint.as_deref(), Some("https://api.example.test/v1"));
+    assert_eq!(
+        config.llm.endpoint.as_deref(),
+        Some("https://api.example.test/v1")
+    );
     assert_eq!(config.llm.api_key_env.as_deref(), Some("OPENAI_KEY"));
     assert_eq!(config.llm.temperature, 0.7);
     assert_eq!(config.llm.max_output_tokens, 2048);

@@ -17,8 +17,8 @@ use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
-use nerdbot::error::AgentError;
 use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent, ToolCall, ToolResponse};
+use nerdbot::error::AgentError;
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
 use nerdbot::storage::{ChatSession, Database, StoredJob, StoredMessage, StoredSummary};
 
@@ -245,7 +245,7 @@ async fn test_message_to_message_conversion() {
 
 #[tokio::test]
 async fn test_message_to_message_conversion_structured() {
-        let db = setup_db().await;
+    let db = setup_db().await;
     let pool = pool(&db);
 
     let session = nerdbot::storage::sessions::create_session(pool, 1)
@@ -539,7 +539,9 @@ async fn test_session_message_summary_flow() {
 
     // Add messages
     let user_msg = ChatMessage::user(MessageContent::from_text("What is Rust?"));
-    let assistant_msg = ChatMessage::assistant(MessageContent::from_text("Rust is a systems programming language."));
+    let assistant_msg = ChatMessage::assistant(MessageContent::from_text(
+        "Rust is a systems programming language.",
+    ));
 
     let user_stored =
         nerdbot::storage::messages::create_message(pool, &session.id, &user_msg, Some(8))
@@ -597,10 +599,18 @@ async fn test_message_create_with_no_session_fails() {
     let msg = ChatMessage::user(MessageContent::from_text("orphan"));
     let result =
         nerdbot::storage::messages::create_message(pool, "nonexistent-session", &msg, None).await;
-    assert!(result.is_err(), "Expected an error because session does not exist");
+    assert!(
+        result.is_err(),
+        "Expected an error because session does not exist"
+    );
     match result {
         Err(AgentError::Storage(e)) => {
-            assert!(e.contains("foreign key constraint failed") || e.contains("FOREIGN KEY constraint failed"), "Expected foreign key violation error, got: {}", e);
+            assert!(
+                e.contains("foreign key constraint failed")
+                    || e.contains("FOREIGN KEY constraint failed"),
+                "Expected foreign key violation error, got: {}",
+                e
+            );
         }
         other => panic!("Expected Storage error, got: {:?}", other),
     }

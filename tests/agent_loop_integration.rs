@@ -18,13 +18,16 @@
 
 use std::path::PathBuf;
 
+use genai::chat::{
+    ChatMessage, ChatOptions, ChatRequest, ChatRole, MessageContent, StopReason, Tool as GenAiTool,
+    ToolCall,
+};
 use nerdbot::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use nerdbot::agent::outcome::{AgentOutcome, AgentResult};
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::error::AgentError;
-use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::llm::LlmExecutor;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatRole, MessageContent, StopReason, Tool as GenAiTool, ToolCall};
+use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
@@ -479,11 +482,16 @@ async fn test_fake_provider_error_response() {
 async fn test_fake_provider_inspects_last_request() {
     let provider = FakeProvider::new(vec![FakeResponse::final_text("test")]);
 
-    let request = ChatRequest::default().with_tools(vec![GenAiTool::new("test_tool")
-        .with_description("a test tool")
-        .with_schema(serde_json::json!({}))]);
+    let request = ChatRequest::default().with_tools(vec![
+        GenAiTool::new("test_tool")
+            .with_description("a test tool")
+            .with_schema(serde_json::json!({})),
+    ]);
 
-    let _ = provider.complete("fake-model", request.clone(), ChatOptions::default()).await.unwrap();
+    let _ = provider
+        .complete("fake-model", request.clone(), ChatOptions::default())
+        .await
+        .unwrap();
 
     let inspected = provider.last_request().unwrap();
     let tools = inspected.tools.as_ref().unwrap();
@@ -591,7 +599,9 @@ async fn test_agent_loop_tool_returns_failure_output() {
 async fn test_agent_context_with_initial_messages() {
     let mut ctx = test_context();
     ctx.messages
-        .push(ChatMessage::user(MessageContent::from_text("Initial message")));
+        .push(ChatMessage::user(MessageContent::from_text(
+            "Initial message",
+        )));
 
     let provider = FakeProvider::new(vec![FakeResponse::final_text("Got it.")]);
     let registry = toy_registry();
@@ -758,13 +768,17 @@ async fn test_registry_execute_calculator() {
 #[test]
 fn test_echo_tool_spec_generation() {
     let tool = EchoTool;
-    let spec = GenAiTool::new(tool.name()).with_description(tool.description()).with_schema(tool.input_schema());
+    let spec = GenAiTool::new(tool.name())
+        .with_description(tool.description())
+        .with_schema(tool.input_schema());
 
     assert_eq!(spec.name.as_str(), "echo");
     assert_eq!(spec.description.as_deref(), Some(tool.description()));
     assert!(spec.schema.as_ref().unwrap().is_object());
     assert!(
-        spec.schema.as_ref().unwrap()
+        spec.schema
+            .as_ref()
+            .unwrap()
             .get("required")
             .and_then(|r| r.as_array())
             .map(|a| a.iter().any(|v| v.as_str() == Some("message")))
@@ -775,7 +789,9 @@ fn test_echo_tool_spec_generation() {
 #[test]
 fn test_calculator_tool_spec_generation() {
     let tool = CalculatorTool;
-    let spec = GenAiTool::new(tool.name()).with_description(tool.description()).with_schema(tool.input_schema());
+    let spec = GenAiTool::new(tool.name())
+        .with_description(tool.description())
+        .with_schema(tool.input_schema());
 
     assert_eq!(spec.name.as_str(), "calculator");
     assert_eq!(spec.description.as_deref(), Some(tool.description()));
@@ -845,7 +861,7 @@ async fn test_agent_loop_tracks_tokens() {
     let tokens = result.metadata.token_usage;
     assert_eq!(tokens.input_tokens, 100);
     assert_eq!(tokens.output_tokens, 50);
-    }
+}
 
 // ── Test: Silent Completion (Phase 6) ──────────────────────────────────
 

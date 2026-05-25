@@ -54,7 +54,9 @@ pub async fn run_agent(
     // Build the initial message set: personality as system message + user messages.
     let mut working_messages = ctx.messages.clone();
     if !ctx.personality.is_empty()
-        && !working_messages.iter().any(|m| matches!(m.role, ChatRole::System))
+        && !working_messages
+            .iter()
+            .any(|m| matches!(m.role, ChatRole::System))
     {
         working_messages.insert(
             0,
@@ -100,13 +102,17 @@ pub async fn run_agent(
             total_output_tokens += output.max(0) as usize;
         }
 
-        let tool_calls: Vec<genai::chat::ToolCall> = response.tool_calls().into_iter().cloned().collect();
+        let tool_calls: Vec<genai::chat::ToolCall> =
+            response.tool_calls().into_iter().cloned().collect();
         let final_text = response.content.joined_texts();
 
         debug!(
             step = step + 1,
             has_tool_calls = !tool_calls.is_empty(),
-            assistant_text_present = final_text.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
+            assistant_text_present = final_text
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
             "LLM response"
         );
 

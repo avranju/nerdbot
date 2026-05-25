@@ -157,15 +157,27 @@ impl MessageHandler {
         // Check for bot commands
         if let Some(command) = TelegramCommand::parse(text) {
             debug!(?command, chat_id, "handling bot command");
-            let response = CommandHandler::handle(command, chat_id, user_id, &self.pool, self.scheduler_notifier.as_deref()).await?;
+            let response = CommandHandler::handle(
+                command,
+                chat_id,
+                user_id,
+                &self.pool,
+                self.scheduler_notifier.as_deref(),
+            )
+            .await?;
             return Ok(Some(response));
         }
 
         // Check for /reset-context without slash (heuristic)
         if text.trim().eq_ignore_ascii_case("reset context") {
-            let response =
-                CommandHandler::handle(TelegramCommand::ResetContext, chat_id, user_id, &self.pool, self.scheduler_notifier.as_deref())
-                    .await?;
+            let response = CommandHandler::handle(
+                TelegramCommand::ResetContext,
+                chat_id,
+                user_id,
+                &self.pool,
+                self.scheduler_notifier.as_deref(),
+            )
+            .await?;
             return Ok(Some(response));
         }
 
@@ -210,8 +222,7 @@ impl MessageHandler {
         };
 
         // Run the agent loop
-        let result =
-            run_agent(&ctx, self.llm.as_ref(), &self.registry, &self.loop_config).await;
+        let result = run_agent(&ctx, self.llm.as_ref(), &self.registry, &self.loop_config).await;
 
         match result {
             Ok(agent_result) => match agent_result.outcome {
@@ -251,12 +262,8 @@ impl MessageHandler {
     }
 
     /// Load recent messages for a session to provide as context.
-    async fn load_recent_messages(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<ChatMessage>, AgentError> {
-        let stored =
-            storage::messages::list_messages(&self.pool, session_id, Some(100)).await?;
+    async fn load_recent_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError> {
+        let stored = storage::messages::list_messages(&self.pool, session_id, Some(100)).await?;
 
         // Convert stored messages to typed messages, in chronological order
         let messages: Vec<ChatMessage> = stored
@@ -278,13 +285,11 @@ impl MessageHandler {
 
         if !path.exists() {
             // No personality file — use a reasonable default
-            return Ok(
-                "You are NerdBot, a helpful and concise AI assistant. \
+            return Ok("You are NerdBot, a helpful and concise AI assistant. \
                 You respond in plain text. You use tools when they would help \
                 answer the user's question more accurately. \
                 When you don't know something, you say so honestly."
-                    .to_string(),
-            );
+                .to_string());
         }
 
         tokio::fs::read_to_string(path)

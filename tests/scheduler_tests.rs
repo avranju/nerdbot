@@ -10,11 +10,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
+use genai::chat::{
+    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatRole, MessageContent, StopReason,
+    ToolResponse, Usage,
+};
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::config::AppConfig;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatRole, MessageContent, StopReason, ToolResponse, Usage};
-use nerdbot::llm::fake::FakeProvider;
 use nerdbot::llm::LlmExecutor;
+use nerdbot::llm::fake::FakeProvider;
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage;
@@ -673,8 +676,14 @@ async fn test_scheduler_graceful_shutdown() {
             Ok(ChatResponse {
                 content: MessageContent::from_text("Completed after delay"),
                 reasoning_content: None,
-                model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "fake-model"),
-                provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "fake-model"),
+                model_iden: genai::ModelIden::new(
+                    genai::adapter::AdapterKind::OpenAI,
+                    "fake-model",
+                ),
+                provider_model_iden: genai::ModelIden::new(
+                    genai::adapter::AdapterKind::OpenAI,
+                    "fake-model",
+                ),
                 stop_reason: Some(StopReason::Completed("stop".to_string())),
                 usage: Usage::default(),
                 captured_raw_body: None,
@@ -771,7 +780,8 @@ async fn insert_send_user_message_result(
             "sent": true,
             "formatting": "plain_text",
             "disable_notification": false
-        }).to_string(),
+        })
+        .to_string(),
     );
 
     let msg = ChatMessage::from(vec![tool_result]);

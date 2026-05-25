@@ -176,7 +176,10 @@ fn test_run_metadata_defaults() {
 fn test_run_metadata_with_values() {
     let metadata = RunMetadata {
         iterations: 3,
-        token_usage: RunTokenUsage { input_tokens: 100, output_tokens: 50 },
+        token_usage: RunTokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+        },
     };
     assert_eq!(metadata.iterations, 3);
     assert_eq!(metadata.token_usage.input_tokens, 100);

@@ -1,7 +1,7 @@
 //! Scheduler service — manages job lifecycle.
 
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
@@ -68,7 +68,13 @@ impl SchedulerService {
                         if job.run_at.is_some_and(|run_at| run_at < now) {
                             if self.config.scheduler.run_overdue_one_shots_on_startup {
                                 info!(job_id = %job.id, "Scheduling overdue one-shot job to run immediately on startup");
-                                crate::storage::jobs::update_job_next_run(&self.pool, &job.id, Some(now), true).await?;
+                                crate::storage::jobs::update_job_next_run(
+                                    &self.pool,
+                                    &job.id,
+                                    Some(now),
+                                    true,
+                                )
+                                .await?;
                             } else {
                                 info!(job_id = %job.id, "Marking overdue one-shot job as Missed and disabling");
                                 crate::storage::jobs::update_job_run_state(
@@ -77,8 +83,9 @@ impl SchedulerService {
                                     crate::scheduler::models::JobStatus::Missed,
                                     now,
                                     None,
-                                    false
-                                ).await?;
+                                    false,
+                                )
+                                .await?;
                             }
                         }
                     }
@@ -87,7 +94,13 @@ impl SchedulerService {
                             match get_next_cron_run(cron_expression, job.timezone.as_deref()) {
                                 Ok(next_run) => {
                                     info!(job_id = %job.id, next_run = %next_run, "Recalculating next run time for cron job on startup");
-                                    crate::storage::jobs::update_job_next_run(&self.pool, &job.id, Some(next_run), true).await?;
+                                    crate::storage::jobs::update_job_next_run(
+                                        &self.pool,
+                                        &job.id,
+                                        Some(next_run),
+                                        true,
+                                    )
+                                    .await?;
                                 }
                                 Err(e) => {
                                     error!(job_id = %job.id, error = %e, "Invalid cron on startup reload");
@@ -125,7 +138,9 @@ impl SchedulerService {
                 match next_job {
                     Some(job) => {
                         if shutdown_rx.try_recv().is_ok() {
-                            info!("Scheduler loop received shutdown signal before executing due job");
+                            info!(
+                                "Scheduler loop received shutdown signal before executing due job"
+                            );
                             break;
                         }
 
@@ -140,7 +155,12 @@ impl SchedulerService {
                                 match schedule_type {
                                     crate::scheduler::models::ScheduleType::OneShot => {}
                                     crate::scheduler::models::ScheduleType::Cron => {
-                                        if let Some(next) = job.cron_expression.as_deref().and_then(|expr| get_next_cron_run(expr, job.timezone.as_deref()).ok()) {
+                                        if let Some(next) =
+                                            job.cron_expression.as_deref().and_then(|expr| {
+                                                get_next_cron_run(expr, job.timezone.as_deref())
+                                                    .ok()
+                                            })
+                                        {
                                             next_run_at = Some(next);
                                             enabled = true;
                                         }
@@ -158,7 +178,9 @@ impl SchedulerService {
                                 start_time,
                                 next_run_at,
                                 enabled,
-                            ).await {
+                            )
+                            .await
+                            {
                                 error!(job_id = %job_id, error = %e, "Failed to update job status to Running");
                                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                                 continue;
@@ -181,26 +203,37 @@ impl SchedulerService {
                                     llm_max_output_tokens: config_clone.llm.max_output_tokens,
                                 };
 
-                                let personality = match tokio::fs::read_to_string(&config_clone.agent.personality_file).await {
+                                let personality = match tokio::fs::read_to_string(
+                                    &config_clone.agent.personality_file,
+                                )
+                                .await
+                                {
                                     Ok(content) => content,
                                     Err(_) => "You are a helpful assistant.".to_string(),
                                 };
 
                                 let run_result = crate::scheduler::runner::run_scheduled_job(
-                                     crate::scheduler::runner::RunScheduledJobInput {
-                                         pool: pool_clone.clone(),
-                                         llm: llm_clone,
-                                         registry: registry_clone,
-                                         loop_config,
-                                         personality,
-                                         workspace_root: config_clone.workspace.root.clone(),
-                                         telegram_token: telegram_token_clone,
-                                         telegram_service: telegram_service_clone,
-                                         allowed_chat_ids: config_clone.telegram.allowed_chat_ids.clone(),
-                                         allowed_user_ids: config_clone.telegram.allowed_user_ids.clone(),
-                                     },
-                                     &job_id
-                                 ).await;
+                                    crate::scheduler::runner::RunScheduledJobInput {
+                                        pool: pool_clone.clone(),
+                                        llm: llm_clone,
+                                        registry: registry_clone,
+                                        loop_config,
+                                        personality,
+                                        workspace_root: config_clone.workspace.root.clone(),
+                                        telegram_token: telegram_token_clone,
+                                        telegram_service: telegram_service_clone,
+                                        allowed_chat_ids: config_clone
+                                            .telegram
+                                            .allowed_chat_ids
+                                            .clone(),
+                                        allowed_user_ids: config_clone
+                                            .telegram
+                                            .allowed_user_ids
+                                            .clone(),
+                                    },
+                                    &job_id,
+                                )
+                                .await;
 
                                 let final_status = match run_result {
                                     Ok(_) => crate::scheduler::models::JobStatus::Success,
@@ -213,8 +246,10 @@ impl SchedulerService {
                                     final_status,
                                     start_time,
                                     next_run_at,
-                                    enabled
-                                ).await {
+                                    enabled,
+                                )
+                                .await
+                                {
                                     error!(job_id = %job_id, error = %e, "Failed to update final job execution state");
                                 }
 
@@ -229,8 +264,13 @@ impl SchedulerService {
 
                             tokio::task::yield_now().await;
                         } else {
-                            let sleep_duration = (next_run - now).to_std().unwrap_or(std::time::Duration::from_secs(0));
-                            debug!(seconds = sleep_duration.as_secs(), "Upcoming job found, entering reactive sleep");
+                            let sleep_duration = (next_run - now)
+                                .to_std()
+                                .unwrap_or(std::time::Duration::from_secs(0));
+                            debug!(
+                                seconds = sleep_duration.as_secs(),
+                                "Upcoming job found, entering reactive sleep"
+                            );
 
                             tokio::select! {
                                 _ = tokio::time::sleep(sleep_duration) => {}

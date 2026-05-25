@@ -104,9 +104,7 @@ impl ShellExecute {
         // Truncate to max bytes and add a notice
         let truncated = String::from_utf8_lossy(&output.as_bytes()[..max_bytes]).to_string();
         (
-            format!(
-                "{truncated}\n\n[Output truncated: exceeded {max_bytes} bytes]",
-            ),
+            format!("{truncated}\n\n[Output truncated: exceeded {max_bytes} bytes]",),
             true,
         )
     }
@@ -160,7 +158,9 @@ impl Tool for ShellExecute {
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AgentError::InvalidToolArgs("missing or invalid 'command' field".into()))?;
+            .ok_or_else(|| {
+                AgentError::InvalidToolArgs("missing or invalid 'command' field".into())
+            })?;
 
         // Validate command against allowlist/denylist
         self.validate_command(command)?;
@@ -202,11 +202,7 @@ impl Tool for ShellExecute {
             .kill_on_drop(true);
 
         // Execute with timeout
-        let output = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            cmd.output(),
-        )
-        .await;
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
 
         let (exit_code, stdout, stderr) = match output {
             Ok(Ok(result)) => {

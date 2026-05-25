@@ -460,7 +460,12 @@ fn test_telegram_command_run_different_ids() {
 
 #[test]
 fn test_role_roundtrip() {
-    for role in [ChatRole::System, ChatRole::User, ChatRole::Assistant, ChatRole::Tool] {
+    for role in [
+        ChatRole::System,
+        ChatRole::User,
+        ChatRole::Assistant,
+        ChatRole::Tool,
+    ] {
         let json = serde_json::to_string(&role).unwrap();
         let restored: ChatRole = serde_json::from_str(&json).unwrap();
         assert_eq!(role, restored);

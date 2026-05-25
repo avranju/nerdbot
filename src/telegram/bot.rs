@@ -167,7 +167,10 @@ impl TelegramBot {
             .http
             .post(&url)
             .body(serde_urlencoded::to_string(&params).unwrap_or_default())
-            .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
             .send()
             .await
             .map_err(|e| AgentError::Telegram(format!("HTTP error during getUpdates: {e}")))?;

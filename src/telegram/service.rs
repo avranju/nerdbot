@@ -35,7 +35,8 @@ impl TelegramService {
     /// If the message exceeds Telegram's 4096-char limit, it is split into
     /// multiple messages and each is sent separately.
     pub async fn send_message(&self, chat_id: i64, text: &str) -> Result<(), AgentError> {
-        self.send_message_with_options(chat_id, text, None, None).await
+        self.send_message_with_options(chat_id, text, None, None)
+            .await
     }
 
     /// Send a text message to a chat with optional formatting and notification settings.

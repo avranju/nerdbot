@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use nerdbot::config::AppConfig;
 use nerdbot::error::AgentError;
-use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::llm::LlmExecutor;
+use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::storage;
 use nerdbot::telegram::TelegramBot;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
@@ -199,9 +199,10 @@ async fn test_command_handler_delete_job() {
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool, None)
-        .await
-        .unwrap();
+    let response =
+        CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool, None)
+            .await
+            .unwrap();
     assert!(response.contains("deleted"));
 
     // Verify job is disabled
@@ -213,10 +214,15 @@ async fn test_command_handler_delete_job() {
 async fn test_command_handler_delete_nonexistent_job() {
     let pool = setup_test_db().await;
 
-    let response =
-        CommandHandler::handle(TelegramCommand::Delete("nonexistent".into()), 1, 1, &pool, None)
-            .await
-            .unwrap();
+    let response = CommandHandler::handle(
+        TelegramCommand::Delete("nonexistent".into()),
+        1,
+        1,
+        &pool,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(response.contains("No job found"));
 }
 
@@ -236,9 +242,10 @@ async fn test_command_handler_delete_wrong_chat() {
     .unwrap();
 
     // Chat 2 tries to delete it
-    let response = CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool, None)
-        .await
-        .unwrap();
+    let response =
+        CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool, None)
+            .await
+            .unwrap();
     assert!(response.contains("belongs to a different chat"));
 }
 
@@ -246,9 +253,15 @@ async fn test_command_handler_delete_wrong_chat() {
 async fn test_command_handler_run_nonexistent_job() {
     let pool = setup_test_db().await;
 
-    let response = CommandHandler::handle(TelegramCommand::Run("nonexistent".into()), 1, 1, &pool, None)
-        .await
-        .unwrap();
+    let response = CommandHandler::handle(
+        TelegramCommand::Run("nonexistent".into()),
+        1,
+        1,
+        &pool,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(response.contains("No job found"));
 }
 
@@ -371,7 +384,10 @@ async fn test_message_handler_active_reset_context() {
         .unwrap();
 
     // 2. Call reset context
-    let _ = handler.handle_message(42, 100, "/reset-context").await.unwrap();
+    let _ = handler
+        .handle_message(42, 100, "/reset-context")
+        .await
+        .unwrap();
 
     // 3. Verify a new session has been created for the chat
     let session2 = storage::sessions::get_session_for_chat(&pool, 42)
@@ -379,10 +395,16 @@ async fn test_message_handler_active_reset_context() {
         .unwrap()
         .unwrap();
 
-    assert_ne!(session1.id, session2.id, "Expected a new session ID to be generated");
+    assert_ne!(
+        session1.id, session2.id,
+        "Expected a new session ID to be generated"
+    );
 
     // 4. Verify that subsequent message goes to the new session
-    let _ = handler.handle_message(42, 100, "new conversation starting").await.unwrap();
+    let _ = handler
+        .handle_message(42, 100, "new conversation starting")
+        .await
+        .unwrap();
 
     let messages1 = storage::messages::list_messages(&pool, &session1.id, None)
         .await
@@ -391,8 +413,18 @@ async fn test_message_handler_active_reset_context() {
         .await
         .unwrap();
 
-    assert!(messages2.iter().any(|m| m.content == "new conversation starting"), "Expected subsequent message to be persisted under the new session");
-    assert!(!messages1.iter().any(|m| m.content == "new conversation starting"), "Subsequent message should not be in the old session");
+    assert!(
+        messages2
+            .iter()
+            .any(|m| m.content == "new conversation starting"),
+        "Expected subsequent message to be persisted under the new session"
+    );
+    assert!(
+        !messages1
+            .iter()
+            .any(|m| m.content == "new conversation starting"),
+        "Subsequent message should not be in the old session"
+    );
 }
 
 #[tokio::test]
@@ -571,7 +603,9 @@ async fn test_get_me_returns_error_on_404() {
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/getMe")))
-        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#),
+        )
         .mount(&server)
         .await;
 
@@ -579,7 +613,10 @@ async fn test_get_me_returns_error_on_404() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("getMe returned HTTP 404"), "unexpected error: {err_str}");
+    assert!(
+        err_str.contains("getMe returned HTTP 404"),
+        "unexpected error: {err_str}"
+    );
 }
 
 #[tokio::test]
@@ -589,7 +626,10 @@ async fn test_get_me_returns_error_on_401() {
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/getMe")))
-        .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"ok":false,"description":"Unauthorized"}"#))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_string(r#"{"ok":false,"description":"Unauthorized"}"#),
+        )
         .mount(&server)
         .await;
 
@@ -597,7 +637,10 @@ async fn test_get_me_returns_error_on_401() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("getMe returned HTTP 401"), "unexpected error: {err_str}");
+    assert!(
+        err_str.contains("getMe returned HTTP 401"),
+        "unexpected error: {err_str}"
+    );
 }
 
 #[tokio::test]
@@ -605,7 +648,8 @@ async fn test_get_me_succeeds_on_200() {
     let server = MockServer::start().await;
     let bot = make_mock_bot(&server).await;
 
-    let response_body = r#"{"ok":true,"result":{"id":12345,"first_name":"TestBot","username":"@testbot"}}"#;
+    let response_body =
+        r#"{"ok":true,"result":{"id":12345,"first_name":"TestBot","username":"@testbot"}}"#;
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/getMe")))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
@@ -625,7 +669,10 @@ async fn test_delete_webhook_returns_error_on_500() {
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/deleteWebhook")))
-        .respond_with(ResponseTemplate::new(500).set_body_string(r#"{"ok":false,"description":"Internal Server Error"}"#))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_string(r#"{"ok":false,"description":"Internal Server Error"}"#),
+        )
         .mount(&server)
         .await;
 
@@ -633,7 +680,10 @@ async fn test_delete_webhook_returns_error_on_500() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("deleteWebhook returned HTTP 500"), "unexpected error: {err_str}");
+    assert!(
+        err_str.contains("deleteWebhook returned HTTP 500"),
+        "unexpected error: {err_str}"
+    );
 }
 
 #[tokio::test]
@@ -643,7 +693,9 @@ async fn test_delete_webhook_returns_error_on_404() {
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/deleteWebhook")))
-        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_string(r#"{"ok":false,"description":"Not Found"}"#),
+        )
         .mount(&server)
         .await;
 
@@ -651,7 +703,10 @@ async fn test_delete_webhook_returns_error_on_404() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("deleteWebhook returned HTTP 404"), "unexpected error: {err_str}");
+    assert!(
+        err_str.contains("deleteWebhook returned HTTP 404"),
+        "unexpected error: {err_str}"
+    );
 }
 
 #[tokio::test]
@@ -661,7 +716,10 @@ async fn test_get_updates_returns_error_on_503() {
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/getUpdates")))
-        .respond_with(ResponseTemplate::new(503).set_body_string(r#"{"ok":false,"description":"Service Unavailable"}"#))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .set_body_string(r#"{"ok":false,"description":"Service Unavailable"}"#),
+        )
         .mount(&server)
         .await;
 
@@ -669,7 +727,10 @@ async fn test_get_updates_returns_error_on_503() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("getUpdates returned HTTP 503"), "unexpected error: {err_str}");
+    assert!(
+        err_str.contains("getUpdates returned HTTP 503"),
+        "unexpected error: {err_str}"
+    );
 }
 
 // ── Tool context ──────────────────────────────────────────────────────

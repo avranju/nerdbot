@@ -27,19 +27,17 @@ impl StoredMessage {
     /// Supports both legacy lowercase strings ("user", "assistant", "tool", "system")
     /// and genai-style enum variants ("User", "Assistant", "Tool", "System").
     pub fn role(&self) -> Result<ChatRole, AgentError> {
-        let role_str = self.role.as_str().ok_or_else(|| {
-            AgentError::Storage("Role is not a string".to_string())
-        })?;
+        let role_str = self
+            .role
+            .as_str()
+            .ok_or_else(|| AgentError::Storage("Role is not a string".to_string()))?;
 
         match role_str.to_lowercase().as_str() {
             "system" => Ok(ChatRole::System),
             "user" => Ok(ChatRole::User),
             "assistant" => Ok(ChatRole::Assistant),
             "tool" => Ok(ChatRole::Tool),
-            _ => Err(AgentError::Storage(format!(
-                "Unknown role: {}",
-                role_str
-            ))),
+            _ => Err(AgentError::Storage(format!("Unknown role: {}", role_str))),
         }
     }
 

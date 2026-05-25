@@ -6,7 +6,13 @@
 
 // Suppress unused/dead code warnings for stub implementations shared with lib.rs.
 // The lib.rs crate-level allow does not apply to this binary crate root.
-#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
+#![allow(
+    dead_code,
+    unused,
+    unused_imports,
+    unused_variables,
+    unused_assignments
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -86,11 +92,17 @@ async fn main() {
     let bot_token = match std::env::var(&config.telegram.bot_token_env) {
         Ok(token) if !token.is_empty() => token,
         Ok(_) => {
-            error!(env_var = config.telegram.bot_token_env, "Telegram bot token is empty");
+            error!(
+                env_var = config.telegram.bot_token_env,
+                "Telegram bot token is empty"
+            );
             return;
         }
         Err(_) => {
-            error!(env_var = config.telegram.bot_token_env, "Telegram bot token environment variable not set");
+            error!(
+                env_var = config.telegram.bot_token_env,
+                "Telegram bot token environment variable not set"
+            );
             return;
         }
     };
@@ -132,14 +144,12 @@ async fn main() {
     registry.register(tools::files::ListDirectory);
     registry.register(tools::web::WebSearch);
     registry.register(tools::web::WebFetch);
-    registry.register(tools::shell::ShellExecute::new(
-        tools::shell::ShellConfig {
-            allowed_commands: config.shell.allowed_commands.clone(),
-            denied_commands: config.shell.denied_commands.clone(),
-            max_output_bytes: config.shell.max_output_bytes,
-            timeout_secs: config.shell.timeout_secs,
-        },
-    ));
+    registry.register(tools::shell::ShellExecute::new(tools::shell::ShellConfig {
+        allowed_commands: config.shell.allowed_commands.clone(),
+        denied_commands: config.shell.denied_commands.clone(),
+        max_output_bytes: config.shell.max_output_bytes,
+        timeout_secs: config.shell.timeout_secs,
+    }));
     let registry = Arc::new(registry);
 
     // Create the LLM client via genai

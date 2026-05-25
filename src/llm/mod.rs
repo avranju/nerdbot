@@ -52,19 +52,17 @@ impl LlmClient {
         // Cache optional overrides at construction time.
         let endpoint = config.llm.endpoint.clone();
         let api_key = if let Some(ref env_var) = config.llm.api_key_env {
-            Some(
-                std::env::var(env_var).map_err(|_| {
-                    AgentError::Config(format!("Missing LLM API key env var: {env_var}"))
-                })?,
-            )
+            Some(std::env::var(env_var).map_err(|_| {
+                AgentError::Config(format!("Missing LLM API key env var: {env_var}"))
+            })?)
         } else {
             None
         };
 
         // Only install a resolver if at least one override is configured.
         if endpoint.is_some() || api_key.is_some() {
-            builder = builder.with_service_target_resolver_fn(
-                move |mut target: genai::ServiceTarget| {
+            builder =
+                builder.with_service_target_resolver_fn(move |mut target: genai::ServiceTarget| {
                     if let Some(ref ep) = endpoint {
                         target.endpoint = Endpoint::from_owned(ep.clone());
                     }
@@ -72,8 +70,7 @@ impl LlmClient {
                         target.auth = AuthData::from_single(key.clone());
                     }
                     Ok(target)
-                },
-            );
+                });
         }
 
         Ok(Self {

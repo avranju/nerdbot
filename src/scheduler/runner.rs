@@ -54,10 +54,11 @@ pub async fn run_scheduled_job(
         .ok_or_else(|| AgentError::Scheduler(format!("Job {} not found in database", job_id)))?;
 
     // 2. Locate or create chat session
-    let session = match crate::storage::sessions::get_session_for_chat(&pool, job.owner_chat_id).await? {
-        Some(s) => s,
-        None => crate::storage::sessions::create_session(&pool, job.owner_chat_id).await?,
-    };
+    let session =
+        match crate::storage::sessions::get_session_for_chat(&pool, job.owner_chat_id).await? {
+            Some(s) => s,
+            None => crate::storage::sessions::create_session(&pool, job.owner_chat_id).await?,
+        };
 
     // 3. Assemble message context according to policy
     let policy = job.context_policy()?;
@@ -65,15 +66,20 @@ pub async fn run_scheduled_job(
         JobContextPolicy::Isolated => vec![],
         JobContextPolicy::IncludeCreationSnapshot => {
             if let Some(ref snapshot) = job.creation_context_snapshot {
-                serde_json::from_str::<Vec<ChatMessage>>(snapshot)
-                    .map_err(|e| AgentError::Scheduler(format!("Corrupted context snapshot for job {job_id}: {e}")))?
+                serde_json::from_str::<Vec<ChatMessage>>(snapshot).map_err(|e| {
+                    AgentError::Scheduler(format!(
+                        "Corrupted context snapshot for job {job_id}: {e}"
+                    ))
+                })?
             } else {
                 vec![]
             }
         }
         JobContextPolicy::IncludeChatSummary => {
             let mut msgs = vec![];
-            if let Some(summary) = crate::storage::summaries::get_latest_summary(&pool, &session.id).await? {
+            if let Some(summary) =
+                crate::storage::summaries::get_latest_summary(&pool, &session.id).await?
+            {
                 msgs.push(ChatMessage::system(MessageContent::from_text(format!(
                     "System Conversation Summary (covers older context):\n{}",
                     summary.summary_text
@@ -120,14 +126,26 @@ pub async fn run_scheduled_job(
             if let crate::agent::outcome::AgentOutcome::FinalText(text) = agent_result.outcome {
                 // Save assistant message to DB history
                 let assistant_msg = ChatMessage::assistant(MessageContent::from_text(&text));
-                let _ = crate::storage::messages::create_message(&pool, &session.id, &assistant_msg, None).await?;
+                let _ = crate::storage::messages::create_message(
+                    &pool,
+                    &session.id,
+                    &assistant_msg,
+                    None,
+                )
+                .await?;
 
                 // Check whether the agent already sent a notification via send_user_message
                 let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
 
                 if job.notify_on_completion && !agent_notified {
-                    let notification = format!("🔔 **Job \"{}\" executed successfully**\n\n{}", job.name, text);
-                    if let Err(e) = telegram_service.send_message(job.owner_chat_id, &notification).await {
+                    let notification = format!(
+                        "🔔 **Job \"{}\" executed successfully**\n\n{}",
+                        job.name, text
+                    );
+                    if let Err(e) = telegram_service
+                        .send_message(job.owner_chat_id, &notification)
+                        .await
+                    {
                         tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
                     }
                 }
@@ -135,8 +153,11 @@ pub async fn run_scheduled_job(
                 // Silent completion — check if agent already notified
                 let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
                 if !agent_notified {
-                    let notification = format!("🔔 **Job \"{}\" completed with no output**", job.name);
-                    let _ = telegram_service.send_message(job.owner_chat_id, &notification).await;
+                    let notification =
+                        format!("🔔 **Job \"{}\" completed with no output**", job.name);
+                    let _ = telegram_service
+                        .send_message(job.owner_chat_id, &notification)
+                        .await;
                 }
             }
             Ok(())
@@ -147,7 +168,10 @@ pub async fn run_scheduled_job(
                 "⚠️ **Job \"{}\" failed to execute**\n\nError: {}",
                 job.name, e
             );
-            if let Err(send_err) = telegram_service.send_message(job.owner_chat_id, &err_notification).await {
+            if let Err(send_err) = telegram_service
+                .send_message(job.owner_chat_id, &err_notification)
+                .await
+            {
                 tracing::error!(job_id = %job_id, error = %send_err, "Failed to send error notification");
             }
             Err(e)
@@ -159,10 +183,7 @@ pub async fn run_scheduled_job(
 ///
 /// Scans recent tool-result messages in the session for tool responses containing
 /// `"send_user_message"` with `"sent": true` in the JSON content.
-async fn agent_already_sent_notification(
-    pool: &sqlx::SqlitePool,
-    session_id: &str,
-) -> bool {
+async fn agent_already_sent_notification(pool: &sqlx::SqlitePool, session_id: &str) -> bool {
     let stored = match crate::storage::messages::list_messages(pool, session_id, Some(50)).await {
         Ok(msgs) => msgs,
         Err(e) => {
@@ -188,17 +209,13 @@ async fn agent_already_sent_notification(
                     if let ContentPart::ToolResponse(tr) = part
                         && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&tr.content)
                     {
-                                let is_send_user_message = parsed
-                                    .get("tool_name")
-                                    .and_then(|v| v.as_str())
-                                    == Some("send_user_message");
-                                let actually_sent = parsed
-                                    .get("sent")
-                                    .and_then(|v| v.as_bool())
-                                    == Some(true);
-                            if is_send_user_message && actually_sent {
-                                return true;
-                            }
+                        let is_send_user_message = parsed.get("tool_name").and_then(|v| v.as_str())
+                            == Some("send_user_message");
+                        let actually_sent =
+                            parsed.get("sent").and_then(|v| v.as_bool()) == Some(true);
+                        if is_send_user_message && actually_sent {
+                            return true;
+                        }
                     }
                 }
             }

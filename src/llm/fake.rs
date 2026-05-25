@@ -218,7 +218,10 @@ impl LlmExecutor for FakeProvider {
             content,
             reasoning_content: None,
             model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "fake-model"),
-            provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "fake-model"),
+            provider_model_iden: genai::ModelIden::new(
+                genai::adapter::AdapterKind::OpenAI,
+                "fake-model",
+            ),
             stop_reason: response.stop_reason,
             usage,
             captured_raw_body: None,
