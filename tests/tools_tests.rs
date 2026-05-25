@@ -117,7 +117,7 @@ fn test_registry_new_is_empty() {
 #[test]
 fn test_registry_register_and_len() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
     assert_eq!(registry.len(), 1);
     assert!(!registry.is_empty());
 }
@@ -125,8 +125,8 @@ fn test_registry_register_and_len() {
 #[test]
 fn test_registry_register_multiple() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
-    registry.register(nerdbot::tools::files::WriteFile);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
+    registry.register(nerdbot::tools::files::WriteFile::default_for_test());
     registry.register(nerdbot::tools::schedule::ScheduleJob);
     assert_eq!(registry.len(), 3);
 }
@@ -134,7 +134,7 @@ fn test_registry_register_multiple() {
 #[test]
 fn test_registry_specs() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
     registry.register(nerdbot::tools::web::WebSearch::new("test-key".into(), 5));
 
     let specs = registry.specs();
@@ -148,10 +148,10 @@ fn test_registry_specs() {
 #[test]
 fn test_registry_specs_are_unique() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
-    registry.register(nerdbot::tools::files::WriteFile);
-    registry.register(nerdbot::tools::files::AppendFile);
-    registry.register(nerdbot::tools::files::ListDirectory);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
+    registry.register(nerdbot::tools::files::WriteFile::default_for_test());
+    registry.register(nerdbot::tools::files::AppendFile::default_for_test());
+    registry.register(nerdbot::tools::files::ListDirectory::default_for_test());
 
     let specs = registry.specs();
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
@@ -189,36 +189,144 @@ async fn test_registry_execute_unknown_tool() {
 }
 
 #[tokio::test]
-async fn test_registry_execute_stub_tool_returns_not_implemented() {
+async fn test_registry_execute_file_operations() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
+    registry.register(nerdbot::tools::files::WriteFile::default_for_test());
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
+    registry.register(nerdbot::tools::files::AppendFile::default_for_test());
+    registry.register(nerdbot::tools::files::ListDirectory::default_for_test());
 
-    let call = ToolCall {
-        call_id: "1".into(),
-        fn_name: "read_file".into(),
-        fn_arguments: serde_json::json!({"path": "test.txt"}),
-        thought_signatures: None,
-    };
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace = tmp.path().to_path_buf();
+
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
             user_id: 1,
         },
-        workspace_root: PathBuf::from("/tmp"),
+        workspace_root: workspace.clone(),
         telegram_token: "test".into(),
         allowed_chat_ids: vec![],
         allowed_user_ids: vec![],
         pool: None,
         scheduler_notifier: None,
     };
-    let result = registry.execute(&call, ctx).await;
+
+    // Write a file
+    let write_call = ToolCall {
+        call_id: "1".into(),
+        fn_name: "write_file".into(),
+        fn_arguments: serde_json::json!({
+            "path": "hello.txt",
+            "content": "Hello, world!"
+        }),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&write_call, ctx.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["bytes_written"].as_u64().unwrap(), 13);
+
+    // Read the file back
+    let read_call = ToolCall {
+        call_id: "2".into(),
+        fn_name: "read_file".into(),
+        fn_arguments: serde_json::json!({"path": "hello.txt"}),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&read_call, ctx.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["content"].as_str().unwrap(), "Hello, world!");
+    assert_eq!(result.data["bytes"].as_u64().unwrap(), 13);
+
+    // Append to the file
+    let append_call = ToolCall {
+        call_id: "3".into(),
+        fn_name: "append_file".into(),
+        fn_arguments: serde_json::json!({
+            "path": "hello.txt",
+            "content": "\nAppended line"
+        }),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&append_call, ctx.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["bytes_appended"].as_u64().unwrap(), 14);
+
+    // Verify appended content
+    let read_call2 = ToolCall {
+        call_id: "4".into(),
+        fn_name: "read_file".into(),
+        fn_arguments: serde_json::json!({"path": "hello.txt"}),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&read_call2, ctx.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(
+        result.data["content"].as_str().unwrap(),
+        "Hello, world!\nAppended line"
+    );
+
+    // List directory
+    let list_call = ToolCall {
+        call_id: "5".into(),
+        fn_name: "list_directory".into(),
+        fn_arguments: serde_json::json!({}),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&list_call, ctx.clone()).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["count"].as_u64().unwrap(), 1);
+    assert_eq!(
+        result.data["entries"][0]["name"].as_str().unwrap(),
+        "hello.txt"
+    );
+    assert_eq!(result.data["entries"][0]["type"].as_str().unwrap(), "file");
+
+    // Write to a nested path (should auto-create directories)
+    let nested_call = ToolCall {
+        call_id: "6".into(),
+        fn_name: "write_file".into(),
+        fn_arguments: serde_json::json!({
+            "path": "subdir/nested/deep.txt",
+            "content": "deep content"
+        }),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&nested_call, ctx.clone()).await.unwrap();
+    assert!(result.success);
+
+    // List subdir
+    let list_subdir_call = ToolCall {
+        call_id: "7".into(),
+        fn_name: "list_directory".into(),
+        fn_arguments: serde_json::json!({"path": "subdir"}),
+        thought_signatures: None,
+    };
+    let result = registry
+        .execute(&list_subdir_call, ctx.clone())
+        .await
+        .unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["count"].as_u64().unwrap(), 1);
+    assert_eq!(
+        result.data["entries"][0]["name"].as_str().unwrap(),
+        "nested"
+    );
+    assert_eq!(
+        result.data["entries"][0]["type"].as_str().unwrap(),
+        "directory"
+    );
+
+    // Sandbox: path traversal should fail
+    let traversal_call = ToolCall {
+        call_id: "8".into(),
+        fn_name: "read_file".into(),
+        fn_arguments: serde_json::json!({"path": "../../etc/passwd"}),
+        thought_signatures: None,
+    };
+    let result = registry.execute(&traversal_call, ctx).await;
     assert!(result.is_err());
-    // The stub returns a Generic error with "not yet implemented"
-    if let Err(AgentError::Generic(msg)) = result {
-        assert!(msg.contains("not yet implemented"));
-    } else {
-        panic!("expected Generic error, got {:?}", result);
-    }
+    assert!(matches!(result.unwrap_err(), AgentError::SandboxViolation));
 }
 
 #[test]
@@ -261,25 +369,25 @@ fn test_registry_default() {
 
 #[test]
 fn test_read_file_name() {
-    let tool = nerdbot::tools::files::ReadFile;
+    let tool = nerdbot::tools::files::ReadFile::default_for_test();
     assert_eq!(tool.name(), "read_file");
 }
 
 #[test]
 fn test_write_file_name() {
-    let tool = nerdbot::tools::files::WriteFile;
+    let tool = nerdbot::tools::files::WriteFile::default_for_test();
     assert_eq!(tool.name(), "write_file");
 }
 
 #[test]
 fn test_append_file_name() {
-    let tool = nerdbot::tools::files::AppendFile;
+    let tool = nerdbot::tools::files::AppendFile::default_for_test();
     assert_eq!(tool.name(), "append_file");
 }
 
 #[test]
 fn test_list_directory_name() {
-    let tool = nerdbot::tools::files::ListDirectory;
+    let tool = nerdbot::tools::files::ListDirectory::default_for_test();
     assert_eq!(tool.name(), "list_directory");
 }
 
@@ -329,11 +437,15 @@ fn test_web_fetch_name() {
 fn test_stub_tool_descriptions_non_empty() {
     let web_search = nerdbot::tools::web::WebSearch::new("test-key".into(), 5);
     let web_fetch = nerdbot::tools::web::WebFetch::new("test-key".into(), 8000);
+    let read_file = nerdbot::tools::files::ReadFile::default_for_test();
+    let write_file = nerdbot::tools::files::WriteFile::default_for_test();
+    let append_file = nerdbot::tools::files::AppendFile::default_for_test();
+    let list_directory = nerdbot::tools::files::ListDirectory::default_for_test();
     let tools: Vec<&dyn Tool> = vec![
-        &nerdbot::tools::files::ReadFile,
-        &nerdbot::tools::files::WriteFile,
-        &nerdbot::tools::files::AppendFile,
-        &nerdbot::tools::files::ListDirectory,
+        &read_file,
+        &write_file,
+        &append_file,
+        &list_directory,
         &nerdbot::tools::schedule::ScheduleJob,
         &nerdbot::tools::schedule::ListJobs,
         &nerdbot::tools::schedule::DeleteJob,
@@ -361,9 +473,11 @@ fn test_stub_tool_descriptions_non_empty() {
 #[test]
 fn test_stub_tool_input_schema_is_object() {
     let web_search = nerdbot::tools::web::WebSearch::new("test-key".into(), 5);
+    let read_file = nerdbot::tools::files::ReadFile::default_for_test();
+    let write_file = nerdbot::tools::files::WriteFile::default_for_test();
     let tools: Vec<&dyn Tool> = vec![
-        &nerdbot::tools::files::ReadFile,
-        &nerdbot::tools::files::WriteFile,
+        &read_file,
+        &write_file,
         &nerdbot::tools::schedule::ScheduleJob,
         &nerdbot::tools::telegram::SendTelegramMessage,
         &web_search,
@@ -380,8 +494,8 @@ fn test_stub_tool_input_schema_is_object() {
 }
 
 #[tokio::test]
-async fn test_stub_tool_execute_fails_gracefully() {
-    let tool = nerdbot::tools::files::ReadFile;
+async fn test_read_file_invalid_args_fails() {
+    let tool = nerdbot::tools::files::ReadFile::default_for_test();
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
             chat_id: 1,
@@ -394,14 +508,188 @@ async fn test_stub_tool_execute_fails_gracefully() {
         pool: None,
         scheduler_notifier: None,
     };
+    // Missing required 'path' field should fail gracefully
     let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
     assert!(result.is_err());
+}
+
+// ── File I/O Error Path Tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_read_file_not_found() {
+    let tool = nerdbot::tools::files::ReadFile::default_for_test();
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    let result = Tool::execute(&tool, serde_json::json!({"path": "nonexistent.txt"}), ctx).await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::FileIo(_)));
+}
+
+#[tokio::test]
+async fn test_write_file_missing_content() {
+    let tool = nerdbot::tools::files::WriteFile::default_for_test();
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    let result = Tool::execute(&tool, serde_json::json!({"path": "test.txt"}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::InvalidToolArgs(msg)) = result {
+        assert!(msg.contains("content"));
+    } else {
+        panic!("expected InvalidToolArgs, got {:?}", result);
+    }
+}
+
+#[tokio::test]
+async fn test_append_file_missing_content() {
+    let tool = nerdbot::tools::files::AppendFile::default_for_test();
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    let result = Tool::execute(&tool, serde_json::json!({"path": "test.txt"}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::InvalidToolArgs(msg)) = result {
+        assert!(msg.contains("content"));
+    } else {
+        panic!("expected InvalidToolArgs, got {:?}", result);
+    }
+}
+
+#[tokio::test]
+async fn test_write_file_size_exceeded() {
+    let config = nerdbot::tools::files::FileConfig {
+        max_read_bytes: 262_144,
+        max_write_bytes: 10,
+    };
+    let tool = nerdbot::tools::files::WriteFile::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"path": "test.txt", "content": "this is way too long"}),
+        ctx,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::FileIo(_)));
+}
+
+#[tokio::test]
+async fn test_append_file_size_exceeded() {
+    let config = nerdbot::tools::files::FileConfig {
+        max_read_bytes: 262_144,
+        max_write_bytes: 10,
+    };
+    let tool = nerdbot::tools::files::AppendFile::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"path": "test.txt", "content": "this is way too long"}),
+        ctx,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::FileIo(_)));
+}
+
+#[tokio::test]
+async fn test_append_file_to_existing_exceeds_limit() {
+    let config = nerdbot::tools::files::FileConfig {
+        max_read_bytes: 262_144,
+        max_write_bytes: 50,
+    };
+    let tool = nerdbot::tools::files::AppendFile::new(config.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: tmp.path().to_path_buf(),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+    // First create a 40-byte file
+    let write_tool = nerdbot::tools::files::WriteFile::new(config.clone());
+    let write_result = Tool::execute(
+        &write_tool,
+        serde_json::json!({
+            "path": "big.txt",
+            "content": "0123456789012345678901234567890123456789"
+        }),
+        ctx.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(write_result.success);
+
+    // Try to append 20 bytes (40 + 20 = 60 > 50 limit)
+    let result = Tool::execute(
+        &tool,
+        serde_json::json!({"path": "big.txt", "content": "01234567890123456789"}),
+        ctx,
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::FileIo(_)));
 }
 
 #[test]
 fn test_registry_mixed_tools() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
     registry.register(nerdbot::tools::schedule::DeleteJob);
     registry.register(nerdbot::tools::web::WebFetch::new("test-key".into(), 8000));
 
@@ -415,15 +703,15 @@ fn test_registry_mixed_tools() {
 }
 
 #[tokio::test]
-async fn test_registry_execute_with_invalid_args() {
+async fn test_registry_execute_with_missing_args() {
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::files::ReadFile);
+    registry.register(nerdbot::tools::files::ReadFile::default_for_test());
 
-    // Pass completely invalid arguments to a stub tool
+    // Missing required 'path' field should produce InvalidToolArgs
     let call = ToolCall {
         call_id: "1".into(),
         fn_name: "read_file".into(),
-        fn_arguments: serde_json::json!({"this_is_not_a_real_field": true, "nested": {"deep": {"value": 42}}}),
+        fn_arguments: serde_json::json!({"other_field": "value"}),
         thought_signatures: None,
     };
     let ctx = ToolContext {
@@ -439,8 +727,12 @@ async fn test_registry_execute_with_invalid_args() {
         scheduler_notifier: None,
     };
     let result = registry.execute(&call, ctx).await;
-    // Should fail since it's a stub, but should not panic
     assert!(result.is_err());
+    if let Err(AgentError::InvalidToolArgs(msg)) = result {
+        assert!(msg.contains("path"));
+    } else {
+        panic!("expected InvalidToolArgs error, got {:?}", result);
+    }
 }
 
 // ── send_user_message Tool Tests ───────────────────────────────────────

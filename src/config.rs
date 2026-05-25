@@ -26,6 +26,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub shell: ShellConfig,
     #[serde(default)]
+    pub files: FilesConfig,
+    #[serde(default)]
     pub exa: ExaConfig,
 }
 
@@ -198,6 +200,26 @@ pub struct SchedulerConfig {
     pub run_overdue_one_shots_on_startup: bool,
 }
 
+/// File I/O tool configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct FilesConfig {
+    /// Maximum size in bytes for file read operations.
+    #[serde(default = "default_files_max_read_bytes")]
+    pub max_read_bytes: usize,
+    /// Maximum size in bytes for file write operations.
+    #[serde(default = "default_files_max_write_bytes")]
+    pub max_write_bytes: usize,
+}
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            max_read_bytes: default_files_max_read_bytes(),
+            max_write_bytes: default_files_max_write_bytes(),
+        }
+    }
+}
+
 /// Shell execution configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ShellConfig {
@@ -293,6 +315,12 @@ fn default_hard_context_threshold() -> f32 {
 }
 fn default_recent_turns_to_preserve() -> usize {
     30
+}
+fn default_files_max_read_bytes() -> usize {
+    262_144
+}
+fn default_files_max_write_bytes() -> usize {
+    262_144
 }
 fn default_shell_allowed_commands() -> Vec<String> {
     Vec::new()

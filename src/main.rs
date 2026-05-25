@@ -138,10 +138,11 @@ async fn main() {
     registry.register(tools::schedule::DeleteJob);
     registry.register(tools::schedule::RunJobNow);
     registry.register(tools::telegram::SendTelegramMessage);
-    registry.register(tools::files::ReadFile);
-    registry.register(tools::files::WriteFile);
-    registry.register(tools::files::AppendFile);
-    registry.register(tools::files::ListDirectory);
+    let file_config = tools::files::FileConfig::from(config.files.clone());
+    registry.register(tools::files::ReadFile::new(file_config.clone()));
+    registry.register(tools::files::WriteFile::new(file_config.clone()));
+    registry.register(tools::files::AppendFile::new(file_config.clone()));
+    registry.register(tools::files::ListDirectory::new(file_config));
 
     // Web tools — Exa-powered
     let exa_api_key = std::env::var(&config.exa.api_key_env).unwrap_or_default();
