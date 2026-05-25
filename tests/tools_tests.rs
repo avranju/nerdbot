@@ -135,7 +135,7 @@ fn test_registry_register_multiple() {
 fn test_registry_specs() {
     let mut registry = ToolRegistry::new();
     registry.register(nerdbot::tools::files::ReadFile);
-    registry.register(nerdbot::tools::web::WebSearch);
+    registry.register(nerdbot::tools::web::WebSearch::new("test-key".into(), 5));
 
     let specs = registry.specs();
     assert_eq!(specs.len(), 2);
@@ -315,18 +315,20 @@ fn test_send_user_message_name() {
 
 #[test]
 fn test_web_search_name() {
-    let tool = nerdbot::tools::web::WebSearch;
+    let tool = nerdbot::tools::web::WebSearch::new("test-key".into(), 5);
     assert_eq!(tool.name(), "web_search");
 }
 
 #[test]
 fn test_web_fetch_name() {
-    let tool = nerdbot::tools::web::WebFetch;
+    let tool = nerdbot::tools::web::WebFetch::new("test-key".into(), 8000);
     assert_eq!(tool.name(), "web_fetch");
 }
 
 #[test]
 fn test_stub_tool_descriptions_non_empty() {
+    let web_search = nerdbot::tools::web::WebSearch::new("test-key".into(), 5);
+    let web_fetch = nerdbot::tools::web::WebFetch::new("test-key".into(), 8000);
     let tools: Vec<&dyn Tool> = vec![
         &nerdbot::tools::files::ReadFile,
         &nerdbot::tools::files::WriteFile,
@@ -337,8 +339,8 @@ fn test_stub_tool_descriptions_non_empty() {
         &nerdbot::tools::schedule::DeleteJob,
         &nerdbot::tools::schedule::RunJobNow,
         &nerdbot::tools::telegram::SendTelegramMessage,
-        &nerdbot::tools::web::WebSearch,
-        &nerdbot::tools::web::WebFetch,
+        &web_search,
+        &web_fetch,
     ];
 
     for tool in tools {
@@ -358,12 +360,13 @@ fn test_stub_tool_descriptions_non_empty() {
 
 #[test]
 fn test_stub_tool_input_schema_is_object() {
+    let web_search = nerdbot::tools::web::WebSearch::new("test-key".into(), 5);
     let tools: Vec<&dyn Tool> = vec![
         &nerdbot::tools::files::ReadFile,
         &nerdbot::tools::files::WriteFile,
         &nerdbot::tools::schedule::ScheduleJob,
         &nerdbot::tools::telegram::SendTelegramMessage,
-        &nerdbot::tools::web::WebSearch,
+        &web_search,
     ];
 
     for tool in tools {
@@ -400,7 +403,7 @@ fn test_registry_mixed_tools() {
     let mut registry = ToolRegistry::new();
     registry.register(nerdbot::tools::files::ReadFile);
     registry.register(nerdbot::tools::schedule::DeleteJob);
-    registry.register(nerdbot::tools::web::WebFetch);
+    registry.register(nerdbot::tools::web::WebFetch::new("test-key".into(), 8000));
 
     assert_eq!(registry.len(), 3);
 

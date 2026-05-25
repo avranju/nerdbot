@@ -104,6 +104,14 @@ fn test_default_config_llm_max_output_tokens() {
 }
 
 #[test]
+fn test_default_config_exa() {
+    let config = AppConfig::default();
+    assert_eq!(config.exa.api_key_env, "EXA_API_KEY");
+    assert_eq!(config.exa.max_results, 5);
+    assert_eq!(config.exa.max_text_chars, 8000);
+}
+
+#[test]
 fn test_default_config_compaction_soft_threshold() {
     let config = AppConfig::default();
     assert_eq!(config.context.soft_compaction_threshold, 0.60);

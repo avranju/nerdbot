@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub shell: ShellConfig,
+    #[serde(default)]
+    pub exa: ExaConfig,
 }
 
 /// Agent-specific configuration.
@@ -213,6 +215,30 @@ pub struct ShellConfig {
     pub timeout_secs: u64,
 }
 
+/// Exa web search configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ExaConfig {
+    /// Environment variable name holding the Exa API key.
+    #[serde(default = "default_exa_api_key_env")]
+    pub api_key_env: String,
+    /// Maximum number of search results to return.
+    #[serde(default = "default_exa_num_results")]
+    pub max_results: usize,
+    /// Maximum characters per page text when fetching content.
+    #[serde(default = "default_exa_max_text_chars")]
+    pub max_text_chars: usize,
+}
+
+impl Default for ExaConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_exa_api_key_env(),
+            max_results: default_exa_num_results(),
+            max_text_chars: default_exa_max_text_chars(),
+        }
+    }
+}
+
 impl Default for ShellConfig {
     fn default() -> Self {
         Self {
@@ -287,6 +313,15 @@ fn default_shell_max_output_bytes() -> usize {
 }
 fn default_shell_timeout_secs() -> u64 {
     30
+}
+fn default_exa_api_key_env() -> String {
+    "EXA_API_KEY".to_string()
+}
+fn default_exa_num_results() -> usize {
+    5
+}
+fn default_exa_max_text_chars() -> usize {
+    8000
 }
 impl AppConfig {
     /// Load configuration from a TOML file.

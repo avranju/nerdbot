@@ -142,8 +142,24 @@ async fn main() {
     registry.register(tools::files::WriteFile);
     registry.register(tools::files::AppendFile);
     registry.register(tools::files::ListDirectory);
-    registry.register(tools::web::WebSearch);
-    registry.register(tools::web::WebFetch);
+
+    // Web tools — Exa-powered
+    let exa_api_key = std::env::var(&config.exa.api_key_env).unwrap_or_default();
+    if exa_api_key.is_empty() {
+        warn!(
+            env_var = config.exa.api_key_env,
+            "Exa API key not set — web_search and web_fetch will return errors"
+        );
+    }
+    registry.register(tools::web::WebSearch::new(
+        exa_api_key.clone(),
+        config.exa.max_results,
+    ));
+    registry.register(tools::web::WebFetch::new(
+        exa_api_key.clone(),
+        config.exa.max_text_chars,
+    ));
+
     registry.register(tools::shell::ShellExecute::new(tools::shell::ShellConfig {
         allowed_commands: config.shell.allowed_commands.clone(),
         denied_commands: config.shell.denied_commands.clone(),

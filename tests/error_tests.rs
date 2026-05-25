@@ -229,6 +229,12 @@ fn test_web_fetch_error_display_too_many_redirects() {
 }
 
 #[test]
+fn test_web_fetch_error_display_rate_limited() {
+    let err = WebFetchError::RateLimited;
+    assert_eq!(err.to_string(), "Rate limited");
+}
+
+#[test]
 fn test_web_fetch_error_display_timeout() {
     let err = WebFetchError::Timeout;
     assert_eq!(err.to_string(), "Timeout");

@@ -6,7 +6,7 @@ pub mod registry;
 pub mod shell;
 pub mod traits;
 
-// Built-in tool modules (skeleton, implementations in later phases)
+// Built-in tool modules
 pub mod files;
 pub mod schedule;
 pub mod telegram;

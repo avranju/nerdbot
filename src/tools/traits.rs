@@ -26,6 +26,24 @@ pub struct ToolContext {
     pub scheduler_notifier: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
+impl ToolContext {
+    /// Create a minimal default context for testing.
+    #[cfg(test)]
+    pub fn default_for_test() -> Self {
+        Self {
+            run_mode: crate::agent::run_mode::AgentRunMode::Internal {
+                reason: "test".into(),
+            },
+            workspace_root: std::path::PathBuf::from("/tmp"),
+            telegram_token: String::new(),
+            allowed_chat_ids: vec![],
+            allowed_user_ids: vec![],
+            pool: None,
+            scheduler_notifier: None,
+        }
+    }
+}
+
 /// Output from a tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutput {

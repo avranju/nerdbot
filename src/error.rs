@@ -107,6 +107,9 @@ pub enum WebFetchError {
 
     #[error("Timeout")]
     Timeout,
+
+    #[error("Rate limited")]
+    RateLimited,
 }
 
 /// Errors specific to token estimation.
