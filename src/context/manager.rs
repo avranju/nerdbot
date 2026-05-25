@@ -2,9 +2,10 @@
 //!
 //! Implementations come in Phase 9.
 
+use genai::chat::{ChatMessage, ChatRequest, MessageContent, Tool};
+
 use crate::context::budget::ContextBudget;
 use crate::error::AgentError;
-use crate::llm::types::ModelRequest;
 
 /// Manages context assembly for model requests.
 ///
@@ -24,15 +25,14 @@ impl ContextManager {
     pub async fn assemble_request(
         &self,
         personality: &str,
-        _messages: &[crate::llm::types::Message],
-        tools: Vec<crate::llm::types::ToolSpec>,
+        _messages: &[ChatMessage],
+        tools: Vec<Tool>,
         _model: &str,
-    ) -> Result<ModelRequest, AgentError> {
-        // Phase 1: return a basic request
-        let request = ModelRequest::default()
-            .with_messages(vec![crate::llm::types::Message::system(personality)])
-            .with_tools(tools);
-
+    ) -> Result<ChatRequest, AgentError> {
+        let mut request = ChatRequest::new(vec![ChatMessage::system(MessageContent::from_text(personality))]);
+        if !tools.is_empty() {
+            request = request.with_tools(tools);
+        }
         Ok(request)
     }
 }

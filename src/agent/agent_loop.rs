@@ -5,13 +5,13 @@
 //! - Max tool iterations are reached
 //! - An unrecoverable error occurs
 
+use genai::chat::{ChatMessage, ChatRequest, ChatRole, ContentPart, MessageContent, ToolResponse};
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::agent::outcome::{AgentOutcome, AgentResult, RunMetadata};
+use crate::agent::outcome::{AgentOutcome, AgentResult, RunMetadata, RunTokenUsage};
 use crate::agent::run_mode::AgentRunMode;
 use crate::error::AgentError;
-use crate::llm::provider::LlmProvider;
-use crate::llm::types::ModelRequest;
+use crate::llm::LlmExecutor;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::traits::ToolContext;
 
@@ -20,39 +20,46 @@ use crate::tools::traits::ToolContext;
 pub struct AgentLoopConfig {
     /// Maximum number of tool-loop iterations.
     pub max_tool_iterations: u32,
+    /// LLM model name to use for requests.
+    pub llm_model: String,
+    /// LLM temperature to use for requests.
+    pub llm_temperature: f32,
+    /// LLM max output tokens to use for requests.
+    pub llm_max_output_tokens: u32,
 }
 
 impl Default for AgentLoopConfig {
     fn default() -> Self {
         Self {
             max_tool_iterations: 10,
+            llm_model: String::new(),
+            llm_temperature: 0.0,
+            llm_max_output_tokens: 0,
         }
     }
 }
 
 /// Run the agent loop for a single turn.
 ///
-/// 1. Build the initial model request from context.
+/// 1. Build the initial request from context.
 /// 2. Loop: send request to provider, execute tool calls, repeat.
 /// 3. Return final text or an error.
-///
-/// Tool results are appended to the message history after each iteration,
-/// allowing the provider to see tool outputs and respond accordingly.
-#[instrument(skip(ctx, provider, registry, config), fields(run_mode = ?ctx.run_mode))]
+#[instrument(skip(ctx, executor, registry, config), fields(run_mode = ?ctx.run_mode))]
 pub async fn run_agent(
     ctx: &AgentContext,
-    provider: &dyn LlmProvider,
+    executor: &dyn LlmExecutor,
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
     // Build the initial message set: personality as system message + user messages.
     let mut working_messages = ctx.messages.clone();
     if !ctx.personality.is_empty()
-        && !working_messages
-            .iter()
-            .any(|m| matches!(m.role, crate::llm::types::Role::System))
+        && !working_messages.iter().any(|m| matches!(m.role, ChatRole::System))
     {
-        working_messages.insert(0, crate::llm::types::Message::system(&ctx.personality));
+        working_messages.insert(
+            0,
+            ChatMessage::system(MessageContent::from_text(&ctx.personality)),
+        );
     }
 
     let mut total_input_tokens: usize = 0;
@@ -68,36 +75,44 @@ pub async fn run_agent(
     for step in 0..config.max_tool_iterations {
         let iterations = step + 1;
 
-        // Build the request for this iteration from working messages
-        let request = ModelRequest::default()
-            .with_messages(working_messages.clone())
-            .with_tools(registry.specs());
+        // Build the ChatRequest for this iteration
+        let mut request = ChatRequest::new(working_messages.clone());
+
+        if !registry.is_empty() {
+            request = request.with_tools(registry.specs());
+        }
+
+        // Build chat options
+        let chat_options = genai::chat::ChatOptions::default()
+            .with_temperature(config.llm_temperature as f64)
+            .with_max_tokens(config.llm_max_output_tokens);
 
         // Call the LLM
-        let response = provider.complete(request).await?;
+        let response = executor
+            .complete(&config.llm_model, request, chat_options)
+            .await?;
 
-        // Track token usage
-        if let Some(meta) = &response.provider_metadata
-            && let Some(token_usage) = meta.get("usage")
-        {
-            if let Some(input_tokens) = token_usage.get("input_tokens").and_then(|t| t.as_u64()) {
-                total_input_tokens += input_tokens as usize;
-            }
-            if let Some(output_tokens) = token_usage.get("output_tokens").and_then(|t| t.as_u64()) {
-                total_output_tokens += output_tokens as usize;
-            }
+        // Track token usage from response
+        if let Some(input) = response.usage.prompt_tokens {
+            total_input_tokens += input.max(0) as usize;
         }
+        if let Some(output) = response.usage.completion_tokens {
+            total_output_tokens += output.max(0) as usize;
+        }
+
+        let tool_calls: Vec<genai::chat::ToolCall> = response.tool_calls().into_iter().cloned().collect();
+        let final_text = response.content.joined_texts();
 
         debug!(
             step = step + 1,
-            has_tool_calls = response.has_tool_calls(),
-            assistant_text_present = response.assistant_text.is_some(),
+            has_tool_calls = !tool_calls.is_empty(),
+            assistant_text_present = final_text.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
             "LLM response"
         );
 
         // Check if the model returned final text (no tool calls)
-        if !response.has_tool_calls() {
-            match &response.assistant_text {
+        if tool_calls.is_empty() {
+            match &final_text {
                 Some(text) if !text.is_empty() => {
                     info!(
                         iterations = iterations,
@@ -109,10 +124,10 @@ pub async fn run_agent(
                         outcome: AgentOutcome::FinalText(text.clone()),
                         metadata: RunMetadata {
                             iterations,
-                            token_estimate: Some(crate::llm::types::TokenEstimate::new(
-                                total_input_tokens,
-                                total_output_tokens,
-                            )),
+                            token_usage: RunTokenUsage {
+                                input_tokens: total_input_tokens,
+                                output_tokens: total_output_tokens,
+                            },
                         },
                     });
                 }
@@ -127,10 +142,10 @@ pub async fn run_agent(
                         outcome: AgentOutcome::Silent,
                         metadata: RunMetadata {
                             iterations,
-                            token_estimate: Some(crate::llm::types::TokenEstimate::new(
-                                total_input_tokens,
-                                total_output_tokens,
-                            )),
+                            token_usage: RunTokenUsage {
+                                input_tokens: total_input_tokens,
+                                output_tokens: total_output_tokens,
+                            },
                         },
                     });
                 }
@@ -164,62 +179,60 @@ pub async fn run_agent(
             scheduler_notifier: ctx.scheduler_notifier.clone(),
         };
 
-        let mut tool_results = Vec::new();
+        let mut tool_responses = Vec::new();
 
-        for tool_call in &response.tool_calls {
+        for tool_call in &tool_calls {
             match registry.execute(tool_call, tool_ctx.clone()).await {
                 Ok(output) => {
                     debug!(
-                        tool = tool_call.name,
-                        tool_id = tool_call.id,
+                        tool = tool_call.fn_name,
+                        tool_id = tool_call.call_id,
                         success = output.success,
                         summary = output.summary,
                         "tool call completed"
                     );
-                    // Create a ToolResult for the message history
-                    let status = if output.success {
-                        crate::llm::types::ToolExecutionStatus::Success
-                    } else {
-                        crate::llm::types::ToolExecutionStatus::Error {
-                            error: output.summary.clone(),
-                        }
-                    };
-                    tool_results.push(crate::llm::types::ToolResult {
-                        tool_call_id: tool_call.id.clone(),
-                        status,
-                        content: output.data,
-                    });
+                    // Serialize the tool output as a JSON string for the ToolResponse
+                    let content = serde_json::to_string(&serde_json::json!({
+                        "tool_name": tool_call.fn_name,
+                        "success": output.success,
+                        "summary": output.summary,
+                        "data": output.data,
+                        "sent": output.data.get("sent").and_then(|v| v.as_bool()),
+                    }))
+                    .unwrap_or_else(|_| "{\"error\":\"failed to serialize output\"}".to_string());
+
+                    tool_responses.push(ToolResponse::from_tool_call(tool_call, content));
                 }
                 Err(e) => {
                     warn!(
-                        tool = tool_call.name,
-                        tool_id = tool_call.id,
+                        tool = tool_call.fn_name,
+                        tool_id = tool_call.call_id,
                         error = %e,
                         "tool call failed"
                     );
-                    // Record the error as a tool result so the provider sees it
-                    tool_results.push(crate::llm::types::ToolResult {
-                        tool_call_id: tool_call.id.clone(),
-                        status: crate::llm::types::ToolExecutionStatus::Error {
-                            error: e.to_string(),
-                        },
-                        content: serde_json::json!({ "error": e.to_string() }),
-                    });
+                    let content = serde_json::to_string(&serde_json::json!({
+                        "tool_name": tool_call.fn_name,
+                        "success": false,
+                        "summary": e.to_string(),
+                        "error": e.to_string(),
+                    }))
+                    .unwrap_or_else(|_| format!("{{\"error\":\"{e}\"}}"));
+
+                    tool_responses.push(ToolResponse::from_tool_call(tool_call, content));
                 }
             }
         }
 
-        // Append tool call messages and results to working messages
-        // so the provider can see them on the next iteration.
-        working_messages.push(crate::llm::types::Message::assistant_tool_calls(
-            response.tool_calls.clone(),
-        ));
+        // Append tool call messages and results to working messages.
+        // genai provides ChatMessage::from(Vec<ToolCall>) for assistant tool-use messages.
+        let tool_calls_count = tool_calls.len();
+        working_messages.push(ChatMessage::from(tool_calls));
 
-        let results_count = tool_results.len();
-        if !tool_results.is_empty() {
-            let tool_result_msg =
-                crate::llm::types::Message::with_tool_results(tool_results);
-            working_messages.push(tool_result_msg.clone());
+        let results_count = tool_responses.len();
+        if !tool_responses.is_empty() {
+            // Convert tool responses into a Tool-role message
+            let tool_message = ChatMessage::from(tool_responses.clone());
+            working_messages.push(tool_message.clone());
 
             // Persist tool results to the database so callers (e.g. scheduler)
             // can inspect them for notification deduplication.
@@ -228,7 +241,7 @@ pub async fn run_agent(
                 && let Err(e) = crate::storage::messages::create_message(
                     pool,
                     &ctx.session_id,
-                    &tool_result_msg,
+                    &tool_message,
                     None,
                 )
                 .await
@@ -243,7 +256,7 @@ pub async fn run_agent(
 
         debug!(
             step = step + 1,
-            tool_calls_count = response.tool_calls.len(),
+            tool_calls_count,
             results_count,
             message_count = working_messages.len(),
             "tool calls executed, continuing loop"
@@ -270,7 +283,7 @@ pub struct AgentContext {
     /// Personality/system prompt content.
     pub personality: String,
     /// Current conversation messages (for context assembly).
-    pub messages: Vec<crate::llm::types::Message>,
+    pub messages: Vec<ChatMessage>,
     /// Workspace root path.
     pub workspace_root: std::path::PathBuf,
     /// Telegram bot token.

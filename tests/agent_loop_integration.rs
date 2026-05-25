@@ -23,8 +23,8 @@ use nerdbot::agent::outcome::{AgentOutcome, AgentResult};
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::error::AgentError;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
-use nerdbot::llm::provider::LlmProvider;
-use nerdbot::llm::types::{ToolCall, ToolSpec};
+use nerdbot::llm::LlmExecutor;
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatRole, MessageContent, StopReason, Tool as GenAiTool, ToolCall};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
@@ -137,6 +137,9 @@ async fn test_max_tool_iterations_exceeded() {
     let registry = toy_registry();
     let config = AgentLoopConfig {
         max_tool_iterations: 5,
+        llm_model: String::new(),
+        llm_temperature: 0.0,
+        llm_max_output_tokens: 0,
     };
 
     let result = run_agent(&ctx, &provider, &registry, &config).await;
@@ -429,35 +432,35 @@ async fn test_fake_provider_returns_sequence() {
 
     // First call: tool call
     let resp1 = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
-    assert!(resp1.has_tool_calls());
+    assert!(!resp1.tool_calls().is_empty());
     assert_eq!(provider.call_count(), 1);
 
     // Second call: tool call
     let resp2 = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
-    assert!(resp2.has_tool_calls());
+    assert!(!resp2.tool_calls().is_empty());
     assert_eq!(provider.call_count(), 2);
 
     // Third call: final text
     let resp3 = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
-    assert!(!resp3.has_tool_calls());
-    assert_eq!(resp3.assistant_text.as_deref(), Some("All done."));
+    assert!(resp3.tool_calls().is_empty());
+    assert_eq!(resp3.first_text(), Some("All done."));
     assert_eq!(provider.call_count(), 3);
 
     // Fourth call: returns last response again (sequence exhausted)
     let resp4 = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
-    assert!(!resp4.has_tool_calls());
+    assert!(resp4.tool_calls().is_empty());
     assert_eq!(provider.call_count(), 4);
 }
 
@@ -466,7 +469,7 @@ async fn test_fake_provider_error_response() {
     let provider = FakeProvider::new(vec![FakeResponse::error("something went wrong")]);
 
     let result = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::LlmProvider(_)));
@@ -476,17 +479,16 @@ async fn test_fake_provider_error_response() {
 async fn test_fake_provider_inspects_last_request() {
     let provider = FakeProvider::new(vec![FakeResponse::final_text("test")]);
 
-    let mut request = nerdbot::llm::types::ModelRequest::default().with_tools(vec![ToolSpec::new(
-        "test_tool",
-        "a test tool",
-        serde_json::json!({}),
-    )]);
+    let request = ChatRequest::default().with_tools(vec![GenAiTool::new("test_tool")
+        .with_description("a test tool")
+        .with_schema(serde_json::json!({}))]);
 
-    let _ = provider.complete(request.clone()).await.unwrap();
+    let _ = provider.complete("fake-model", request.clone(), ChatOptions::default()).await.unwrap();
 
     let inspected = provider.last_request().unwrap();
-    assert_eq!(inspected.tools.len(), 1);
-    assert_eq!(inspected.tools[0].name, "test_tool");
+    let tools = inspected.tools.as_ref().unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name.as_str(), "test_tool");
 }
 
 #[tokio::test]
@@ -497,7 +499,7 @@ async fn test_fake_provider_reset() {
     ]);
 
     let _ = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
     assert_eq!(provider.call_count(), 1);
@@ -506,7 +508,7 @@ async fn test_fake_provider_reset() {
     assert_eq!(provider.call_count(), 0);
 
     let _ = provider
-        .complete(nerdbot::llm::types::ModelRequest::default())
+        .complete("fake-model", ChatRequest::default(), ChatOptions::default())
         .await
         .unwrap();
     assert_eq!(provider.call_count(), 1);
@@ -589,7 +591,7 @@ async fn test_agent_loop_tool_returns_failure_output() {
 async fn test_agent_context_with_initial_messages() {
     let mut ctx = test_context();
     ctx.messages
-        .push(nerdbot::llm::types::Message::user("Initial message"));
+        .push(ChatMessage::user(MessageContent::from_text("Initial message")));
 
     let provider = FakeProvider::new(vec![FakeResponse::final_text("Got it.")]);
     let registry = toy_registry();
@@ -605,7 +607,7 @@ async fn test_agent_context_with_initial_messages() {
     let user_msgs: Vec<_> = last_req
         .messages
         .iter()
-        .filter(|m| matches!(m.role, nerdbot::llm::types::Role::User))
+        .filter(|m| matches!(m.role, ChatRole::User))
         .collect();
     assert!(!user_msgs.is_empty());
 }
@@ -640,7 +642,7 @@ async fn test_tool_results_visible_to_provider() {
     let tool_messages: Vec<_> = second_req
         .messages
         .iter()
-        .filter(|m| matches!(m.role, nerdbot::llm::types::Role::Tool))
+        .filter(|m| matches!(m.role, ChatRole::Tool))
         .collect();
     assert!(
         !tool_messages.is_empty(),
@@ -660,7 +662,7 @@ fn test_registry_with_echo_only() {
 
     let specs = registry.specs();
     assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].name, "echo");
+    assert_eq!(specs[0].name.as_str(), "echo");
 }
 
 #[test]
@@ -671,9 +673,11 @@ fn test_registry_with_calculator_only() {
     assert_eq!(registry.len(), 1);
 
     let specs = registry.specs();
-    assert_eq!(specs[0].name, "calculator");
+    assert_eq!(specs[0].name.as_str(), "calculator");
     let props = specs[0]
-        .input_schema
+        .schema
+        .as_ref()
+        .unwrap()
         .get("properties")
         .and_then(|p| p.as_object());
     assert!(props.is_some());
@@ -689,9 +693,10 @@ async fn test_registry_execute_echo() {
     registry.register(EchoTool);
 
     let call = ToolCall {
-        id: "tc_1".into(),
-        name: "echo".into(),
-        arguments: serde_json::json!({"message": "test message"}),
+        call_id: "tc_1".into(),
+        fn_name: "echo".into(),
+        fn_arguments: serde_json::json!({"message": "test message"}),
+        thought_signatures: None,
     };
 
     let ctx = ToolContext {
@@ -721,9 +726,10 @@ async fn test_registry_execute_calculator() {
     registry.register(CalculatorTool);
 
     let call = ToolCall {
-        id: "tc_2".into(),
-        name: "calculator".into(),
-        arguments: serde_json::json!({"operation": "multiply", "a": 3, "b": 7}),
+        call_id: "tc_2".into(),
+        fn_name: "calculator".into(),
+        fn_arguments: serde_json::json!({"operation": "multiply", "a": 3, "b": 7}),
+        thought_signatures: None,
     };
 
     let ctx = ToolContext {
@@ -752,13 +758,13 @@ async fn test_registry_execute_calculator() {
 #[test]
 fn test_echo_tool_spec_generation() {
     let tool = EchoTool;
-    let spec = ToolSpec::new(tool.name(), tool.description(), tool.input_schema());
+    let spec = GenAiTool::new(tool.name()).with_description(tool.description()).with_schema(tool.input_schema());
 
-    assert_eq!(spec.name, "echo");
-    assert_eq!(spec.description, tool.description());
-    assert!(spec.input_schema.is_object());
+    assert_eq!(spec.name.as_str(), "echo");
+    assert_eq!(spec.description.as_deref(), Some(tool.description()));
+    assert!(spec.schema.as_ref().unwrap().is_object());
     assert!(
-        spec.input_schema
+        spec.schema.as_ref().unwrap()
             .get("required")
             .and_then(|r| r.as_array())
             .map(|a| a.iter().any(|v| v.as_str() == Some("message")))
@@ -769,11 +775,11 @@ fn test_echo_tool_spec_generation() {
 #[test]
 fn test_calculator_tool_spec_generation() {
     let tool = CalculatorTool;
-    let spec = ToolSpec::new(tool.name(), tool.description(), tool.input_schema());
+    let spec = GenAiTool::new(tool.name()).with_description(tool.description()).with_schema(tool.input_schema());
 
-    assert_eq!(spec.name, "calculator");
-    assert_eq!(spec.description, tool.description());
-    let schema = spec.input_schema.as_object().unwrap();
+    assert_eq!(spec.name.as_str(), "calculator");
+    assert_eq!(spec.description.as_deref(), Some(tool.description()));
+    let schema = spec.schema.as_ref().unwrap().as_object().unwrap();
     assert!(schema.contains_key("properties"));
     assert!(schema.contains_key("required"));
 
@@ -809,7 +815,7 @@ async fn test_agent_loop_includes_personality() {
     let system_msgs: Vec<_> = last_req
         .messages
         .iter()
-        .filter(|m| matches!(m.role, nerdbot::llm::types::Role::System))
+        .filter(|m| matches!(m.role, ChatRole::System))
         .collect();
     assert!(
         !system_msgs.is_empty(),
@@ -824,7 +830,7 @@ async fn test_agent_loop_tracks_tokens() {
     let provider = FakeProvider::new(vec![FakeResponse {
         assistant_text: Some("test".into()),
         tool_calls: Vec::new(),
-        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: Some((100, 50)),
     }]);
 
@@ -836,11 +842,10 @@ async fn test_agent_loop_tracks_tokens() {
         .await
         .unwrap();
 
-    let tokens = result.metadata.token_estimate.unwrap();
+    let tokens = result.metadata.token_usage;
     assert_eq!(tokens.input_tokens, 100);
     assert_eq!(tokens.output_tokens, 50);
-    assert_eq!(tokens.total_tokens, 150);
-}
+    }
 
 // ── Test: Silent Completion (Phase 6) ──────────────────────────────────
 
@@ -850,7 +855,7 @@ async fn test_silent_completion_when_no_text_and_no_tools() {
     let provider = FakeProvider::new(vec![FakeResponse {
         assistant_text: None,
         tool_calls: Vec::new(),
-        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: None,
     }]);
 
@@ -874,7 +879,7 @@ async fn test_silent_completion_with_empty_text() {
     let provider = FakeProvider::new(vec![FakeResponse {
         assistant_text: Some("".into()),
         tool_calls: Vec::new(),
-        finish_reason: nerdbot::llm::types::FinishReason::Completed,
+        stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: None,
     }]);
 

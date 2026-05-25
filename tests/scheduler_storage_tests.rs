@@ -9,13 +9,36 @@
 
 use chrono::Utc;
 
-use nerdbot::llm::types::{Message, MessageContent, Role, ToolExecutionStatus};
+use genai::chat::ChatRole;
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
 use nerdbot::storage::jobs::StoredJob;
 use nerdbot::storage::messages::StoredMessage;
 use nerdbot::storage::sessions::ChatSession;
 use nerdbot::storage::summaries::StoredSummary;
 use nerdbot::telegram::commands::TelegramCommand;
+
+fn stored_message(
+    session_id: String,
+    role: ChatRole,
+    content: String,
+    token_estimate: Option<i64>,
+) -> StoredMessage {
+    let role_str = match role {
+        ChatRole::System => "system",
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+        ChatRole::Tool => "tool",
+    };
+    StoredMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_session_id: session_id.into(),
+        role: serde_json::Value::String(role_str.to_string()),
+        content: content.into(),
+        structured_content_json: None,
+        token_estimate,
+        created_at: Utc::now(),
+    }
+}
 
 // ── JobContextPolicy ─────────────────────────────────────────────────────
 
@@ -161,15 +184,15 @@ fn test_chat_session_clone() {
 
 #[test]
 fn test_stored_message_new_text() {
-    let msg = StoredMessage::new(
+    let msg = stored_message(
         "session-1".into(),
-        Role::User,
+        ChatRole::User,
         "Hello, agent!".into(),
         Some(25),
     );
     assert!(!msg.id.is_empty());
     assert_eq!(msg.chat_session_id, "session-1");
-    assert!(matches!(msg.role(), Ok(Role::User)));
+    assert!(matches!(msg.role(), Ok(ChatRole::User)));
     assert_eq!(msg.content, "Hello, agent!");
     assert_eq!(msg.token_estimate, Some(25));
     assert!(msg.structured_content_json.is_none());
@@ -177,9 +200,9 @@ fn test_stored_message_new_text() {
 
 #[test]
 fn test_stored_message_new_no_estimate() {
-    let msg = StoredMessage::new(
+    let msg = stored_message(
         "session-1".into(),
-        Role::Assistant,
+        ChatRole::Assistant,
         "I can help with that.".into(),
         None,
     );
@@ -188,34 +211,34 @@ fn test_stored_message_new_no_estimate() {
 
 #[test]
 fn test_stored_message_structured_content() {
-    let mut msg = StoredMessage::new(
+    let mut msg = stored_message(
         "session-1".into(),
-        Role::Assistant,
+        ChatRole::Assistant,
         "tool call".into(),
         Some(50),
     );
-    msg.structured_content_json = Some(r#"{"tool":"read_file"}"#.into());
+    msg.structured_content_json = Some(serde_json::json!({"tool":"read_file"}));
     assert_eq!(
         msg.structured_content_json,
-        Some(r#"{"tool":"read_file"}"#.into())
+        Some(serde_json::json!({"tool":"read_file"}))
     );
 }
 
 #[test]
 fn test_stored_message_clone() {
-    let msg = StoredMessage::new("s1".into(), Role::User, "test".into(), Some(10));
+    let msg = stored_message("s1".into(), ChatRole::User, "test".into(), Some(10));
     let cloned = msg.clone();
     assert_eq!(msg.content, cloned.content);
     assert_eq!(msg.chat_session_id, cloned.chat_session_id);
     assert!(matches!(
         (msg.role(), cloned.role()),
-        (Ok(Role::User), Ok(Role::User))
+        (Ok(ChatRole::User), Ok(ChatRole::User))
     ));
 }
 
 #[test]
 fn test_stored_message_serialization() {
-    let msg = StoredMessage::new("s1".into(), Role::User, "hi".into(), Some(5));
+    let msg = stored_message("s1".into(), ChatRole::User, "hi".into(), Some(5));
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("s1"));
     assert!(json.contains("hi"));
@@ -224,8 +247,8 @@ fn test_stored_message_serialization() {
 
 #[test]
 fn test_stored_message_role_deserialization() {
-    let msg = StoredMessage::new("s1".into(), Role::Assistant, "test".into(), Some(5));
-    assert!(matches!(msg.role(), Ok(Role::Assistant)));
+    let msg = stored_message("s1".into(), ChatRole::Assistant, "test".into(), Some(5));
+    assert!(matches!(msg.role(), Ok(ChatRole::Assistant)));
 }
 
 // ── StoredJob ────────────────────────────────────────────────────────────
@@ -437,19 +460,16 @@ fn test_telegram_command_run_different_ids() {
 
 #[test]
 fn test_role_roundtrip() {
-    for role in [Role::System, Role::User, Role::Assistant, Role::Tool] {
+    for role in [ChatRole::System, ChatRole::User, ChatRole::Assistant, ChatRole::Tool] {
         let json = serde_json::to_string(&role).unwrap();
-        let restored: Role = serde_json::from_str(&json).unwrap();
+        let restored: ChatRole = serde_json::from_str(&json).unwrap();
         assert_eq!(role, restored);
     }
 }
 
 #[test]
-fn test_tool_execution_status_roundtrip() {
-    let status = ToolExecutionStatus::Error {
-        error: "fail".into(),
-    };
-    let json = serde_json::to_string(&status).unwrap();
-    let restored: ToolExecutionStatus = serde_json::from_str(&json).unwrap();
-    assert_eq!(status, restored);
+fn test_tool_response_content_encodes_error_status() {
+    let content = serde_json::json!({"success": false, "error": "fail"}).to_string();
+    let response = genai::chat::ToolResponse::new("call-1", content.clone());
+    assert_eq!(response.content, content);
 }

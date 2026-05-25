@@ -8,9 +8,9 @@
 //! 5. Persist outgoing message
 //! 6. Return response text for the Telegram service to deliver
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
+use genai::chat::{ChatMessage, ChatRole, MessageContent};
 use sqlx::SqlitePool;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -19,8 +19,7 @@ use crate::agent::outcome::AgentOutcome;
 use crate::agent::run_mode::AgentRunMode;
 use crate::config::AppConfig;
 use crate::error::AgentError;
-use crate::llm::provider::LlmProvider;
-use crate::llm::types::Role;
+use crate::llm::LlmExecutor;
 use crate::storage;
 use crate::tools::registry::ToolRegistry;
 
@@ -30,8 +29,8 @@ use super::commands::{CommandHandler, TelegramCommand};
 pub struct MessageHandler {
     /// Database connection pool for session/message persistence.
     pool: SqlitePool,
-    /// LLM provider (fake or real).
-    provider: Arc<dyn LlmProvider>,
+    /// LLM executor.
+    llm: Arc<dyn LlmExecutor>,
     /// Tool registry.
     registry: Arc<ToolRegistry>,
     /// Agent loop configuration.
@@ -47,18 +46,22 @@ pub struct MessageHandler {
 impl MessageHandler {
     pub fn new(
         pool: SqlitePool,
-        provider: Arc<dyn LlmProvider>,
+        llm: Arc<dyn LlmExecutor>,
         registry: Arc<ToolRegistry>,
         config: AppConfig,
         scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
     ) -> Self {
         let loop_config = AgentLoopConfig {
             max_tool_iterations: config.agent.max_tool_iterations,
+            llm_model: config.llm.model.clone(),
+            llm_temperature: config.llm.temperature,
+            llm_max_output_tokens: config.llm.max_output_tokens,
         };
-        let bot_token = std::env::var(&config.telegram.bot_token_env).unwrap_or_else(|_| String::new());
+        let bot_token =
+            std::env::var(&config.telegram.bot_token_env).unwrap_or_else(|_| String::new());
         Self {
             pool,
-            provider,
+            llm,
             registry,
             loop_config,
             config,
@@ -84,7 +87,7 @@ impl MessageHandler {
         let session = self.ensure_session(chat_id).await?;
 
         // 3. Persist the incoming user message
-        let user_message = crate::llm::types::Message::user(text);
+        let user_message = ChatMessage::user(MessageContent::from_text(text));
         let _ =
             storage::messages::create_message(&self.pool, &session.id, &user_message, None).await?;
 
@@ -98,7 +101,7 @@ impl MessageHandler {
 
         // 6. Persist response if one was generated
         if let Ok(Some(ref reply_text)) = response {
-            let assistant_msg = crate::llm::types::Message::assistant(reply_text);
+            let assistant_msg = ChatMessage::assistant(MessageContent::from_text(reply_text));
             let _ =
                 storage::messages::create_message(&self.pool, &session.id, &assistant_msg, None)
                     .await;
@@ -207,13 +210,8 @@ impl MessageHandler {
         };
 
         // Run the agent loop
-        let result = run_agent(
-            &ctx,
-            self.provider.as_ref(),
-            &self.registry,
-            &self.loop_config,
-        )
-        .await;
+        let result =
+            run_agent(&ctx, self.llm.as_ref(), &self.registry, &self.loop_config).await;
 
         match result {
             Ok(agent_result) => match agent_result.outcome {
@@ -256,22 +254,18 @@ impl MessageHandler {
     async fn load_recent_messages(
         &self,
         session_id: &str,
-    ) -> Result<Vec<crate::llm::types::Message>, AgentError> {
-        let stored = storage::messages::list_messages(
-            &self.pool,
-            session_id,
-            Some(100), // Load up to 100 most recent messages
-        )
-        .await?;
+    ) -> Result<Vec<ChatMessage>, AgentError> {
+        let stored =
+            storage::messages::list_messages(&self.pool, session_id, Some(100)).await?;
 
         // Convert stored messages to typed messages, in chronological order
-        let mut messages: Vec<crate::llm::types::Message> = stored
+        let messages: Vec<ChatMessage> = stored
             .into_iter()
             .rev() // list_messages returns DESC, we need ASC
             .filter_map(|sm| sm.to_message().ok())
             .filter(|m| {
                 // Skip system messages (they'll be added by the agent loop)
-                !matches!(m.role, Role::System)
+                !matches!(m.role, ChatRole::System)
             })
             .collect();
 
@@ -284,11 +278,13 @@ impl MessageHandler {
 
         if !path.exists() {
             // No personality file — use a reasonable default
-            return Ok("You are NerdBot, a helpful and concise AI assistant. \
+            return Ok(
+                "You are NerdBot, a helpful and concise AI assistant. \
                 You respond in plain text. You use tools when they would help \
                 answer the user's question more accurately. \
                 When you don't know something, you say so honestly."
-                .to_string());
+                    .to_string(),
+            );
         }
 
         tokio::fs::read_to_string(path)

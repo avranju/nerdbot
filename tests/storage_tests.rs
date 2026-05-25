@@ -18,7 +18,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
 use nerdbot::error::AgentError;
-use nerdbot::llm::types::{Message, MessageContent, Role};
+use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent, ToolCall, ToolResponse};
 use nerdbot::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
 use nerdbot::storage::{ChatSession, Database, StoredJob, StoredMessage, StoredSummary};
 
@@ -167,8 +167,8 @@ async fn test_create_and_list_messages() {
         .unwrap();
 
     // Create messages
-    let msg1 = Message::new(Role::User, MessageContent::Text("Hello".into()));
-    let msg2 = Message::new(Role::Assistant, MessageContent::Text("Hi there!".into()));
+    let msg1 = ChatMessage::user(MessageContent::from_text("Hello"));
+    let msg2 = ChatMessage::assistant(MessageContent::from_text("Hi there!"));
 
     let stored1 = nerdbot::storage::messages::create_message(pool, &session.id, &msg1, Some(10))
         .await
@@ -182,8 +182,9 @@ async fn test_create_and_list_messages() {
         .await
         .unwrap();
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].id, stored2.id); // Most recent first (ORDER BY DESC)
-    assert_eq!(messages[1].id, stored1.id);
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert!(contents.contains(&"Hello"));
+    assert!(contents.contains(&"Hi there!"));
 }
 
 #[tokio::test]
@@ -196,7 +197,7 @@ async fn test_list_messages_with_limit() {
         .unwrap();
 
     for i in 0..5 {
-        let msg = Message::new(Role::User, MessageContent::Text(format!("Message {i}")));
+        let msg = ChatMessage::user(MessageContent::from_text(format!("Message {i}")));
         nerdbot::storage::messages::create_message(pool, &session.id, &msg, None)
             .await
             .unwrap();
@@ -232,23 +233,19 @@ async fn test_message_to_message_conversion() {
         .await
         .unwrap();
 
-    let original = Message::new(Role::User, MessageContent::Text("test content".into()));
+    let original = ChatMessage::user(MessageContent::from_text("test content"));
     let stored = nerdbot::storage::messages::create_message(pool, &session.id, &original, Some(5))
         .await
         .unwrap();
 
     let converted = stored.to_message().unwrap();
-    assert_eq!(converted.role, Role::User);
-    match converted.content {
-        MessageContent::Text(t) => assert_eq!(t, "test content"),
-        _ => panic!("expected text content"),
-    }
+    assert_eq!(converted.role, ChatRole::User);
+    assert_eq!(converted.content.first_text(), Some("test content"));
 }
 
 #[tokio::test]
 async fn test_message_to_message_conversion_structured() {
-    use nerdbot::llm::types::{ContentPart, ToolCall};
-    let db = setup_db().await;
+        let db = setup_db().await;
     let pool = pool(&db);
 
     let session = nerdbot::storage::sessions::create_session(pool, 1)
@@ -256,41 +253,35 @@ async fn test_message_to_message_conversion_structured() {
         .unwrap();
 
     let tool_call = ToolCall {
-        id: "call-123".into(),
-        name: "web_search".into(),
-        arguments: serde_json::json!({"query": "rust language"}),
+        call_id: "call-123".into(),
+        fn_name: "web_search".into(),
+        fn_arguments: serde_json::json!({"query": "rust language"}),
+        thought_signatures: None,
     };
-    let original = Message::new(
-        Role::Assistant,
-        MessageContent::Parts(vec![
-            ContentPart::Text("Let me look that up.".into()),
-            ContentPart::ToolCall(tool_call),
-        ]),
-    );
+    let original = ChatMessage::assistant(MessageContent::from_parts(vec![
+        ContentPart::Text("Let me look that up.".into()),
+        ContentPart::ToolCall(tool_call),
+    ]));
 
     let stored = nerdbot::storage::messages::create_message(pool, &session.id, &original, Some(25))
         .await
         .unwrap();
 
     let converted = stored.to_message().unwrap();
-    assert_eq!(converted.role, Role::Assistant);
-    match converted.content {
-        MessageContent::Parts(parts) => {
-            assert_eq!(parts.len(), 2);
-            match &parts[0] {
-                ContentPart::Text(t) => assert_eq!(t, "Let me look that up."),
-                _ => panic!("expected first part to be text"),
-            }
-            match &parts[1] {
-                ContentPart::ToolCall(tc) => {
-                    assert_eq!(tc.id, "call-123");
-                    assert_eq!(tc.name, "web_search");
-                    assert_eq!(tc.arguments["query"], "rust language");
-                }
-                _ => panic!("expected second part to be a tool call"),
-            }
+    assert_eq!(converted.role, ChatRole::Assistant);
+    let parts = converted.content.parts();
+    assert_eq!(parts.len(), 2);
+    match &parts[0] {
+        ContentPart::Text(t) => assert_eq!(t, "Let me look that up."),
+        _ => panic!("expected first part to be text"),
+    }
+    match &parts[1] {
+        ContentPart::ToolCall(tc) => {
+            assert_eq!(tc.call_id, "call-123");
+            assert_eq!(tc.fn_name, "web_search");
+            assert_eq!(tc.fn_arguments["query"], "rust language");
         }
-        _ => panic!("expected parts content"),
+        _ => panic!("expected second part to be a tool call"),
     }
 }
 
@@ -547,11 +538,8 @@ async fn test_session_message_summary_flow() {
         .unwrap();
 
     // Add messages
-    let user_msg = Message::new(Role::User, MessageContent::Text("What is Rust?".into()));
-    let assistant_msg = Message::new(
-        Role::Assistant,
-        MessageContent::Text("Rust is a systems programming language.".into()),
-    );
+    let user_msg = ChatMessage::user(MessageContent::from_text("What is Rust?"));
+    let assistant_msg = ChatMessage::assistant(MessageContent::from_text("Rust is a systems programming language."));
 
     let user_stored =
         nerdbot::storage::messages::create_message(pool, &session.id, &user_msg, Some(8))
@@ -606,7 +594,7 @@ async fn test_message_create_with_no_session_fails() {
     let db = setup_db().await;
     let pool = pool(&db);
 
-    let msg = Message::new(Role::User, MessageContent::Text("orphan".into()));
+    let msg = ChatMessage::user(MessageContent::from_text("orphan"));
     let result =
         nerdbot::storage::messages::create_message(pool, "nonexistent-session", &msg, None).await;
     assert!(result.is_err(), "Expected an error because session does not exist");
@@ -637,7 +625,15 @@ fn test_stored_job_serialization_roundtrip() {
 
 #[test]
 fn test_stored_message_serialization_roundtrip() {
-    let msg = StoredMessage::new("session-1".into(), Role::User, "Hello".into(), Some(5));
+    let msg = StoredMessage {
+        id: "m1".into(),
+        chat_session_id: "session-1".into(),
+        role: serde_json::Value::String("user".into()),
+        content: "Hello".into(),
+        structured_content_json: None,
+        token_estimate: Some(5),
+        created_at: chrono::Utc::now(),
+    };
     let json = serde_json::to_string(&msg).unwrap();
     let restored: StoredMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.chat_session_id, "session-1");

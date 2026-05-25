@@ -23,7 +23,7 @@ use std::sync::Arc;
 use nerdbot::config::AppConfig;
 use nerdbot::error::AgentError;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
-use nerdbot::llm::provider::LlmProvider;
+use nerdbot::llm::LlmExecutor;
 use nerdbot::storage;
 use nerdbot::telegram::TelegramBot;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
@@ -271,7 +271,7 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> =
+    let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
             "Hello from the agent loop!",
         )]));
@@ -405,7 +405,7 @@ async fn test_message_handler_allowlist_blocks_chat() {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> =
+    let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
             "should not be reached",
         )]));
@@ -428,7 +428,7 @@ async fn test_message_handler_allowlist_blocks_user() {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
 
-    let provider: Arc<dyn LlmProvider> =
+    let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
             "should not be reached",
         )]));

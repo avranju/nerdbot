@@ -75,10 +75,11 @@ async fn test_access_allowed_when_no_restrictions() {
 
     let result = registry
         .execute(
-            &nerdbot::llm::types::ToolCall {
-                id: "t1".into(),
-                name: "test_tool".into(),
-                arguments: json!({}),
+            &genai::chat::ToolCall {
+                call_id: "t1".into(),
+                fn_name: "test_tool".into(),
+                fn_arguments: json!({}),
+                thought_signatures: None,
             },
             ctx,
         )
@@ -105,10 +106,11 @@ async fn test_access_denied_when_chat_id_not_allowed() {
 
     let _ = registry
         .execute(
-            &nerdbot::llm::types::ToolCall {
-                id: "t1".into(),
-                name: "test_tool".into(),
-                arguments: json!({}),
+            &genai::chat::ToolCall {
+                call_id: "t1".into(),
+                fn_name: "test_tool".into(),
+                fn_arguments: json!({}),
+                thought_signatures: None,
             },
             ctx,
         )

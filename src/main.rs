@@ -2,23 +2,18 @@
 //!
 //! Run as a single binary, Docker-friendly.
 //! Supports Telegram as the user-facing channel with iterative tool use
-//! driven by multiple LLM providers.
+//! driven by multiple LLM providers via the `genai` crate.
 
-// TODO: Remove this allow once all modules are fully implemented (target Phase 5+).
-#![allow(
-    dead_code,
-    unused,
-    unused_imports,
-    unused_variables,
-    unused_assignments
-)]
+// Suppress unused/dead code warnings for stub implementations shared with lib.rs.
+// The lib.rs crate-level allow does not apply to this binary crate root.
+#![allow(dead_code, unused, unused_imports, unused_variables, unused_assignments)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
 use error::AgentError;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod agent;
 mod config;
@@ -54,7 +49,7 @@ async fn main() {
 
     info!(config_path = %cli.config.display(), "starting nerdbot");
 
-    // Phase 1: load and validate configuration
+    // Load and validate configuration
     let config = match config::AppConfig::from_file(&cli.config) {
         Ok(c) => {
             info!("configuration loaded");
@@ -68,15 +63,13 @@ async fn main() {
 
     info!(
         agent_name = config.agent.name,
-        provider = config.llm.provider,
         model = config.llm.model,
         "configuration loaded"
     );
 
-    // Phase 3: initialize storage
+    // Initialize storage
     let db = match storage::Database::new(config.storage.sqlite_path.clone()).await {
         Ok(db) => {
-            // Run migrations
             if let Err(e) = db.init().await {
                 error!(error = %e, "database migration failed");
                 return;
@@ -89,28 +82,22 @@ async fn main() {
         }
     };
 
-    // Phase 4: initialize Telegram bot
+    // Initialize Telegram bot
     let bot_token = match std::env::var(&config.telegram.bot_token_env) {
         Ok(token) if !token.is_empty() => token,
         Ok(_) => {
-            error!(
-                env_var = config.telegram.bot_token_env,
-                "Telegram bot token is empty"
-            );
+            error!(env_var = config.telegram.bot_token_env, "Telegram bot token is empty");
             return;
         }
         Err(_) => {
-            error!(
-                env_var = config.telegram.bot_token_env,
-                "Telegram bot token environment variable not set"
-            );
+            error!(env_var = config.telegram.bot_token_env, "Telegram bot token environment variable not set");
             return;
         }
     };
 
     let bot = telegram::TelegramBot::new(bot_token);
 
-    // Verify the bot token by calling getMe
+    // Verify the bot token
     match bot.get_me().await {
         Ok(user) => {
             info!(
@@ -130,53 +117,62 @@ async fn main() {
         error!(error = %e, "failed to delete webhook, long polling may not work");
     }
 
-    // Phase 4: set up tool registry with toy tools
+    // Set up tool registry
     let mut registry = tools::registry::ToolRegistry::new();
     registry.register(tools::echo::EchoTool);
     registry.register(tools::calculator::CalculatorTool);
-    // Phase 5: register scheduling tools
     registry.register(tools::schedule::ScheduleJob);
     registry.register(tools::schedule::ListJobs);
     registry.register(tools::schedule::DeleteJob);
     registry.register(tools::schedule::RunJobNow);
-    // Phase 6: register messaging tool
     registry.register(tools::telegram::SendTelegramMessage);
+    registry.register(tools::files::ReadFile);
+    registry.register(tools::files::WriteFile);
+    registry.register(tools::files::AppendFile);
+    registry.register(tools::files::ListDirectory);
+    registry.register(tools::web::WebSearch);
+    registry.register(tools::web::WebFetch);
     let registry = Arc::new(registry);
 
-    // Phase 4: use fake provider (real providers come in Phase 7)
-    let provider: Arc<dyn llm::provider::LlmProvider> = Arc::new(llm::fake::FakeProvider::new(
-        vec![llm::fake::FakeResponse::final_text(
-            "Hello! I'm NerdBot, running on a fake provider. Real LLM integration is coming in Phase 7. How can I help you today?",
-        )],
-    ));
+    // Create the LLM client via genai
+    let llm = match llm::LlmClient::from_config(&config) {
+        Ok(client) => {
+            info!(model = config.llm.model, "LLM client initialized via genai");
+            Arc::new(client)
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to create LLM client");
+            return;
+        }
+    };
 
     let bot = Arc::new(bot);
     let service = telegram::TelegramService::new(bot.clone());
 
-    // Phase 5: initialize the scheduler service
+    // Initialize the scheduler service
     let scheduler = Arc::new(scheduler::service::SchedulerService::new(
         db.pool().clone(),
-        provider.clone(),
+        llm.clone(),
         registry.clone(),
         config.clone(),
         service.clone(),
     ));
 
-    // Create a drop guard to guarantee scheduler shutdown when the main execution exits or panics
+    // Create a drop guard to guarantee scheduler shutdown
     let _scheduler_guard = SchedulerGuard {
         scheduler: scheduler.clone(),
     };
 
-    // Phase 4: create the message handler
+    // Create the message handler
     let handler = Arc::new(telegram::MessageHandler::new(
         db.pool().clone(),
-        provider,
+        llm.clone(),
         registry,
         config.clone(),
         Some(scheduler.notifier()),
     ));
 
-    // Phase 5: start scheduler
+    // Start scheduler
     if let Err(e) = scheduler.start().await {
         error!(error = %e, "Failed to start scheduler");
         return;
@@ -194,27 +190,24 @@ async fn main() {
                 match res {
                     Ok(updates) => {
                         for update in updates {
-                            // Track the latest update_id to acknowledge it
                             let new_offset = update.update_id + 1;
                             if offset.is_none_or(|o| new_offset > o) {
                                 offset = Some(new_offset);
                             }
 
-                            // Extract message data
                             let msg = match update.message {
                                 Some(ref m) => m,
-                                None => continue, // Skip non-message updates for now
+                                None => continue,
                             };
 
                             let chat_id = msg.chat.id;
                             let text = match &msg.text {
                                 Some(t) => t.clone(),
-                                None => continue, // Skip non-text messages
+                                None => continue,
                             };
 
                             let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
 
-                            // Dispatch to handler
                             let handler = handler.clone();
                             let service = service.clone();
 
@@ -225,12 +218,8 @@ async fn main() {
                                             error!(chat_id, error = %e, "failed to send reply");
                                         }
                                     }
-                                    Ok(None) => {
-                                        // No reply needed (e.g., silent command)
-                                    }
-                                    Err(AgentError::PermissionDenied) => {
-                                        // Silently ignore unauthorized messages
-                                    }
+                                    Ok(None) => {}
+                                    Err(AgentError::PermissionDenied) => {}
                                     Err(e) => {
                                         error!(chat_id, error = %e, "message handler error");
                                         let err_msg = format!("❌ Internal error: {e}");

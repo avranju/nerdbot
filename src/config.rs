@@ -20,8 +20,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub llm: LlmConfig,
     #[serde(default)]
-    pub providers: ProvidersConfig,
-    #[serde(default)]
     pub context: ContextConfig,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
@@ -115,15 +113,32 @@ impl Default for WorkspaceConfig {
     }
 }
 
-/// LLM default configuration.
+/// LLM configuration.
+///
+/// Uses `genai` for provider resolution. The `model` field determines
+/// which provider is used (e.g., "gpt-4o" → OpenAI, "claude-sonnet-4-5" → Anthropic,
+/// "gemini-2.5-flash" → Gemini, "open_router::openai/gpt-4.1" → OpenRouter).
+///
+/// For custom OpenAI-compatible endpoints, set `endpoint` and optionally
+/// `api_key_env` to override the default auth.
 #[derive(Debug, Deserialize, Clone)]
 pub struct LlmConfig {
-    #[serde(default = "default_llm_provider")]
-    pub provider: String,
+    /// Model name (e.g., "gpt-4o", "claude-sonnet-4-5", "gemini-2.5-flash").
+    /// `genai` resolves the provider from the model name prefix.
     #[serde(default)]
     pub model: String,
+    /// Optional custom endpoint URL (for OpenAI-compatible APIs).
+    /// When set, overrides the default provider endpoint.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Optional environment variable name for the API key.
+    /// When set, overrides the default auth for the resolved provider.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Sampling temperature.
     #[serde(default = "default_temperature")]
     pub temperature: f32,
+    /// Maximum output tokens.
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
 }
@@ -131,82 +146,11 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            provider: default_llm_provider(),
             model: String::new(),
+            endpoint: None,
+            api_key_env: None,
             temperature: default_temperature(),
             max_output_tokens: default_max_output_tokens(),
-        }
-    }
-}
-
-/// Per-provider configuration.
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct ProvidersConfig {
-    #[serde(default)]
-    pub anthropic: AnthropicProviderConfig,
-    #[serde(default)]
-    pub openai: OpenaiProviderConfig,
-    #[serde(default)]
-    pub gemini: GeminiProviderConfig,
-    #[serde(default)]
-    pub openrouter: OpenrouterProviderConfig,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct AnthropicProviderConfig {
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-}
-
-impl Default for AnthropicProviderConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_api_key_env(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct OpenaiProviderConfig {
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-}
-
-impl Default for OpenaiProviderConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_api_key_env(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct GeminiProviderConfig {
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-}
-
-impl Default for GeminiProviderConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_api_key_env(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct OpenrouterProviderConfig {
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
-    #[serde(default = "default_openrouter_base_url")]
-    pub base_url: String,
-}
-
-impl Default for OpenrouterProviderConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: default_api_key_env(),
-            base_url: default_openrouter_base_url(),
         }
     }
 }
@@ -285,12 +229,6 @@ fn default_temperature() -> f32 {
 fn default_max_output_tokens() -> u32 {
     4096
 }
-fn default_api_key_env() -> String {
-    "API_KEY".to_string()
-}
-fn default_openrouter_base_url() -> String {
-    "https://openrouter.ai/api/v1".to_string()
-}
 fn default_soft_compaction_threshold() -> f32 {
     0.60
 }
@@ -300,10 +238,6 @@ fn default_hard_context_threshold() -> f32 {
 fn default_recent_turns_to_preserve() -> usize {
     30
 }
-fn default_llm_provider() -> String {
-    "anthropic".to_string()
-}
-
 impl AppConfig {
     /// Load configuration from a TOML file.
     pub fn from_file(path: &std::path::Path) -> Result<Self, AgentError> {

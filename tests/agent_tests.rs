@@ -9,9 +9,8 @@
 
 use std::path::PathBuf;
 
-use nerdbot::agent::outcome::{AgentOutcome, AgentResult, RunMetadata};
+use nerdbot::agent::outcome::{AgentOutcome, AgentResult, RunMetadata, RunTokenUsage};
 use nerdbot::agent::run_mode::{AgentRunMode, JobId, TelegramChatId, TelegramUserId};
-use nerdbot::llm::types::TokenEstimate;
 
 // ── AgentRunMode: InteractiveReply ───────────────────────────────────────
 
@@ -169,20 +168,19 @@ fn test_agent_outcome_clone() {
 fn test_run_metadata_defaults() {
     let metadata = RunMetadata::default();
     assert_eq!(metadata.iterations, 0);
-    assert!(metadata.token_estimate.is_none());
+    assert_eq!(metadata.token_usage.input_tokens, 0);
+    assert_eq!(metadata.token_usage.output_tokens, 0);
 }
 
 #[test]
 fn test_run_metadata_with_values() {
     let metadata = RunMetadata {
         iterations: 3,
-        token_estimate: Some(TokenEstimate::new(100, 50)),
+        token_usage: RunTokenUsage { input_tokens: 100, output_tokens: 50 },
     };
     assert_eq!(metadata.iterations, 3);
-    assert!(metadata.token_estimate.is_some());
-    let est = metadata.token_estimate.unwrap();
-    assert_eq!(est.input_tokens, 100);
-    assert_eq!(est.output_tokens, 50);
+    assert_eq!(metadata.token_usage.input_tokens, 100);
+    assert_eq!(metadata.token_usage.output_tokens, 50);
 }
 
 // ── AgentResult ──────────────────────────────────────────────────────────
@@ -193,7 +191,7 @@ fn test_agent_result_final_text() {
         outcome: AgentOutcome::FinalText("done".into()),
         metadata: RunMetadata {
             iterations: 2,
-            token_estimate: None,
+            token_usage: RunTokenUsage::default(),
         },
     };
     assert!(matches!(result.outcome, AgentOutcome::FinalText(ref t) if t == "done"));

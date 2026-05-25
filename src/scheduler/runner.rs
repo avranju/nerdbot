@@ -4,14 +4,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent, ToolResponse};
+
 use crate::error::AgentError;
-use crate::llm::types::ContentPart;
+use crate::llm::LlmExecutor;
 use crate::scheduler::models::JobContextPolicy;
 
 /// Input arguments required to execute a scheduled job runner.
 pub struct RunScheduledJobInput {
     pub pool: sqlx::SqlitePool,
-    pub provider: Arc<dyn crate::llm::provider::LlmProvider>,
+    pub llm: Arc<dyn LlmExecutor>,
     pub registry: Arc<crate::tools::registry::ToolRegistry>,
     pub loop_config: crate::agent::agent_loop::AgentLoopConfig,
     pub personality: String,
@@ -34,7 +36,7 @@ pub async fn run_scheduled_job(
 ) -> Result<(), AgentError> {
     let RunScheduledJobInput {
         pool,
-        provider,
+        llm,
         registry,
         loop_config,
         personality,
@@ -63,7 +65,7 @@ pub async fn run_scheduled_job(
         JobContextPolicy::Isolated => vec![],
         JobContextPolicy::IncludeCreationSnapshot => {
             if let Some(ref snapshot) = job.creation_context_snapshot {
-                serde_json::from_str::<Vec<crate::llm::types::Message>>(snapshot)
+                serde_json::from_str::<Vec<ChatMessage>>(snapshot)
                     .map_err(|e| AgentError::Scheduler(format!("Corrupted context snapshot for job {job_id}: {e}")))?
             } else {
                 vec![]
@@ -72,22 +74,22 @@ pub async fn run_scheduled_job(
         JobContextPolicy::IncludeChatSummary => {
             let mut msgs = vec![];
             if let Some(summary) = crate::storage::summaries::get_latest_summary(&pool, &session.id).await? {
-                msgs.push(crate::llm::types::Message::system(format!(
+                msgs.push(ChatMessage::system(MessageContent::from_text(format!(
                     "System Conversation Summary (covers older context):\n{}",
                     summary.summary_text
-                )));
+                ))));
             }
             msgs
         }
     };
 
     // Save scheduled prompt to DB history and append to message context
-    let user_msg = crate::llm::types::Message::user(&job.prompt);
+    let user_msg = ChatMessage::user(MessageContent::from_text(&job.prompt));
     let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;
     messages.push(user_msg);
 
     // 4. Construct AgentContext
-    let mut agent_ctx = crate::agent::agent_loop::AgentContext {
+    let agent_ctx = crate::agent::agent_loop::AgentContext {
         run_mode: crate::agent::run_mode::AgentRunMode::ScheduledJob {
             job_id: job_id.to_string(),
             default_chat_id: job.owner_chat_id,
@@ -107,7 +109,7 @@ pub async fn run_scheduled_job(
     // 5. Execute the agent loop
     let result = crate::agent::agent_loop::run_agent(
         &agent_ctx,
-        provider.as_ref(),
+        llm.as_ref(),
         registry.as_ref(),
         &loop_config,
     )
@@ -117,7 +119,7 @@ pub async fn run_scheduled_job(
         Ok(agent_result) => {
             if let crate::agent::outcome::AgentOutcome::FinalText(text) = agent_result.outcome {
                 // Save assistant message to DB history
-                let assistant_msg = crate::llm::types::Message::assistant(&text);
+                let assistant_msg = ChatMessage::assistant(MessageContent::from_text(&text));
                 let _ = crate::storage::messages::create_message(&pool, &session.id, &assistant_msg, None).await?;
 
                 // Check whether the agent already sent a notification via send_user_message
@@ -155,16 +157,12 @@ pub async fn run_scheduled_job(
 
 /// Check whether the agent already sent a notification via `send_user_message` during this run.
 ///
-/// Scans recent tool-result messages in the session for `tool_name: "send_user_message"`
-/// with `sent: true` in the structured content.
-///
-/// Returns `false` on any DB or parse error (fail-open: prefer sending a duplicate
-/// notification over silently suppressing one).
+/// Scans recent tool-result messages in the session for tool responses containing
+/// `"send_user_message"` with `"sent": true` in the JSON content.
 async fn agent_already_sent_notification(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> bool {
-    // Load recent messages (tool results are stored in reverse chronological order)
     let stored = match crate::storage::messages::list_messages(pool, session_id, Some(50)).await {
         Ok(msgs) => msgs,
         Err(e) => {
@@ -178,33 +176,29 @@ async fn agent_already_sent_notification(
     };
 
     for sm in stored {
-        // We're looking for Tool-role messages that contain send_user_message results
+        // We're looking for Tool-role messages
         if let Ok(role) = sm.role()
-            && matches!(role, crate::llm::types::Role::Tool)
+            && matches!(role, ChatRole::Tool)
         {
-            // Parse structured content to check for send_user_message tool results.
-            // Storage writes Vec<ContentPart>, not MessageContent.
+            // Try to parse as genai ContentPart format first
             if let Some(ref json) = sm.structured_content_json
-                && let Ok(parts) =
-                    serde_json::from_value::<Vec<ContentPart>>(json.clone())
+                && let Ok(parts) = serde_json::from_value::<Vec<ContentPart>>(json.clone())
             {
                 for part in parts {
-                    if let ContentPart::ToolResult(tr) = part {
-                        // Check that this is a successful send_user_message call
-                        // (not mock-mode or failed execution)
-                        let is_send_user_message = tr
-                            .content
-                            .get("tool_name")
-                            .and_then(|v| v.as_str())
-                            == Some("send_user_message");
-                        let actually_sent = tr
-                            .content
-                            .get("sent")
-                            .and_then(|v| v.as_bool())
-                            == Some(true);
-                        if is_send_user_message && actually_sent {
-                            return true;
-                        }
+                    if let ContentPart::ToolResponse(tr) = part
+                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&tr.content)
+                    {
+                                let is_send_user_message = parsed
+                                    .get("tool_name")
+                                    .and_then(|v| v.as_str())
+                                    == Some("send_user_message");
+                                let actually_sent = parsed
+                                    .get("sent")
+                                    .and_then(|v| v.as_bool())
+                                    == Some(true);
+                            if is_send_user_message && actually_sent {
+                                return true;
+                            }
                     }
                 }
             }

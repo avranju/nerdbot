@@ -124,7 +124,7 @@ impl Tool for ScheduleJob {
         let creation_context_snapshot = if context_policy == crate::scheduler::models::JobContextPolicy::IncludeCreationSnapshot {
             if let Some(session) = crate::storage::sessions::get_session_for_chat(&pool, chat_id).await? {
                 let stored = crate::storage::messages::list_messages(&pool, &session.id, Some(30)).await?;
-                let messages: Vec<crate::llm::types::Message> = stored
+                let messages: Vec<genai::chat::ChatMessage> = stored
                     .into_iter()
                     .rev() // DESC to ASC
                     .filter_map(|sm| sm.to_message().ok())

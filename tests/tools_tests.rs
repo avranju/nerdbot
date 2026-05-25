@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use nerdbot::error::AgentError;
-use nerdbot::llm::types::{ToolCall, ToolSpec};
+use genai::chat::ToolCall;
 use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 
@@ -166,9 +166,10 @@ fn test_registry_specs_are_unique() {
 async fn test_registry_execute_unknown_tool() {
     let registry = ToolRegistry::new();
     let call = ToolCall {
-        id: "1".into(),
-        name: "nonexistent_tool".into(),
-        arguments: serde_json::json!({}),
+        call_id: "1".into(),
+        fn_name: "nonexistent_tool".into(),
+        fn_arguments: serde_json::json!({}),
+        thought_signatures: None,
     };
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
@@ -193,9 +194,10 @@ async fn test_registry_execute_stub_tool_returns_not_implemented() {
     registry.register(nerdbot::tools::files::ReadFile);
 
     let call = ToolCall {
-        id: "1".into(),
-        name: "read_file".into(),
-        arguments: serde_json::json!({"path": "test.txt"}),
+        call_id: "1".into(),
+        fn_name: "read_file".into(),
+        fn_arguments: serde_json::json!({"path": "test.txt"}),
+        thought_signatures: None,
     };
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
@@ -228,12 +230,12 @@ fn test_registry_tool_spec_validation() {
     assert_eq!(specs.len(), 1);
 
     let spec = &specs[0];
-    assert_eq!(spec.name, "schedule_job");
+    assert_eq!(spec.name.as_str(), "schedule_job");
     assert_eq!(
-        spec.description,
-        "Schedule a one-shot or recurring agent task."
+        spec.description.as_deref(),
+        Some("Schedule a one-shot or recurring agent task.")
     );
-    assert!(spec.input_schema.is_object());
+    assert!(spec.schema.as_ref().unwrap().is_object());
 }
 
 #[test]
@@ -416,9 +418,10 @@ async fn test_registry_execute_with_invalid_args() {
 
     // Pass completely invalid arguments to a stub tool
     let call = ToolCall {
-        id: "1".into(),
-        name: "read_file".into(),
-        arguments: serde_json::json!({"this_is_not_a_real_field": true, "nested": {"deep": {"value": 42}}}),
+        call_id: "1".into(),
+        fn_name: "read_file".into(),
+        fn_arguments: serde_json::json!({"this_is_not_a_real_field": true, "nested": {"deep": {"value": 42}}}),
+        thought_signatures: None,
     };
     let ctx = ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {

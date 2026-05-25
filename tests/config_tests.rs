@@ -84,9 +84,11 @@ fn test_default_config_max_write_bytes() {
 }
 
 #[test]
-fn test_default_config_llm_provider() {
+fn test_default_config_llm_model() {
     let config = AppConfig::default();
-    assert_eq!(config.llm.provider, "anthropic");
+    assert_eq!(config.llm.model, "");
+    assert!(config.llm.endpoint.is_none());
+    assert!(config.llm.api_key_env.is_none());
 }
 
 #[test]
@@ -148,23 +150,12 @@ max_read_bytes = 131072
 max_write_bytes = 65536
 
 [llm]
-provider = "openai"
 model = "gpt-4o"
+endpoint = "https://api.example.test/v1"
+api_key_env = "OPENAI_KEY"
 temperature = 0.7
 max_output_tokens = 2048
 
-[providers.anthropic]
-api_key_env = "ANTHROPIC_KEY"
-
-[providers.openai]
-api_key_env = "OPENAI_KEY"
-
-[providers.gemini]
-api_key_env = "GEMINI_KEY"
-
-[providers.openrouter]
-api_key_env = "OPENROUTER_KEY"
-base_url = "https://openrouter.ai/api/v1"
 
 [context]
 soft_compaction_threshold = 0.50
@@ -219,20 +210,11 @@ fn test_parse_full_config() {
     assert_eq!(config.workspace.max_write_bytes, 65_536);
 
     // LLM
-    assert_eq!(config.llm.provider, "openai");
     assert_eq!(config.llm.model, "gpt-4o");
+    assert_eq!(config.llm.endpoint.as_deref(), Some("https://api.example.test/v1"));
+    assert_eq!(config.llm.api_key_env.as_deref(), Some("OPENAI_KEY"));
     assert_eq!(config.llm.temperature, 0.7);
     assert_eq!(config.llm.max_output_tokens, 2048);
-
-    // Providers
-    assert_eq!(config.providers.anthropic.api_key_env, "ANTHROPIC_KEY");
-    assert_eq!(config.providers.openai.api_key_env, "OPENAI_KEY");
-    assert_eq!(config.providers.gemini.api_key_env, "GEMINI_KEY");
-    assert_eq!(config.providers.openrouter.api_key_env, "OPENROUTER_KEY");
-    assert_eq!(
-        config.providers.openrouter.base_url,
-        "https://openrouter.ai/api/v1"
-    );
 
     // Context
     assert_eq!(config.context.soft_compaction_threshold, 0.50);
@@ -294,7 +276,7 @@ fn test_parse_partial_config() {
 name = "partial"
 
 [llm]
-provider = "openai"
+model = "gpt-4o"
 "#,
     )
     .unwrap();
@@ -302,7 +284,7 @@ provider = "openai"
     let config = AppConfig::from_file(&path).unwrap();
 
     assert_eq!(config.agent.name, "partial");
-    assert_eq!(config.llm.provider, "openai");
+    assert_eq!(config.llm.model, "gpt-4o");
 
     // Unspecified fields should be defaults
     assert_eq!(config.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
