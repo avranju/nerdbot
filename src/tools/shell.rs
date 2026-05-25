@@ -176,15 +176,13 @@ impl Tool for ShellExecute {
             .get("timeout_seconds")
             .and_then(|v| v.as_u64())
             .unwrap_or(self.config.timeout_secs)
-            .max(1)
-            .min(300);
+            .clamp(1, 300);
 
         let max_output_bytes: usize = args
             .get("max_output_bytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(self.config.max_output_bytes as u64)
-            .max(1024)
-            .min(10_485_760) as usize;
+            .clamp(1024, 10_485_760) as usize;
 
         // Resolve working directory within sandbox
         let sandbox = WorkspaceSandbox::new(
