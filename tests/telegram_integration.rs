@@ -21,6 +21,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use nerdbot::config::AppConfig;
+use nerdbot::context::budget::ContextBudget;
+use nerdbot::context::compaction_service::CompactionService;
+use nerdbot::context::compaction_worker::CompactionWorker;
 use nerdbot::error::AgentError;
 use nerdbot::llm::LlmExecutor;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
@@ -280,6 +283,14 @@ fn make_test_config() -> AppConfig {
     AppConfig::default()
 }
 
+fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
+    Arc::new(CompactionService::new(
+        pool,
+        Arc::new(CompactionWorker::new()),
+        ContextBudget::default(),
+    ))
+}
+
 fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
@@ -288,8 +299,16 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
             "Hello from the agent loop!",
         )]));
+    let compaction_service = make_compaction_service(pool.clone());
 
-    MessageHandler::new(pool, provider, Arc::new(registry), make_test_config(), None)
+    MessageHandler::new(
+        pool,
+        provider,
+        Arc::new(registry),
+        make_test_config(),
+        None,
+        compaction_service,
+    )
 }
 
 #[tokio::test]
@@ -442,7 +461,15 @@ async fn test_message_handler_allowlist_blocks_chat() {
             "should not be reached",
         )]));
 
-    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config, None);
+    let compaction_service = make_compaction_service(pool.clone());
+    let handler = MessageHandler::new(
+        pool,
+        provider,
+        Arc::new(registry),
+        config,
+        None,
+        compaction_service,
+    );
 
     // Chat 200 is not in the allowlist
     let result = handler.handle_message(200, 200, "blocked").await;
@@ -465,7 +492,15 @@ async fn test_message_handler_allowlist_blocks_user() {
             "should not be reached",
         )]));
 
-    let handler = MessageHandler::new(pool, provider, Arc::new(registry), config, None);
+    let compaction_service = make_compaction_service(pool.clone());
+    let handler = MessageHandler::new(
+        pool,
+        provider,
+        Arc::new(registry),
+        config,
+        None,
+        compaction_service,
+    );
 
     // User 200 is not in the allowlist
     let result = handler.handle_message(1, 200, "blocked").await;

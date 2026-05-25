@@ -64,11 +64,11 @@ src/
 
   context/
     mod.rs
-    budget.rs      — ContextBudget: token budgeting
-    manager.rs     — ContextManager: builds bounded model input
-    summaries.rs   — Context summary storage/retrieval
-    compaction_service.rs — Monitors session pressure, triggers async compaction
-    compaction_worker.rs  — Loads history, calls compaction model, persists summary
+    budget.rs      — ContextBudget: token budgeting (soft/hard thresholds, usable budget)
+    manager.rs     — ContextManager: bounded context assembly (summary + recent messages)
+    summaries.rs   — ContextSummary struct + CRUD via storage layer
+    compaction_service.rs — Monitors session pressure, triggers async compaction with per-session state tracking
+    compaction_worker.rs  — Loads old history, calls LLM to produce structured summary, persists it
 
   storage/
     mod.rs
@@ -98,10 +98,11 @@ migrations/        — SQLx migrations (00000000000001_init.sql)
 1. Long polling receives update
 2. MessageHandler checks allowlist (chat_id + user_id)
 3. Ensures chat session exists (creates if new)
-4. Persists user message
-5. Routes: if `/command` → CommandHandler, else → agent loop
-6. Agent loop: loads recent messages + personality → iterative tool loop → final text
-7. Persists assistant reply → sends to Telegram
+4. Routes: if `/command` → CommandHandler, else → agent loop
+5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once
+6. Agent loop: personality + bounded context → iterative tool loop → final text (with token tracking from genai response)
+7. Persists current user message and assistant reply → sends to Telegram
+8. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job
@@ -111,10 +112,11 @@ migrations/        — SQLx migrations (00000000000001_init.sql)
 5. If notify_on_completion and model didn't send a message, harness sends final text
 
 **Context compaction (background):**
-- Soft threshold (default 60%) → enqueue async compaction
-- Hard threshold (default 85%) → fallback: use summary + fewer recent turns
-- Compaction worker produces structured summary with covers_through_message_id
-- Future context = latest summary + raw messages after boundary
+- After each successful agent run, handler checks if total_tokens > soft_threshold
+- If above threshold: calls CompactionService, which tracks per-session state (Idle/Running/RunningAndDirty) and prevents concurrent compactions
+- CompactionService runs CompactionWorker asynchronously with the configured compactor model when `[context.compactor].model` is set, otherwise deterministic fallback summary is used
+- CompactionWorker loads messages after the latest summary boundary, combines them with the existing summary, and persists a new structured summary with updated covers_through_message_id
+- Hard threshold (default 85%): ContextManager bounds messages to fit budget
 
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo
@@ -136,6 +138,18 @@ migrations/        — SQLx migrations (00000000000001_init.sql)
 - `[scheduler]` — run_overdue_one_shots_on_startup
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs
 - `[exa]` — api_key_env, max_results, max_text_chars
+
+### Phase Implementation Status
+- **Phase 1** (Architecture Skeleton) — ✅ Complete
+- **Phase 2** (Minimal Agent Loop with Fake Provider) — ✅ Complete
+- **Phase 3** (Configuration and Storage) — ✅ Complete
+- **Phase 4** (Telegram Integration) — ✅ Complete
+- **Phase 5** (Scheduler) — ✅ Complete
+- **Phase 6** (Messaging Tool) — ✅ Complete
+- **Phase 7** (Real Providers) — ✅ Complete (via genai crate)
+- **Phase 8** (File and Web Tools) — ✅ Complete
+- **Phase 9** (Context Management and Compaction) — ✅ Complete
+- **Phase 10** (Docker and Documentation) — In progress
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,

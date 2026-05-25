@@ -3,14 +3,13 @@
 //! This is the glue between Telegram ingress and the agent runtime:
 //! 1. Check allowlist
 //! 2. Find or create chat session
-//! 3. Persist incoming message
-//! 4. Route: command handler vs agent loop
-//! 5. Persist outgoing message
-//! 6. Return response text for the Telegram service to deliver
+//! 3. Route: command handler vs agent loop
+//! 4. Persist incoming and outgoing messages
+//! 5. Return response text for the Telegram service to deliver
 
 use std::sync::Arc;
 
-use genai::chat::{ChatMessage, ChatRole, MessageContent};
+use genai::chat::{ChatMessage, MessageContent};
 use sqlx::SqlitePool;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -18,6 +17,9 @@ use crate::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use crate::agent::outcome::AgentOutcome;
 use crate::agent::run_mode::AgentRunMode;
 use crate::config::AppConfig;
+use crate::context::budget::ContextBudget;
+use crate::context::compaction_service::CompactionService;
+use crate::context::manager::ContextManager;
 use crate::error::AgentError;
 use crate::llm::LlmExecutor;
 use crate::storage;
@@ -35,6 +37,10 @@ pub struct MessageHandler {
     registry: Arc<ToolRegistry>,
     /// Agent loop configuration.
     loop_config: AgentLoopConfig,
+    /// Context manager for bounded context assembly.
+    context_manager: ContextManager,
+    /// Compaction service for background context compaction.
+    compaction_service: Arc<CompactionService>,
     /// Application configuration.
     config: AppConfig,
     /// Cached Telegram bot token from the environment.
@@ -50,6 +56,7 @@ impl MessageHandler {
         registry: Arc<ToolRegistry>,
         config: AppConfig,
         scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
+        compaction_service: Arc<CompactionService>,
     ) -> Self {
         let loop_config = AgentLoopConfig {
             max_tool_iterations: config.agent.max_tool_iterations,
@@ -57,6 +64,18 @@ impl MessageHandler {
             llm_temperature: config.llm.temperature,
             llm_max_output_tokens: config.llm.max_output_tokens,
         };
+
+        // Build the context budget and manager
+        let budget = ContextBudget {
+            context_window_tokens: 128_000,
+            reserved_output_tokens: 4_096,
+            reserved_tool_loop_tokens: 8_192,
+            soft_compaction_threshold: config.context.soft_compaction_threshold,
+            hard_context_threshold: config.context.hard_context_threshold,
+        };
+
+        let context_manager = ContextManager::new(pool.clone(), budget);
+
         let bot_token =
             std::env::var(&config.telegram.bot_token_env).unwrap_or_else(|_| String::new());
         Self {
@@ -64,6 +83,8 @@ impl MessageHandler {
             llm,
             registry,
             loop_config,
+            context_manager,
+            compaction_service,
             config,
             bot_token,
             scheduler_notifier,
@@ -86,18 +107,19 @@ impl MessageHandler {
         // 2. Find or create session
         let session = self.ensure_session(chat_id).await?;
 
-        // 3. Persist the incoming user message
-        let user_message = ChatMessage::user(MessageContent::from_text(text));
-        let _ =
-            storage::messages::create_message(&self.pool, &session.id, &user_message, None).await?;
-
-        // 4. Update session timestamp
+        // 3. Update session timestamp
         storage::sessions::update_session(&self.pool, &session.id).await?;
 
-        // 5. Route: command or agent loop
+        // 4. Route: command or agent loop
         let response = self
             .route_message(chat_id, user_id, text, &session.id)
             .await;
+
+        // 5. Persist the incoming user message after routing so it is not
+        // duplicated in ContextManager's current-turn prompt assembly.
+        let user_message = ChatMessage::user(MessageContent::from_text(text));
+        let _ =
+            storage::messages::create_message(&self.pool, &session.id, &user_message, None).await?;
 
         // 6. Persist response if one was generated
         if let Ok(Some(ref reply_text)) = response {
@@ -201,17 +223,21 @@ impl MessageHandler {
             "running agent loop"
         );
 
-        // Load recent messages for context
-        let recent_messages = self.load_recent_messages(session_id).await?;
-
         // Load personality file if configured
         let personality = self.load_personality().await?;
+
+        // Build bounded context using ContextManager (summary + recent messages)
+        let current_user_message = ChatMessage::user(MessageContent::from_text(text));
+        let messages = self
+            .context_manager
+            .assemble_messages(session_id, &personality, current_user_message)
+            .await?;
 
         // Build agent context
         let ctx = AgentContext {
             run_mode: AgentRunMode::InteractiveReply { chat_id, user_id },
-            personality,
-            messages: recent_messages,
+            personality: String::new(), // Already included in messages
+            messages,
             workspace_root: self.config.workspace.root.clone(),
             telegram_token: self.get_bot_token(),
             allowed_chat_ids: self.config.telegram.allowed_chat_ids.clone(),
@@ -223,6 +249,24 @@ impl MessageHandler {
 
         // Run the agent loop
         let result = run_agent(&ctx, self.llm.as_ref(), &self.registry, &self.loop_config).await;
+
+        // Check if compaction is needed after a successful run
+        if let Ok(ref agent_result) = result
+            && let AgentOutcome::FinalText(_) | AgentOutcome::Silent = agent_result.outcome
+        {
+            let total_tokens = agent_result.metadata.token_usage.total_tokens;
+            if total_tokens > self.context_manager.soft_threshold_tokens() {
+                debug!(
+                    chat_id,
+                    total_tokens,
+                    soft_threshold = self.context_manager.soft_threshold_tokens(),
+                    "token usage exceeds soft threshold, checking for compaction"
+                );
+                if let Err(e) = self.compaction_service.check_session(session_id).await {
+                    warn!(chat_id, error = %e, "failed to check compaction");
+                }
+            }
+        }
 
         match result {
             Ok(agent_result) => match agent_result.outcome {
@@ -259,24 +303,6 @@ impl MessageHandler {
                 Ok(Some(user_msg))
             }
         }
-    }
-
-    /// Load recent messages for a session to provide as context.
-    async fn load_recent_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError> {
-        let stored = storage::messages::list_messages(&self.pool, session_id, Some(100)).await?;
-
-        // Convert stored messages to typed messages, in chronological order
-        let messages: Vec<ChatMessage> = stored
-            .into_iter()
-            .rev() // list_messages returns DESC, we need ASC
-            .filter_map(|sm| sm.to_message().ok())
-            .filter(|m| {
-                // Skip system messages (they'll be added by the agent loop)
-                !matches!(m.role, ChatRole::System)
-            })
-            .collect();
-
-        Ok(messages)
     }
 
     /// Load personality from the configured Markdown file.

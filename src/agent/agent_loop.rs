@@ -41,9 +41,12 @@ impl Default for AgentLoopConfig {
 
 /// Run the agent loop for a single turn.
 ///
-/// 1. Build the initial request from context.
-/// 2. Loop: send request to provider, execute tool calls, repeat.
-/// 3. Return final text or an error.
+/// The messages parameter should already be assembled by [`crate::context::manager::ContextManager`]
+/// with bounded context (summary + recent messages). This function appends
+/// personality as system message (if not already present) and tool specs.
+///
+/// 1. Loop: send request to provider, execute tool calls, repeat.
+/// 2. Return final text or an error.
 #[instrument(skip(ctx, executor, registry, config), fields(run_mode = ?ctx.run_mode))]
 pub async fn run_agent(
     ctx: &AgentContext,
@@ -51,8 +54,11 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
-    // Build the initial message set: personality as system message + user messages.
     let mut working_messages = ctx.messages.clone();
+
+    // Append personality as system message if not already present.
+    // ContextManager may have already included a summary as system message;
+    // personality is prepended before that.
     if !ctx.personality.is_empty()
         && !working_messages
             .iter()
@@ -94,7 +100,7 @@ pub async fn run_agent(
             .complete(&config.llm_model, request, chat_options)
             .await?;
 
-        // Track token usage from response
+        // Track token usage from genai response
         if let Some(input) = response.usage.prompt_tokens {
             total_input_tokens += input.max(0) as usize;
         }
@@ -133,6 +139,7 @@ pub async fn run_agent(
                             token_usage: RunTokenUsage {
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
+                                total_tokens: total_input_tokens + total_output_tokens,
                             },
                         },
                     });
@@ -151,6 +158,7 @@ pub async fn run_agent(
                             token_usage: RunTokenUsage {
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
+                                total_tokens: total_input_tokens + total_output_tokens,
                             },
                         },
                     });

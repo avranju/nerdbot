@@ -181,6 +181,36 @@ async fn main() {
         }
     };
 
+    // Initialize compaction service.
+    let compaction_budget = context::budget::ContextBudget {
+        context_window_tokens: 128_000,
+        reserved_output_tokens: 4_096,
+        reserved_tool_loop_tokens: 8_192,
+        soft_compaction_threshold: config.context.soft_compaction_threshold,
+        hard_context_threshold: config.context.hard_context_threshold,
+    };
+
+    let compaction_worker = {
+        let compaction_model = config.context.compactor.model.clone();
+        if !compaction_model.is_empty() {
+            // Use the configured compactor model via the main LLM client.
+            context::compaction_worker::CompactionWorker::with_llm(
+                llm.clone(),
+                compaction_model,
+                config.llm.temperature,
+            )
+        } else {
+            // No compactor model configured — use deterministic fallback compaction.
+            context::compaction_worker::CompactionWorker::new()
+        }
+    };
+
+    let compaction_service = Arc::new(context::compaction_service::CompactionService::new(
+        db.pool().clone(),
+        Arc::new(compaction_worker),
+        compaction_budget,
+    ));
+
     let bot = Arc::new(bot);
     let service = telegram::TelegramService::new(bot.clone());
 
@@ -205,6 +235,7 @@ async fn main() {
         registry,
         config.clone(),
         Some(scheduler.notifier()),
+        compaction_service,
     ));
 
     // Start scheduler

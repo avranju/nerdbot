@@ -179,11 +179,13 @@ fn test_run_metadata_with_values() {
         token_usage: RunTokenUsage {
             input_tokens: 100,
             output_tokens: 50,
+            total_tokens: 150,
         },
     };
     assert_eq!(metadata.iterations, 3);
     assert_eq!(metadata.token_usage.input_tokens, 100);
     assert_eq!(metadata.token_usage.output_tokens, 50);
+    assert_eq!(metadata.token_usage.total_tokens, 150);
 }
 
 // ── AgentResult ──────────────────────────────────────────────────────────

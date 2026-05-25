@@ -18,6 +18,8 @@ pub struct RunTokenUsage {
     pub input_tokens: usize,
     /// Total output tokens produced.
     pub output_tokens: usize,
+    /// Total tokens (input + output).
+    pub total_tokens: usize,
 }
 
 /// Metadata about a completed run.
