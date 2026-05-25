@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub context: ContextConfig,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    #[serde(default)]
+    pub shell: ShellConfig,
 }
 
 /// Agent-specific configuration.
@@ -194,6 +196,34 @@ pub struct SchedulerConfig {
     pub run_overdue_one_shots_on_startup: bool,
 }
 
+/// Shell execution configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ShellConfig {
+    /// Allowed commands (empty means allow all). Commands not in this list are blocked.
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
+    /// Denied commands that are always blocked, regardless of allowlist.
+    #[serde(default = "default_shell_denied_commands")]
+    pub denied_commands: Vec<String>,
+    /// Maximum output size in bytes.
+    #[serde(default = "default_shell_max_output_bytes")]
+    pub max_output_bytes: usize,
+    /// Command execution timeout in seconds.
+    #[serde(default = "default_shell_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            allowed_commands: Vec::new(),
+            denied_commands: default_shell_denied_commands(),
+            max_output_bytes: default_shell_max_output_bytes(),
+            timeout_secs: default_shell_timeout_secs(),
+        }
+    }
+}
+
 // Default functions for serde defaults
 
 fn default_agent_name() -> String {
@@ -236,6 +266,26 @@ fn default_hard_context_threshold() -> f32 {
     0.85
 }
 fn default_recent_turns_to_preserve() -> usize {
+    30
+}
+fn default_shell_allowed_commands() -> Vec<String> {
+    Vec::new()
+}
+fn default_shell_denied_commands() -> Vec<String> {
+    vec![
+        "rm".into(),
+        "chmod".into(),
+        "chown".into(),
+        "mkfs".into(),
+        "dd".into(),
+        "wget".into(),
+        "curl".into(),
+    ]
+}
+fn default_shell_max_output_bytes() -> usize {
+    1_048_576 // 1 MB
+}
+fn default_shell_timeout_secs() -> u64 {
     30
 }
 impl AppConfig {

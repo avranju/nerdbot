@@ -3,6 +3,7 @@
 pub mod calculator;
 pub mod echo;
 pub mod registry;
+pub mod shell;
 pub mod traits;
 
 // Built-in tool modules (skeleton, implementations in later phases)

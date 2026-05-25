@@ -132,6 +132,14 @@ async fn main() {
     registry.register(tools::files::ListDirectory);
     registry.register(tools::web::WebSearch);
     registry.register(tools::web::WebFetch);
+    registry.register(tools::shell::ShellExecute::new(
+        tools::shell::ShellConfig {
+            allowed_commands: config.shell.allowed_commands.clone(),
+            denied_commands: config.shell.denied_commands.clone(),
+            max_output_bytes: config.shell.max_output_bytes,
+            timeout_secs: config.shell.timeout_secs,
+        },
+    ));
     let registry = Arc::new(registry);
 
     // Create the LLM client via genai
