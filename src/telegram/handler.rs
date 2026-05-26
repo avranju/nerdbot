@@ -66,13 +66,7 @@ impl MessageHandler {
         };
 
         // Build the context budget and manager
-        let budget = ContextBudget {
-            context_window_tokens: 128_000,
-            reserved_output_tokens: 4_096,
-            reserved_tool_loop_tokens: 8_192,
-            soft_compaction_threshold: config.context.soft_compaction_threshold,
-            hard_context_threshold: config.context.hard_context_threshold,
-        };
+        let budget = ContextBudget::from_llm_and_context(&config.llm, &config.context);
 
         let context_manager = ContextManager::new(pool.clone(), budget);
 

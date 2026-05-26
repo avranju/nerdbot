@@ -49,12 +49,16 @@ model = "gpt-4o"
 # api_key_env = "MY_CUSTOM_API_KEY"
 temperature = 0.2
 max_output_tokens = 4096
+# Context window size in tokens (model-specific).
+# context_window_tokens = 128000
 
 # ── Context Management ────────────────────────────────────────────
 [context]
 soft_compaction_threshold = 0.60
 hard_context_threshold = 0.85
 recent_turns_to_preserve = 30
+# Tokens reserved for tool-loop headroom (iterative tool calls).
+# reserved_tool_loop_tokens = 8192
 
 # Optional: use a cheaper model for background compaction.
 # If omitted, deterministic fallback summaries are used.

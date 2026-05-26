@@ -147,6 +147,9 @@ pub struct LlmConfig {
     /// Maximum output tokens.
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    /// Total context window size in tokens (model-specific).
+    #[serde(default = "default_context_window_tokens")]
+    pub context_window_tokens: usize,
 }
 
 impl Default for LlmConfig {
@@ -157,6 +160,7 @@ impl Default for LlmConfig {
             api_key_env: None,
             temperature: default_temperature(),
             max_output_tokens: default_max_output_tokens(),
+            context_window_tokens: default_context_window_tokens(),
         }
     }
 }
@@ -170,6 +174,9 @@ pub struct ContextConfig {
     pub hard_context_threshold: f32,
     #[serde(default = "default_recent_turns_to_preserve")]
     pub recent_turns_to_preserve: usize,
+    /// Tokens reserved for tool-loop headroom (iterative tool calls).
+    #[serde(default = "default_reserved_tool_loop_tokens")]
+    pub reserved_tool_loop_tokens: usize,
     #[serde(default)]
     pub compactor: CompactorConfig,
 }
@@ -180,6 +187,7 @@ impl Default for ContextConfig {
             soft_compaction_threshold: default_soft_compaction_threshold(),
             hard_context_threshold: default_hard_context_threshold(),
             recent_turns_to_preserve: default_recent_turns_to_preserve(),
+            reserved_tool_loop_tokens: default_reserved_tool_loop_tokens(),
             compactor: CompactorConfig::default(),
         }
     }
@@ -328,6 +336,9 @@ fn default_temperature() -> f32 {
 fn default_max_output_tokens() -> u32 {
     4096
 }
+fn default_context_window_tokens() -> usize {
+    128_000
+}
 fn default_soft_compaction_threshold() -> f32 {
     0.60
 }
@@ -336,6 +347,9 @@ fn default_hard_context_threshold() -> f32 {
 }
 fn default_recent_turns_to_preserve() -> usize {
     30
+}
+fn default_reserved_tool_loop_tokens() -> usize {
+    8_192
 }
 fn default_files_max_read_bytes() -> usize {
     262_144

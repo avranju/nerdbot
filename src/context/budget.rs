@@ -4,22 +4,39 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{ContextConfig, LlmConfig};
+
 /// Configuration for context budgeting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBudget {
-    /// Total context window size in tokens.
-    pub context_window_tokens: usize,
-    /// Tokens reserved for model output.
-    pub reserved_output_tokens: usize,
     /// Tokens reserved for tool-loop headroom.
     pub reserved_tool_loop_tokens: usize,
     /// Soft compaction threshold (fraction of usable budget).
     pub soft_compaction_threshold: f32,
     /// Hard context threshold (fraction of usable budget).
     pub hard_context_threshold: f32,
+    /// Total context window size in tokens (from LlmConfig).
+    pub context_window_tokens: usize,
+    /// Tokens reserved for model output (from LlmConfig::max_output_tokens).
+    pub reserved_output_tokens: usize,
 }
 
 impl ContextBudget {
+    /// Build a budget from LLM and context configuration.
+    ///
+    /// Derives `context_window_tokens` from `llm.context_window_tokens`,
+    /// `reserved_output_tokens` from `llm.max_output_tokens`, and
+    /// `reserved_tool_loop_tokens` from `context.reserved_tool_loop_tokens`.
+    pub fn from_llm_and_context(llm: &LlmConfig, context: &ContextConfig) -> Self {
+        Self {
+            context_window_tokens: llm.context_window_tokens,
+            reserved_output_tokens: llm.max_output_tokens as usize,
+            reserved_tool_loop_tokens: context.reserved_tool_loop_tokens,
+            soft_compaction_threshold: context.soft_compaction_threshold,
+            hard_context_threshold: context.hard_context_threshold,
+        }
+    }
+
     /// Calculate the usable input budget.
     pub fn usable_input_budget(&self) -> usize {
         self.context_window_tokens - self.reserved_output_tokens - self.reserved_tool_loop_tokens

@@ -104,6 +104,12 @@ fn test_default_config_llm_max_output_tokens() {
 }
 
 #[test]
+fn test_default_config_llm_context_window_tokens() {
+    let config = AppConfig::default();
+    assert_eq!(config.llm.context_window_tokens, 128_000);
+}
+
+#[test]
 fn test_default_config_exa() {
     let config = AppConfig::default();
     assert_eq!(config.exa.api_key_env, "EXA_API_KEY");
@@ -127,6 +133,12 @@ fn test_default_config_compaction_hard_threshold() {
 fn test_default_config_recent_turns_to_preserve() {
     let config = AppConfig::default();
     assert_eq!(config.context.recent_turns_to_preserve, 30);
+}
+
+#[test]
+fn test_default_config_reserved_tool_loop_tokens() {
+    let config = AppConfig::default();
+    assert_eq!(config.context.reserved_tool_loop_tokens, 8_192);
 }
 
 #[test]
@@ -163,12 +175,14 @@ endpoint = "https://api.example.test/v1"
 api_key_env = "OPENAI_KEY"
 temperature = 0.7
 max_output_tokens = 2048
+context_window_tokens = 65536
 
 
 [context]
 soft_compaction_threshold = 0.50
 hard_context_threshold = 0.80
 recent_turns_to_preserve = 20
+reserved_tool_loop_tokens = 4096
 
 [context.compactor]
 provider = "anthropic"
@@ -226,11 +240,13 @@ fn test_parse_full_config() {
     assert_eq!(config.llm.api_key_env.as_deref(), Some("OPENAI_KEY"));
     assert_eq!(config.llm.temperature, 0.7);
     assert_eq!(config.llm.max_output_tokens, 2048);
+    assert_eq!(config.llm.context_window_tokens, 65_536);
 
     // Context
     assert_eq!(config.context.soft_compaction_threshold, 0.50);
     assert_eq!(config.context.hard_context_threshold, 0.80);
     assert_eq!(config.context.recent_turns_to_preserve, 20);
+    assert_eq!(config.context.reserved_tool_loop_tokens, 4_096);
     assert_eq!(config.context.compactor.provider, "anthropic");
     assert_eq!(config.context.compactor.model, "claude-haiku");
 

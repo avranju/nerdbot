@@ -23,6 +23,27 @@ fn test_default_budget() {
     assert_eq!(budget.reserved_tool_loop_tokens, 8_192);
     assert_eq!(budget.soft_compaction_threshold, 0.60);
     assert_eq!(budget.hard_context_threshold, 0.85);
+
+    // Verify constructor derives values from config
+    let llm = nerdbot::config::LlmConfig {
+        model: "gpt-4o".into(),
+        endpoint: None,
+        api_key_env: None,
+        temperature: 0.2,
+        max_output_tokens: 4096,
+        context_window_tokens: 128_000,
+    };
+    let ctx = nerdbot::config::ContextConfig {
+        soft_compaction_threshold: 0.60,
+        hard_context_threshold: 0.85,
+        recent_turns_to_preserve: 30,
+        reserved_tool_loop_tokens: 8_192,
+        compactor: nerdbot::config::CompactorConfig::default(),
+    };
+    let budget_from_config = ContextBudget::from_llm_and_context(&llm, &ctx);
+    assert_eq!(budget_from_config.context_window_tokens, 128_000);
+    assert_eq!(budget_from_config.reserved_output_tokens, 4_096);
+    assert_eq!(budget_from_config.reserved_tool_loop_tokens, 8_192);
 }
 
 #[test]
@@ -30,9 +51,9 @@ fn test_usable_input_budget() {
     let budget = ContextBudget {
         context_window_tokens: 100_000,
         reserved_output_tokens: 2_000,
-        reserved_tool_loop_tokens: 3_000,
         soft_compaction_threshold: 0.5,
         hard_context_threshold: 0.8,
+        reserved_tool_loop_tokens: 3_000,
     };
     assert_eq!(budget.usable_input_budget(), 95_000);
 }
@@ -42,9 +63,9 @@ fn test_usable_budget_with_zero_reservations() {
     let budget = ContextBudget {
         context_window_tokens: 50_000,
         reserved_output_tokens: 0,
-        reserved_tool_loop_tokens: 0,
         soft_compaction_threshold: 0.5,
         hard_context_threshold: 0.8,
+        reserved_tool_loop_tokens: 0,
     };
     assert_eq!(budget.usable_input_budget(), 50_000);
 }
@@ -54,9 +75,9 @@ fn test_soft_threshold_tokens() {
     let budget = ContextBudget {
         context_window_tokens: 100_000,
         reserved_output_tokens: 0,
-        reserved_tool_loop_tokens: 0,
         soft_compaction_threshold: 0.5,
         hard_context_threshold: 0.8,
+        reserved_tool_loop_tokens: 0,
     };
     assert_eq!(budget.soft_threshold_tokens(), 50_000);
 }
@@ -66,9 +87,9 @@ fn test_hard_threshold_tokens() {
     let budget = ContextBudget {
         context_window_tokens: 100_000,
         reserved_output_tokens: 0,
-        reserved_tool_loop_tokens: 0,
         soft_compaction_threshold: 0.5,
         hard_context_threshold: 0.8,
+        reserved_tool_loop_tokens: 0,
     };
     assert_eq!(budget.hard_threshold_tokens(), 80_000);
 }
@@ -78,9 +99,9 @@ fn test_thresholds_respect_reservations() {
     let budget = ContextBudget {
         context_window_tokens: 100_000,
         reserved_output_tokens: 10_000,
-        reserved_tool_loop_tokens: 5_000,
         soft_compaction_threshold: 0.5,
         hard_context_threshold: 0.75,
+        reserved_tool_loop_tokens: 5_000,
     };
     // usable = 100_000 - 10_000 - 5_000 = 85_000
     // soft = 85_000 * 0.5 = 42_500
@@ -106,9 +127,9 @@ fn test_budget_custom_values() {
     let budget = ContextBudget {
         context_window_tokens: 8_192,
         reserved_output_tokens: 512,
-        reserved_tool_loop_tokens: 1_024,
         soft_compaction_threshold: 0.6,
         hard_context_threshold: 0.8,
+        reserved_tool_loop_tokens: 1_024,
     };
     assert_eq!(budget.usable_input_budget(), 6_656);
     assert_eq!(budget.soft_threshold_tokens(), 3_993);
@@ -121,6 +142,10 @@ fn test_budget_clone() {
     let cloned = budget.clone();
     assert_eq!(budget.context_window_tokens, cloned.context_window_tokens);
     assert_eq!(budget.reserved_output_tokens, cloned.reserved_output_tokens);
+    assert_eq!(
+        budget.reserved_tool_loop_tokens,
+        cloned.reserved_tool_loop_tokens
+    );
     assert_eq!(
         budget.soft_compaction_threshold,
         cloned.soft_compaction_threshold
@@ -324,9 +349,9 @@ fn small_budget(context_window_tokens: usize, soft_compaction_threshold: f32) ->
     ContextBudget {
         context_window_tokens,
         reserved_output_tokens: 0,
-        reserved_tool_loop_tokens: 0,
         soft_compaction_threshold,
         hard_context_threshold: 0.9,
+        reserved_tool_loop_tokens: 0,
     }
 }
 
