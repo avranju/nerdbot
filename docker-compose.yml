@@ -1,0 +1,20 @@
+services:
+  nerdbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nerdbot
+    restart: unless-stopped
+    volumes:
+      - ./config:/config:ro
+      - nerdbot-data:/data
+      - ./workspace:/workspace
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}  # needed for default gpt-4o model
+      - EXA_API_KEY=${EXA_API_KEY:-}
+      - RUST_LOG=info
+
+volumes:
+  nerdbot-data:
+    driver: local

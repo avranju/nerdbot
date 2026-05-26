@@ -23,7 +23,7 @@ executes them → results fed back → repeat) → Telegram reply.
 src/
   main.rs          — CLI entry, long polling loop, service wiring
   lib.rs           — Crate root, re-exports all modules for tests
-  config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/exa sections)
+  config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   error.rs         — AgentError enum + domain-specific error types
 
   agent/
@@ -90,6 +90,11 @@ src/
 tests/             — Integration tests (agent_loop, storage, scheduler, telegram, workspace, context, tools, access_control, config)
 docs/              — System design document and other docs
 migrations/        — SQLx migrations (00000000000001_init.sql)
+Dockerfile         — Multi-stage Docker build (builder → runtime)
+docker-compose.yml — Example Docker Compose setup
+config.toml.example — Annotated example configuration
+personality.md.example — Example personality/system prompt
+README.md          — Project documentation
 ```
 
 ### Runtime Flows
@@ -133,6 +138,7 @@ migrations/        — SQLx migrations (00000000000001_init.sql)
 - `[telegram]` — bot_token_env, allowed_chat_ids, allowed_user_ids
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
+- `[files]` — max_read_bytes, max_write_bytes
 - `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens
 - `[context]` — soft/hard thresholds, recent_turns_to_preserve, compactor provider/model
 - `[scheduler]` — run_overdue_one_shots_on_startup
@@ -149,7 +155,15 @@ migrations/        — SQLx migrations (00000000000001_init.sql)
 - **Phase 7** (Real Providers) — ✅ Complete (via genai crate)
 - **Phase 8** (File and Web Tools) — ✅ Complete
 - **Phase 9** (Context Management and Compaction) — ✅ Complete
-- **Phase 10** (Docker and Documentation) — In progress
+- **Phase 10** (Docker and Documentation) — ✅ Complete
+
+### Docker Packaging
+- **Dockerfile** — multi-stage build: `rust:1.89-slim` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
+- **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets
+- Entrypoint: `nerdbot --config /config/config.toml`
+- **config.toml.example** — annotated example configuration covering all sections
+- **personality.md.example** — example personality/system prompt file
+- **README.md** — comprehensive project documentation (features, quick start, config reference, architecture, deployment)
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,

@@ -1,0 +1,55 @@
+# ── NerdBot Local Development Configuration ───────────────────────
+# Use this file for local development (not Docker).
+# Run: cargo run -- --config config.toml.localdev
+
+# ── Agent ─────────────────────────────────────────────────────────
+[agent]
+name = "nerdbot"
+personality_file = "./personality.md"
+max_tool_iterations = 10
+default_timezone = "UTC"
+
+# ── Telegram ──────────────────────────────────────────────────────
+[telegram]
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allowed_chat_ids = []
+allowed_user_ids = []
+
+# ── Storage ───────────────────────────────────────────────────────
+[storage]
+sqlite_path = "./agent.db"
+
+# ── Workspace (file tool sandbox root) ────────────────────────────
+[workspace]
+root = "./workspace"
+max_read_bytes = 262144
+max_write_bytes = 262144
+
+# ── LLM ───────────────────────────────────────────────────────────
+[llm]
+model = "gpt-4o"
+temperature = 0.2
+max_output_tokens = 4096
+
+# ── Context Management ────────────────────────────────────────────
+[context]
+soft_compaction_threshold = 0.60
+hard_context_threshold = 0.85
+recent_turns_to_preserve = 30
+
+# ── Scheduler ─────────────────────────────────────────────────────
+[scheduler]
+run_overdue_one_shots_on_startup = false
+
+# ── Shell Execution ───────────────────────────────────────────────
+[shell]
+allowed_commands = []
+denied_commands = ["rm", "chmod", "chown", "mkfs", "dd", "wget", "curl"]
+max_output_bytes = 1048576
+timeout_secs = 30
+
+# ── Exa Web Search ────────────────────────────────────────────────
+[exa]
+api_key_env = "EXA_API_KEY"
+max_results = 5
+max_text_chars = 8000

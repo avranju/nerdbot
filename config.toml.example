@@ -1,0 +1,82 @@
+# ── NerdBot Configuration ─────────────────────────────────────────
+# Copy this file to config.toml and adjust for your environment.
+# Secrets (API keys) are read from environment variables, not from
+# this file.  Set TELEGRAM_BOT_TOKEN and any provider keys before
+# starting the bot.
+
+# ── Agent ─────────────────────────────────────────────────────────
+[agent]
+name = "nerdbot"
+personality_file = "/config/personality.md"
+max_tool_iterations = 10
+default_timezone = "UTC"
+
+# ── Telegram ──────────────────────────────────────────────────────
+[telegram]
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+# Allowed Telegram chat IDs (private chats, groups).
+# Leave empty to allow all chats (development mode).
+allowed_chat_ids = []
+# Allowed Telegram user IDs.
+# Leave empty to allow all users (development mode).
+allowed_user_ids = []
+
+# ── Storage ───────────────────────────────────────────────────────
+[storage]
+sqlite_path = "/data/agent.db"
+
+# ── Workspace (file tool sandbox root) ────────────────────────────
+[workspace]
+root = "/workspace"
+max_read_bytes = 262144
+max_write_bytes = 262144
+
+# ── File I/O Tool ─────────────────────────────────────────────────
+# Separate from [workspace] — controls the file tool's own limits.
+[files]
+max_read_bytes = 262144
+max_write_bytes = 262144
+
+# ── LLM ───────────────────────────────────────────────────────────
+[llm]
+# Model name — genai resolves the provider from the prefix.
+# Examples: "gpt-4o" (OpenAI), "claude-sonnet-4-5" (Anthropic),
+#           "gemini-2.5-flash" (Gemini), "open_router::anthropic/claude-sonnet-4-5" (OpenRouter).
+model = "gpt-4o"
+# Optional: custom endpoint (for OpenAI-compatible APIs).
+# endpoint = "http://localhost:8080/v1"
+# Optional: environment variable name for the API key.
+# api_key_env = "MY_CUSTOM_API_KEY"
+temperature = 0.2
+max_output_tokens = 4096
+
+# ── Context Management ────────────────────────────────────────────
+[context]
+soft_compaction_threshold = 0.60
+hard_context_threshold = 0.85
+recent_turns_to_preserve = 30
+
+# Optional: use a cheaper model for background compaction.
+# If omitted, deterministic fallback summaries are used.
+# [context.compactor]
+# provider = "anthropic"
+# model = "claude-haiku-3-5"
+
+# ── Scheduler ─────────────────────────────────────────────────────
+[scheduler]
+run_overdue_one_shots_on_startup = false
+
+# ── Shell Execution ───────────────────────────────────────────────
+[shell]
+# Allowed commands (empty = allow all). Commands not listed are blocked.
+allowed_commands = []
+# Always-denied commands.
+denied_commands = ["rm", "chmod", "chown", "mkfs", "dd", "wget", "curl"]
+max_output_bytes = 1048576
+timeout_secs = 30
+
+# ── Exa Web Search ────────────────────────────────────────────────
+[exa]
+api_key_env = "EXA_API_KEY"
+max_results = 5
+max_text_chars = 8000

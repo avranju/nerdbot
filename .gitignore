@@ -1,2 +1,18 @@
 /target
 .antigravitycli/
+
+# Environment files (may contain secrets)
+.env
+.env.*
+
+# Config and data volumes (may contain secrets or DB files)
+config/
+data/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite-journal
+
+# Log files
+*.log
