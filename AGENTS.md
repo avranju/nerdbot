@@ -58,7 +58,7 @@ src/
     echo.rs        — Echo/debug tool
     files.rs       — read_file, write_file, append_file, list_directory
     schedule.rs    — schedule_job, list_jobs, delete_job, run_job_now
-    shell.rs       — ShellExecute (sandboxed command execution)
+    shell.rs       — ShellExecute (bubblewrap-sandboxed command execution with namespace isolation)
     telegram.rs    — SendTelegramMessage tool
     web.rs         — WebSearch (Exa) + WebFetch tools
 
@@ -131,7 +131,7 @@ README.md          — Project documentation
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search
 - `web_fetch` — Fetch URL content with SSRF protection
-- `shell_execute` — Sandboxed command execution
+- `shell_execute` — Sandboxed command execution with optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). Configurable via `sandbox_mode`: `none` (direct exec), `bwrap` (full namespace isolation), `bwrap-strict` (reserved for future resource limits).
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
@@ -142,7 +142,7 @@ README.md          — Project documentation
 - `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens
 - `[context]` — soft/hard thresholds, recent_turns_to_preserve, compactor provider/model
 - `[scheduler]` — run_overdue_one_shots_on_startup
-- `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs
+- `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`)
 - `[exa]` — api_key_env, max_results, max_text_chars
 
 ### Phase Implementation Status
@@ -156,6 +156,7 @@ README.md          — Project documentation
 - **Phase 8** (File and Web Tools) — ✅ Complete
 - **Phase 9** (Context Management and Compaction) — ✅ Complete
 - **Phase 10** (Docker and Documentation) — ✅ Complete
+- **Phase 11** (Bubblewrap Shell Sandbox) — ✅ Complete (namespace isolation for shell_execute)
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.89-slim` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
@@ -170,6 +171,17 @@ README.md          — Project documentation
 Telegram, Storage, Config, MaxToolIterationsExceeded, Context, Scheduler, WebSearch,
 WebFetch, FileIo, SandboxViolation, TokenEstimation, Compaction, PermissionDenied,
 Timeout, Generic.
+
+### Bubblewrap Sandbox — Known Limitations
+- **AppArmor on Ubuntu 24.04+**: The default AppArmor policy blocks unprivileged
+  user namespace creation. Workaround: set `kernel.apparmor_restrict_unprivileged_userns=0`
+  via sysctl or GRUB. This is a well-known issue affecting Flatpak, Podman, and
+  OpenAI Codex as well.
+- **Linux-only**: Bubblewrap requires user namespaces (Linux-specific).
+- **Kernel version**: User namespaces require kernel 3.8+. Both are widely
+  available on modern systems.
+- **No L7 network filtering**: Bubblewrap provides network namespace isolation
+  (all-or-nothing), not HTTP-level policy. Sufficient for nerdbot's use case.
 
 # Agent Instructions & Standing Rules
 

@@ -85,6 +85,7 @@ Copy `config.toml.example` to `config.toml` and adjust as needed. All secrets ar
 | | `denied_commands` | Always-blocked commands |
 | | `max_output_bytes` | Max shell output size (default: `1048576`) |
 | | `timeout_secs` | Shell command timeout (default: `30`) |
+| | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`) |
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |

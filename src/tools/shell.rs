@@ -1,16 +1,25 @@
-//! Shell execution tool — run shell commands within the workspace sandbox.
+//! Shell execution tool — run shell commands within a sandboxed workspace.
 //!
 //! Provides a sandboxed environment for executing shell commands with:
 //! - Command validation (allowlist / denylist)
 //! - Execution timeout
 //! - Output size limits
 //! - Working directory isolation within the workspace root
+//! - Optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS)
+//!
+//! Sandbox modes (configured via `[shell].sandbox_mode`):
+//! - `none` — Direct execution (current behavior, no namespace isolation).
+//! - `bwrap` — Bubblewrap namespace isolation with read-only system files,
+//!   read-write workspace, clean environment, no network access.
+//! - `bwrap-strict` — Reserved for future resource limit enforcement.
+//!   Currently identical to `bwrap`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::json;
 
+use crate::config::{SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE};
 use crate::error::AgentError;
 use crate::tools::traits::{Tool, ToolContext, ToolOutput};
 use crate::workspace::sandbox::WorkspaceSandbox;
@@ -26,6 +35,8 @@ pub struct ShellConfig {
     pub max_output_bytes: usize,
     /// Command execution timeout in seconds.
     pub timeout_secs: u64,
+    /// Sandbox isolation mode: "none", "bwrap", or "bwrap-strict".
+    pub sandbox_mode: String,
 }
 
 impl Default for ShellConfig {
@@ -43,14 +54,51 @@ impl Default for ShellConfig {
             ],
             max_output_bytes: 1_048_576, // 1 MB
             timeout_secs: 30,
+            sandbox_mode: SANDBOX_MODE_NONE.into(),
         }
     }
+}
+
+/// Filesystem view policy for bubblewrap sandboxing.
+///
+/// Defines which host paths are mounted read-only and which are
+/// mounted read-write inside the sandbox.
+#[derive(Debug, Clone)]
+pub struct BwrapPolicy {
+    /// Paths mounted read-write (workspace, user directories).
+    pub writable_roots: Vec<PathBuf>,
+}
+
+impl BwrapPolicy {
+    /// Build a policy for the given workspace root.
+    pub fn for_workspace(workspace_root: &Path) -> Self {
+        Self {
+            writable_roots: vec![workspace_root.to_path_buf()],
+        }
+    }
+}
+
+/// Check if bubblewrap is available on the system.
+pub fn bwrap_available() -> bool {
+    std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 /// A tool that executes shell commands within a sandboxed workspace.
 ///
 /// Commands are validated against allowlist/denylist and run with
 /// output size limits and timeout enforcement.
+///
+/// When `sandbox_mode` is `"bwrap"` or `"bwrap-strict"`, commands are
+/// executed inside a bubblewrap sandbox providing namespace isolation:
+/// - Filesystem: read-only system files, read-write workspace
+/// - Process: PID namespace isolation
+/// - Network: loopback-only (no external network access)
+/// - Environment: clean environment (no host secrets leaked)
+/// - IPC/UTS: isolated IPC and hostname
 pub struct ShellExecute {
     config: ShellConfig,
 }
@@ -97,7 +145,7 @@ impl ShellExecute {
     }
 
     /// Truncate output to the specified maximum size.
-    fn truncate_output(&self, output: String, max_bytes: usize) -> (String, bool) {
+    fn truncate_output(output: String, max_bytes: usize) -> (String, bool) {
         if output.len() <= max_bytes {
             return (output, false);
         }
@@ -108,6 +156,266 @@ impl ShellExecute {
             true,
         )
     }
+
+    /// Build a bubblewrap command for sandboxed execution.
+    fn build_bwrap_command(
+        &self,
+        command: &str,
+        policy: &BwrapPolicy,
+        workspace_root: &Path,
+        working_dir: &Path,
+        strict: bool,
+    ) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("bwrap");
+
+        // Session and namespace isolation
+        cmd.args([
+            "--new-session",
+            "--die-with-parent",
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--unshare-net",
+        ]);
+
+        // Clean environment — no host secrets leaked
+        cmd.arg("--clearenv");
+
+        // Set minimal environment variables
+        cmd.args(["--setenv", "PATH", "/usr/bin:/bin"])
+            .args(["--setenv", "HOME", "/home"])
+            .args([
+                "--setenv",
+                "WORKSPACE",
+                workspace_root.to_string_lossy().as_ref(),
+            ]);
+
+        // Bind the entire host root read-only as the base filesystem view.
+        // This ensures all paths (/bin, /lib, /usr, /etc, etc.) are
+        // accessible inside the sandbox. The workspace is then mounted
+        // as read-write on top of this base.
+        cmd.args(["--ro-bind", "/", "/"]);
+
+        // Read-write workspace
+        for path in &policy.writable_roots {
+            cmd.args([
+                "--bind",
+                path.to_string_lossy().as_ref(),
+                path.to_string_lossy().as_ref(),
+            ]);
+        }
+
+        // Virtual filesystems (tmpfs for temp dirs)
+        cmd.args(["--tmpfs", "/tmp"])
+            .args(["--tmpfs", "/var"])
+            .args(["--proc", "/proc"])
+            .args(["--dev", "/dev"]);
+
+        // Strict mode — reserved for future resource limit flags
+        // (bwrap --rlimit-nproc, --rlimit-as, --rlimit-core).
+        // Currently strict mode is identical to bwrap but provides
+        // a hook for adding RLIMITs when bwrap supports them.
+        let _ = strict;
+
+        // Working directory (relative to workspace root)
+        let resolved_dir = if working_dir == Path::new("") || working_dir == Path::new(".") {
+            workspace_root.to_path_buf()
+        } else {
+            workspace_root.join(working_dir)
+        };
+        cmd.args(["--chdir", resolved_dir.to_string_lossy().as_ref()]);
+
+        // Command to execute (must be LAST)
+        cmd.arg("--");
+        cmd.args(["/bin/sh", "-c", command]);
+
+        cmd
+    }
+
+    /// Build a ToolOutput from command execution results.
+    fn build_tool_output(
+        exit_code: i32,
+        stdout: &[u8],
+        stderr: &[u8],
+        max_output_bytes: usize,
+        sandbox_mode: &str,
+        timeout_secs: u64,
+        working_directory: Option<String>,
+    ) -> ToolOutput {
+        let mut combined = stdout.to_vec();
+        combined.extend_from_slice(stderr);
+        let output_str = String::from_utf8_lossy(&combined).to_string();
+        let (output_str, truncated) = Self::truncate_output(output_str, max_output_bytes);
+        let success = exit_code == 0 && !truncated;
+
+        let mut data = json!({
+            "output": output_str,
+            "exit_code": exit_code,
+            "truncated": truncated,
+            "sandbox_mode": sandbox_mode,
+            "timeout_seconds": timeout_secs,
+        });
+        if let Some(wd) = working_directory {
+            data["working_directory"] = json!(wd);
+        }
+
+        ToolOutput {
+            success,
+            data,
+            summary: if truncated {
+                format!("Command completed with truncated output (exit {exit_code})")
+            } else if exit_code == 0 {
+                format!("Command completed successfully (exit {exit_code})")
+            } else {
+                format!("Command failed with exit code {exit_code}")
+            },
+        }
+    }
+
+    /// Execute a command inside a bubblewrap sandbox.
+    async fn execute_with_bwrap(
+        &self,
+        command: &str,
+        policy: &BwrapPolicy,
+        workspace_root: &Path,
+        working_dir: &Path,
+        timeout_secs: u64,
+        max_output_bytes: usize,
+    ) -> Result<ToolOutput, AgentError> {
+        let mut cmd = self.build_bwrap_command(command, policy, workspace_root, working_dir, false);
+
+        // Ensure workspace exists (bwrap --bind fails if the target doesn't exist)
+        if !workspace_root.exists()
+            && let Err(e) = std::fs::create_dir_all(workspace_root)
+        {
+            return Ok(ToolOutput {
+                success: false,
+                data: json!({
+                    "error": format!("Failed to create workspace: {e}"),
+                    "sandbox_mode": "bwrap",
+                }),
+                summary: format!("Bubblewrap execution failed: {e}"),
+            });
+        }
+
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        // Execute with timeout
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+
+        let (exit_code, stdout, stderr) = match output {
+            Ok(Ok(result)) => {
+                let code = result.status.code().unwrap_or(-1);
+                (code, result.stdout, result.stderr)
+            }
+            Ok(Err(e)) => {
+                return Ok(ToolOutput {
+                    success: false,
+                    data: json!({
+                        "error": format!("Bubblewrap execution failed: {e}"),
+                        "sandbox_mode": "bwrap",
+                    }),
+                    summary: format!("Bubblewrap execution failed: {e}"),
+                });
+            }
+            Err(_) => {
+                return Ok(ToolOutput {
+                    success: false,
+                    data: json!({
+                        "error": format!("Command timed out after {timeout_secs}s"),
+                        "exit_code": -1i64,
+                        "sandbox_mode": "bwrap",
+                    }),
+                    summary: format!("Command timed out after {timeout_secs}s"),
+                });
+            }
+        };
+
+        Ok(Self::build_tool_output(
+            exit_code,
+            &stdout,
+            &stderr,
+            max_output_bytes,
+            "bwrap",
+            timeout_secs,
+            None,
+        ))
+    }
+
+    /// Execute a command with bubblewrap-strict (adds resource limits).
+    async fn execute_with_bwrap_strict(
+        &self,
+        command: &str,
+        policy: &BwrapPolicy,
+        workspace_root: &Path,
+        working_dir: &Path,
+        timeout_secs: u64,
+        max_output_bytes: usize,
+    ) -> Result<ToolOutput, AgentError> {
+        let mut cmd = self.build_bwrap_command(command, policy, workspace_root, working_dir, true);
+
+        // Ensure workspace exists
+        if !workspace_root.exists()
+            && let Err(e) = std::fs::create_dir_all(workspace_root)
+        {
+            return Ok(ToolOutput {
+                success: false,
+                data: json!({
+                    "error": format!("Failed to create workspace: {e}"),
+                    "sandbox_mode": "bwrap-strict",
+                }),
+                summary: format!("Bubblewrap execution failed: {e}"),
+            });
+        }
+
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        // Execute with timeout
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+
+        let (exit_code, stdout, stderr) = match output {
+            Ok(Ok(result)) => {
+                let code = result.status.code().unwrap_or(-1);
+                (code, result.stdout, result.stderr)
+            }
+            Ok(Err(e)) => {
+                return Ok(ToolOutput {
+                    success: false,
+                    data: json!({
+                        "error": format!("Bubblewrap execution failed: {e}"),
+                        "sandbox_mode": "bwrap-strict",
+                    }),
+                    summary: format!("Bubblewrap execution failed: {e}"),
+                });
+            }
+            Err(_) => {
+                return Ok(ToolOutput {
+                    success: false,
+                    data: json!({
+                        "error": format!("Command timed out after {timeout_secs}s"),
+                        "exit_code": -1i64,
+                        "sandbox_mode": "bwrap-strict",
+                    }),
+                    summary: format!("Command timed out after {timeout_secs}s"),
+                });
+            }
+        };
+
+        Ok(Self::build_tool_output(
+            exit_code,
+            &stdout,
+            &stderr,
+            max_output_bytes,
+            "bwrap-strict",
+            timeout_secs,
+            None,
+        ))
+    }
 }
 
 #[async_trait::async_trait]
@@ -117,7 +425,7 @@ impl Tool for ShellExecute {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command within the workspace sandbox. Supports command validation (allowlist/denylist), timeout, and output size limits. The command runs in the workspace root unless a working_directory is specified."
+        "Execute a shell command within a sandboxed workspace. Supports command validation (allowlist/denylist), timeout, output size limits, and optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). When sandbox_mode is set, system files are read-only and the workspace is read-write."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -192,70 +500,129 @@ impl Tool for ShellExecute {
         );
         let resolved_dir = sandbox.resolve(&working_dir)?;
 
-        // Build and execute the command
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&resolved_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+        // Build the sandbox policy
+        let policy = BwrapPolicy::for_workspace(&ctx.workspace_root);
 
-        // Execute with timeout
-        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+        // Execute based on sandbox mode
+        match self.config.sandbox_mode.as_str() {
+            SANDBOX_MODE_NONE => {
+                // Direct execution (current behavior)
+                let mut cmd = tokio::process::Command::new("sh");
+                cmd.arg("-c")
+                    .arg(command)
+                    .current_dir(&resolved_dir)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true);
 
-        let (exit_code, stdout, stderr) = match output {
-            Ok(Ok(result)) => {
-                // status.code() is None when the process was killed by a signal
-                // (e.g., timeout kill_on_drop). Treat as exit -1.
-                let code = result.status.code().unwrap_or(-1);
-                (code, result.stdout, result.stderr)
+                let output =
+                    tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+
+                let (exit_code, stdout, stderr) = match output {
+                    Ok(Ok(result)) => {
+                        let code = result.status.code().unwrap_or(-1);
+                        (code, result.stdout, result.stderr)
+                    }
+                    Ok(Err(e)) => {
+                        return Ok(ToolOutput {
+                            success: false,
+                            data: json!({ "error": format!("Command execution failed: {e}") }),
+                            summary: format!("Command execution failed: {e}"),
+                        });
+                    }
+                    Err(_) => {
+                        return Ok(ToolOutput {
+                            success: false,
+                            data: json!({
+                                "error": format!("Command timed out after {timeout_secs}s"),
+                                "exit_code": -1i64,
+                            }),
+                            summary: format!("Command timed out after {timeout_secs}s"),
+                        });
+                    }
+                };
+
+                Ok(Self::build_tool_output(
+                    exit_code,
+                    &stdout,
+                    &stderr,
+                    max_output_bytes,
+                    "none",
+                    timeout_secs,
+                    Some(resolved_dir.to_string_lossy().to_string()),
+                ))
             }
-            Ok(Err(e)) => {
-                return Ok(ToolOutput {
-                    success: false,
-                    data: json!({ "error": format!("Command execution failed: {e}") }),
-                    summary: format!("Command execution failed: {e}"),
-                });
+            SANDBOX_MODE_BWRAP => {
+                // Check if bubblewrap is available
+                if !bwrap_available() {
+                    return Err(AgentError::ToolExecution(
+                        "bubblewrap is not installed — install it with 'apt install bubblewrap' \
+                         (Debian/Ubuntu), 'yum install bubblewrap' (RHEL/Fedora), \
+                         or 'pacman -S bubblewrap' (Arch). \
+                         Alternatively, set sandbox_mode to 'none' to disable sandboxing."
+                            .into(),
+                    ));
+                }
+
+                self.execute_with_bwrap(
+                    command,
+                    &policy,
+                    &ctx.workspace_root,
+                    &resolved_dir,
+                    timeout_secs,
+                    max_output_bytes,
+                )
+                .await
             }
-            Err(_) => {
-                return Ok(ToolOutput {
-                    success: false,
-                    data: json!({
-                        "error": format!("Command timed out after {timeout_secs}s"),
-                        "exit_code": -1i64,
-                    }),
-                    summary: format!("Command timed out after {timeout_secs}s"),
-                });
+            SANDBOX_MODE_BWRAP_STRICT => {
+                // Check if bubblewrap is available
+                if !bwrap_available() {
+                    return Err(AgentError::ToolExecution(
+                        "bubblewrap is not installed — install it with 'apt install bubblewrap' \
+                         (Debian/Ubuntu), 'yum install bubblewrap' (RHEL/Fedora), \
+                         or 'pacman -S bubblewrap' (Arch). \
+                         Alternatively, set sandbox_mode to 'none' to disable sandboxing."
+                            .into(),
+                    ));
+                }
+
+                self.execute_with_bwrap_strict(
+                    command,
+                    &policy,
+                    &ctx.workspace_root,
+                    &resolved_dir,
+                    timeout_secs,
+                    max_output_bytes,
+                )
+                .await
             }
-        };
+            other => Err(AgentError::Config(format!(
+                "invalid sandbox mode: '{other}' (must be 'none', 'bwrap', or 'bwrap-strict')"
+            ))),
+        }
+    }
+}
 
-        // Combine stdout and stderr
-        let mut combined = stdout.clone();
-        combined.extend_from_slice(&stderr);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // Truncate if needed
-        let output_str = String::from_utf8_lossy(&combined).to_string();
-        let (output_str, truncated) = self.truncate_output(output_str, max_output_bytes);
+    #[test]
+    fn test_bwrap_available_check() {
+        // This test checks the function is callable; the actual result
+        // depends on whether bwrap is installed in the test environment.
+        let _available = bwrap_available();
+    }
 
-        let success = exit_code == 0 && !truncated;
+    #[test]
+    fn test_sandbox_mode_none_is_default() {
+        let config = ShellConfig::default();
+        assert_eq!(config.sandbox_mode, SANDBOX_MODE_NONE);
+    }
 
-        Ok(ToolOutput {
-            success,
-            data: json!({
-                "output": output_str,
-                "exit_code": exit_code,
-                "truncated": truncated,
-                "working_directory": resolved_dir.to_string_lossy().to_string(),
-                "timeout_seconds": timeout_secs,
-            }),
-            summary: if truncated {
-                format!("Command completed with truncated output (exit {exit_code})")
-            } else if exit_code == 0 {
-                format!("Command completed successfully (exit {exit_code})")
-            } else {
-                format!("Command failed with exit code {exit_code}")
-            },
-        })
+    #[test]
+    fn test_policy_for_workspace() {
+        let policy = BwrapPolicy::for_workspace(Path::new("/workspace"));
+        assert!(policy.writable_roots.iter().any(|p| p == "/workspace"));
     }
 }

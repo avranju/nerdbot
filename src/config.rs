@@ -220,6 +220,11 @@ impl Default for FilesConfig {
     }
 }
 
+/// Sandbox mode for shell command execution.
+pub const SANDBOX_MODE_NONE: &str = "none";
+pub const SANDBOX_MODE_BWRAP: &str = "bwrap";
+pub const SANDBOX_MODE_BWRAP_STRICT: &str = "bwrap-strict";
+
 /// Shell execution configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ShellConfig {
@@ -235,6 +240,21 @@ pub struct ShellConfig {
     /// Command execution timeout in seconds.
     #[serde(default = "default_shell_timeout_secs")]
     pub timeout_secs: u64,
+    /// Sandbox isolation mode.
+    ///
+    /// - `none`: Direct execution (current behavior, no namespace isolation).
+    /// - `bwrap`: Bubblewrap namespace isolation — filesystem, PID, network,
+    ///   IPC, and UTS namespaces. System files are read-only; workspace is
+    ///   read-write. No network access.
+    /// - `bwrap-strict`: Reserved for future resource limit enforcement
+    ///   (--rlimit-nproc, --rlimit-as, --rlimit-core). Currently identical
+    ///   to `bwrap`; the distinction is a hook for when bwrap supports these
+    ///   flags.
+    ///
+    /// When `bwrap` or `bwrap-strict` is selected and bubblewrap is not
+    /// installed, the tool returns an error explaining how to install it.
+    #[serde(default = "default_shell_sandbox_mode")]
+    pub sandbox_mode: String,
 }
 
 /// Exa web search configuration.
@@ -268,6 +288,7 @@ impl Default for ShellConfig {
             denied_commands: default_shell_denied_commands(),
             max_output_bytes: default_shell_max_output_bytes(),
             timeout_secs: default_shell_timeout_secs(),
+            sandbox_mode: default_shell_sandbox_mode(),
         }
     }
 }
@@ -341,6 +362,9 @@ fn default_shell_max_output_bytes() -> usize {
 }
 fn default_shell_timeout_secs() -> u64 {
     30
+}
+fn default_shell_sandbox_mode() -> String {
+    SANDBOX_MODE_NONE.into()
 }
 fn default_exa_api_key_env() -> String {
     "EXA_API_KEY".to_string()

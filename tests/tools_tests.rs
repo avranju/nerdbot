@@ -1114,6 +1114,7 @@ async fn test_shell_execute_allows_specific_command_with_allowlist() {
         denied_commands: vec!["rm".into()],
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
+        sandbox_mode: "none".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1160,6 +1161,7 @@ async fn test_shell_execute_respects_denylist_over_allowlist() {
         denied_commands: vec!["rm".into()],  // but also in denylist
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
+        sandbox_mode: "none".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1192,6 +1194,7 @@ async fn test_shell_execute_output_truncation() {
         denied_commands: vec![],
         max_output_bytes: 1024,
         timeout_secs: 30,
+        sandbox_mode: "none".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1416,6 +1419,7 @@ async fn test_shell_execute_multiple_denylisted_commands() {
         ],
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
+        sandbox_mode: "none".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1450,6 +1454,7 @@ async fn test_shell_execute_custom_max_output_bytes() {
         denied_commands: vec![],
         max_output_bytes: 1024,
         timeout_secs: 30,
+        sandbox_mode: "none".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1544,4 +1549,178 @@ async fn test_shell_execute_timeout_enforcement() {
         "timeout should fire quickly, took {:?}",
         elapsed
     );
+}
+
+// ── Bubblewrap Sandbox Mode Tests ─────────────────────────────────────
+
+#[tokio::test]
+async fn test_shell_execute_bwrap_missing_command() {
+    let config = nerdbot::tools::shell::ShellConfig {
+        allowed_commands: vec![],
+        denied_commands: vec![],
+        max_output_bytes: 1_048_576,
+        timeout_secs: 30,
+        sandbox_mode: "bwrap".into(),
+    };
+    let tool = nerdbot::tools::shell::ShellExecute::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // Missing command should fail
+    let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::InvalidToolArgs(msg)) = result {
+        assert!(msg.contains("command"));
+    } else {
+        panic!("expected InvalidToolArgs error, got {:?}", result);
+    }
+}
+
+#[tokio::test]
+async fn test_shell_execute_bwrap_strict_missing_command() {
+    let config = nerdbot::tools::shell::ShellConfig {
+        allowed_commands: vec![],
+        denied_commands: vec![],
+        max_output_bytes: 1_048_576,
+        timeout_secs: 30,
+        sandbox_mode: "bwrap-strict".into(),
+    };
+    let tool = nerdbot::tools::shell::ShellExecute::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    let result = Tool::execute(&tool, serde_json::json!({}), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::InvalidToolArgs(msg)) = result {
+        assert!(msg.contains("command"));
+    } else {
+        panic!("expected InvalidToolArgs error, got {:?}", result);
+    }
+}
+
+#[test]
+fn test_shell_execute_bwrap_policy_for_workspace() {
+    let policy =
+        nerdbot::tools::shell::BwrapPolicy::for_workspace(std::path::Path::new("/workspace"));
+    // Should have workspace as read-write
+    assert!(policy.writable_roots.iter().any(|p| p == "/workspace"));
+}
+
+#[test]
+fn test_bwrap_available_is_callable() {
+    // Just verify the function is callable; the result depends on the environment
+    let available = nerdbot::tools::shell::bwrap_available();
+    // The function should not panic
+    let _ = available;
+}
+
+#[tokio::test]
+async fn test_shell_execute_invalid_sandbox_mode() {
+    let config = nerdbot::tools::shell::ShellConfig {
+        allowed_commands: vec![],
+        denied_commands: vec![],
+        max_output_bytes: 1_048_576,
+        timeout_secs: 30,
+        sandbox_mode: "invalid-mode".into(),
+    };
+    let tool = nerdbot::tools::shell::ShellExecute::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "echo hello" }), ctx).await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AgentError::Config(_)));
+}
+
+#[tokio::test]
+async fn test_shell_execute_sandbox_mode_none_in_output() {
+    let config = nerdbot::tools::shell::ShellConfig {
+        allowed_commands: vec![],
+        denied_commands: vec![],
+        max_output_bytes: 1_048_576,
+        timeout_secs: 30,
+        sandbox_mode: "none".into(),
+    };
+    let tool = nerdbot::tools::shell::ShellExecute::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "echo hello" }), ctx)
+        .await
+        .unwrap();
+    assert!(result.success);
+    assert_eq!(result.data["sandbox_mode"].as_str(), Some("none"));
+}
+
+#[tokio::test]
+async fn test_shell_execute_sandbox_mode_denied_in_bwrap() {
+    let config = nerdbot::tools::shell::ShellConfig {
+        allowed_commands: vec![],
+        denied_commands: vec!["rm".into()],
+        max_output_bytes: 1_048_576,
+        timeout_secs: 30,
+        sandbox_mode: "bwrap".into(),
+    };
+    let tool = nerdbot::tools::shell::ShellExecute::new(config);
+    let ctx = ToolContext {
+        run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
+            chat_id: 1,
+            user_id: 1,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: None,
+        scheduler_notifier: None,
+    };
+
+    // 'rm' is denied regardless of sandbox mode
+    let result = Tool::execute(&tool, serde_json::json!({ "command": "rm -rf /" }), ctx).await;
+    assert!(result.is_err());
+    if let Err(AgentError::ToolExecution(msg)) = result {
+        assert!(msg.contains("denied"));
+    } else {
+        panic!("expected ToolExecution error, got {:?}", result);
+    }
 }

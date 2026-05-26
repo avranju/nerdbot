@@ -74,6 +74,35 @@ allowed_commands = []
 denied_commands = ["rm", "chmod", "chown", "mkfs", "dd", "wget", "curl"]
 max_output_bytes = 1048576
 timeout_secs = 30
+# Sandbox isolation mode: "none", "bwrap", or "bwrap-strict".
+#
+# - "none" (default): Direct execution — same as the original Phase 8
+#   implementation. No namespace isolation; commands run as the nerdbot
+#   user with full host access.
+#
+# - "bwrap": Bubblewrap namespace isolation. Commands run inside a
+#   sandbox with:
+#   • Read-only system files (/usr, /etc, /lib, /bin, /sbin)
+#   • Read-write workspace access
+#   • PID namespace (can't see host processes)
+#   • Network namespace (loopback-only, no external access)
+#   • Clean environment (no host secrets leaked)
+#   • IPC and UTS namespace isolation
+#
+# - "bwrap-strict": Reserved for future resource limit enforcement
+#   (--rlimit-nproc, --rlimit-as, --rlimit-core). Currently identical
+#   to "bwrap".
+#
+# Requires bubblewrap to be installed:
+#   apt install bubblewrap (Debian/Ubuntu)
+#   yum install bubblewrap (RHEL/Fedora)
+#   pacman -S bubblewrap (Arch)
+#
+# Note: Ubuntu 24.04+ blocks unprivileged user namespaces by default
+# via AppArmor. Workaround: set
+#   kernel.apparmor_restrict_unprivileged_userns=0
+# via sysctl or GRUB.
+sandbox_mode = "none"
 
 # ── Exa Web Search ────────────────────────────────────────────────
 [exa]

@@ -31,9 +31,9 @@ fn stored_message(
     };
     StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        chat_session_id: session_id.into(),
+        chat_session_id: session_id,
         role: serde_json::Value::String(role_str.to_string()),
-        content: content.into(),
+        content,
         structured_content_json: None,
         token_estimate,
         created_at: Utc::now(),
