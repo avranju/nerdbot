@@ -194,4 +194,4 @@ docker buildx build --platform linux/arm64 -t nerdbot:latest .
 
 ## License
 
-Proprietary / internal use.
+[MIT](LICENSE)
