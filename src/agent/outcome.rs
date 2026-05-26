@@ -7,8 +7,6 @@ pub enum AgentOutcome {
     FinalText(String),
     /// The agent completed without producing text (e.g. silent job).
     Silent,
-    /// The agent run was cancelled.
-    Cancelled,
 }
 
 /// Token usage accumulated across all LLM calls in a run.

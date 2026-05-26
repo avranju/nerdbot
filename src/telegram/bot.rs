@@ -8,7 +8,7 @@
 
 use crate::error::AgentError;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Maximum message length before Telegram rejects it (4096 UTF-8 code points).
 pub const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;

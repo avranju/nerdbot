@@ -150,12 +150,6 @@ fn test_agent_outcome_silent() {
 }
 
 #[test]
-fn test_agent_outcome_cancelled() {
-    let outcome = AgentOutcome::Cancelled;
-    assert!(matches!(outcome, AgentOutcome::Cancelled));
-}
-
-#[test]
 fn test_agent_outcome_clone() {
     let outcome = AgentOutcome::FinalText("test".into());
     let cloned = outcome.clone();
@@ -210,15 +204,6 @@ fn test_agent_result_silent() {
         metadata: RunMetadata::default(),
     };
     assert!(matches!(result.outcome, AgentOutcome::Silent));
-}
-
-#[test]
-fn test_agent_result_cancelled() {
-    let result = AgentResult {
-        outcome: AgentOutcome::Cancelled,
-        metadata: RunMetadata::default(),
-    };
-    assert!(matches!(result.outcome, AgentOutcome::Cancelled));
 }
 
 // ── Type aliases ─────────────────────────────────────────────────────────

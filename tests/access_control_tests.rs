@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use nerdbot::agent::AgentContext;
+use nerdbot::agent::agent_loop::AgentContext;
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::error::AgentError;
 use nerdbot::tools::registry::ToolRegistry;

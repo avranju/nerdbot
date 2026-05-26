@@ -1,7 +1,6 @@
 //! Cron utilities for timezone-aware scheduling.
 
 use crate::error::AgentError;
-use chrono::TimeZone;
 use chrono_tz::Tz;
 
 /// Detect the local system timezone using TZ environment variable or common Linux files.

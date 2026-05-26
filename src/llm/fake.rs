@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 
 use genai::chat::{
-    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatRole, ContentPart, MessageContent,
-    StopReason, ToolCall, Usage,
+    ChatOptions, ChatRequest, ChatResponse, ChatRole, ContentPart, MessageContent, StopReason,
+    ToolCall, Usage,
 };
 
 use crate::error::AgentError;

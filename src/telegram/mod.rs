@@ -6,6 +6,5 @@ pub mod handler;
 pub mod service;
 
 pub use bot::TelegramBot;
-pub use commands::{CommandHandler, TelegramCommand};
 pub use handler::MessageHandler;
 pub use service::TelegramService;

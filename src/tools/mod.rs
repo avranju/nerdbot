@@ -11,5 +11,3 @@ pub mod files;
 pub mod schedule;
 pub mod telegram;
 pub mod web;
-
-pub use traits::*;

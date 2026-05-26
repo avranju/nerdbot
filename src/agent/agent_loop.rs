@@ -5,7 +5,7 @@
 //! - Max tool iterations are reached
 //! - An unrecoverable error occurs
 
-use genai::chat::{ChatMessage, ChatRequest, ChatRole, ContentPart, MessageContent, ToolResponse};
+use genai::chat::{ChatMessage, ChatRequest, ChatRole, MessageContent, ToolResponse};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::agent::outcome::{AgentOutcome, AgentResult, RunMetadata, RunTokenUsage};
@@ -316,6 +316,7 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+    /// Construct a minimal `AgentContext` for testing.
     pub fn new(
         run_mode: AgentRunMode,
         personality: String,

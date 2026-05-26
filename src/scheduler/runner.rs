@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
-use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent, ToolResponse};
+use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent};
 
 use crate::error::AgentError;
 use crate::llm::LlmExecutor;

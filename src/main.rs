@@ -4,34 +4,30 @@
 //! Supports Telegram as the user-facing channel with iterative tool use
 //! driven by multiple LLM providers via the `genai` crate.
 
-// Suppress unused/dead code warnings for stub implementations shared with lib.rs.
-// The lib.rs crate-level allow does not apply to this binary crate root.
-#![allow(
-    dead_code,
-    unused,
-    unused_imports,
-    unused_variables,
-    unused_assignments
-)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use error::AgentError;
+use nerdbot::config::AppConfig;
+use nerdbot::context::budget::ContextBudget;
+use nerdbot::context::compaction_service::CompactionService;
+use nerdbot::context::compaction_worker::CompactionWorker;
+use nerdbot::error::AgentError;
+use nerdbot::llm::LlmClient;
+use nerdbot::scheduler::service::SchedulerService;
+use nerdbot::storage::Database;
+use nerdbot::telegram::bot::TelegramBot;
+use nerdbot::telegram::handler::MessageHandler;
+use nerdbot::telegram::service::TelegramService;
+use nerdbot::tools::calculator::CalculatorTool;
+use nerdbot::tools::echo::EchoTool;
+use nerdbot::tools::files::{AppendFile, FileConfig, ListDirectory, ReadFile, WriteFile};
+use nerdbot::tools::registry::ToolRegistry;
+use nerdbot::tools::schedule::{DeleteJob, ListJobs, RunJobNow, ScheduleJob};
+use nerdbot::tools::shell::{ShellConfig, ShellExecute};
+use nerdbot::tools::telegram::SendTelegramMessage;
+use nerdbot::tools::web::{WebFetch, WebSearch};
 use tracing::{error, info, warn};
-
-mod agent;
-mod config;
-mod context;
-mod error;
-mod llm;
-mod scheduler;
-mod storage;
-mod telegram;
-mod tools;
-mod web;
-mod workspace;
 
 /// NerdBot — a minimal, self-hosted AI agent runtime.
 #[derive(Parser, Debug)]
@@ -56,14 +52,14 @@ async fn main() {
     info!(config_path = %cli.config.display(), "starting nerdbot");
 
     // Load and validate configuration
-    let config = match config::AppConfig::from_file(&cli.config) {
+    let config = match AppConfig::from_file(&cli.config) {
         Ok(c) => {
             info!("configuration loaded");
             c
         }
         Err(e) => {
             tracing::warn!(error = %e, "no config file found or invalid, using defaults");
-            config::AppConfig::default()
+            AppConfig::default()
         }
     };
 
@@ -74,7 +70,7 @@ async fn main() {
     );
 
     // Initialize storage
-    let db = match storage::Database::new(config.storage.sqlite_path.clone()).await {
+    let db = match Database::new(config.storage.sqlite_path.clone()).await {
         Ok(db) => {
             if let Err(e) = db.init().await {
                 error!(error = %e, "database migration failed");
@@ -107,7 +103,7 @@ async fn main() {
         }
     };
 
-    let bot = telegram::TelegramBot::new(bot_token);
+    let bot = TelegramBot::new(bot_token);
 
     // Verify the bot token
     match bot.get_me().await {
@@ -130,19 +126,19 @@ async fn main() {
     }
 
     // Set up tool registry
-    let mut registry = tools::registry::ToolRegistry::new();
-    registry.register(tools::echo::EchoTool);
-    registry.register(tools::calculator::CalculatorTool);
-    registry.register(tools::schedule::ScheduleJob);
-    registry.register(tools::schedule::ListJobs);
-    registry.register(tools::schedule::DeleteJob);
-    registry.register(tools::schedule::RunJobNow);
-    registry.register(tools::telegram::SendTelegramMessage);
-    let file_config = tools::files::FileConfig::from(config.files.clone());
-    registry.register(tools::files::ReadFile::new(file_config.clone()));
-    registry.register(tools::files::WriteFile::new(file_config.clone()));
-    registry.register(tools::files::AppendFile::new(file_config.clone()));
-    registry.register(tools::files::ListDirectory::new(file_config));
+    let mut registry = ToolRegistry::new();
+    registry.register(EchoTool);
+    registry.register(CalculatorTool);
+    registry.register(ScheduleJob);
+    registry.register(ListJobs);
+    registry.register(DeleteJob);
+    registry.register(RunJobNow);
+    registry.register(SendTelegramMessage);
+    let file_config = FileConfig::from(config.files.clone());
+    registry.register(ReadFile::new(file_config.clone()));
+    registry.register(WriteFile::new(file_config.clone()));
+    registry.register(AppendFile::new(file_config.clone()));
+    registry.register(ListDirectory::new(file_config));
 
     // Web tools — Exa-powered
     let exa_api_key = std::env::var(&config.exa.api_key_env).unwrap_or_default();
@@ -152,16 +148,13 @@ async fn main() {
             "Exa API key not set — web_search and web_fetch will return errors"
         );
     }
-    registry.register(tools::web::WebSearch::new(
-        exa_api_key.clone(),
-        config.exa.max_results,
-    ));
-    registry.register(tools::web::WebFetch::new(
+    registry.register(WebSearch::new(exa_api_key.clone(), config.exa.max_results));
+    registry.register(WebFetch::new(
         exa_api_key.clone(),
         config.exa.max_text_chars,
     ));
 
-    registry.register(tools::shell::ShellExecute::new(tools::shell::ShellConfig {
+    registry.register(ShellExecute::new(ShellConfig {
         allowed_commands: config.shell.allowed_commands.clone(),
         denied_commands: config.shell.denied_commands.clone(),
         max_output_bytes: config.shell.max_output_bytes,
@@ -170,7 +163,7 @@ async fn main() {
     let registry = Arc::new(registry);
 
     // Create the LLM client via genai
-    let llm = match llm::LlmClient::from_config(&config) {
+    let llm = match LlmClient::from_config(&config) {
         Ok(client) => {
             info!(model = config.llm.model, "LLM client initialized via genai");
             Arc::new(client)
@@ -182,7 +175,7 @@ async fn main() {
     };
 
     // Initialize compaction service.
-    let compaction_budget = context::budget::ContextBudget {
+    let compaction_budget = ContextBudget {
         context_window_tokens: 128_000,
         reserved_output_tokens: 4_096,
         reserved_tool_loop_tokens: 8_192,
@@ -194,28 +187,24 @@ async fn main() {
         let compaction_model = config.context.compactor.model.clone();
         if !compaction_model.is_empty() {
             // Use the configured compactor model via the main LLM client.
-            context::compaction_worker::CompactionWorker::with_llm(
-                llm.clone(),
-                compaction_model,
-                config.llm.temperature,
-            )
+            CompactionWorker::with_llm(llm.clone(), compaction_model, config.llm.temperature)
         } else {
             // No compactor model configured — use deterministic fallback compaction.
-            context::compaction_worker::CompactionWorker::new()
+            CompactionWorker::new()
         }
     };
 
-    let compaction_service = Arc::new(context::compaction_service::CompactionService::new(
+    let compaction_service = Arc::new(CompactionService::new(
         db.pool().clone(),
         Arc::new(compaction_worker),
         compaction_budget,
     ));
 
     let bot = Arc::new(bot);
-    let service = telegram::TelegramService::new(bot.clone());
+    let service = TelegramService::new(bot.clone());
 
     // Initialize the scheduler service
-    let scheduler = Arc::new(scheduler::service::SchedulerService::new(
+    let scheduler = Arc::new(SchedulerService::new(
         db.pool().clone(),
         llm.clone(),
         registry.clone(),
@@ -229,7 +218,7 @@ async fn main() {
     };
 
     // Create the message handler
-    let handler = Arc::new(telegram::MessageHandler::new(
+    let handler = Arc::new(MessageHandler::new(
         db.pool().clone(),
         llm.clone(),
         registry,
@@ -323,7 +312,7 @@ async fn main() {
 
 /// Drop guard to guarantee scheduler shutdown when the main execution exits or panics.
 struct SchedulerGuard {
-    scheduler: Arc<scheduler::service::SchedulerService>,
+    scheduler: Arc<SchedulerService>,
 }
 
 impl Drop for SchedulerGuard {

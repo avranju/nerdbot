@@ -224,7 +224,7 @@ impl Default for FilesConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ShellConfig {
     /// Allowed commands (empty means allow all). Commands not in this list are blocked.
-    #[serde(default)]
+    #[serde(default = "default_shell_allowed_commands")]
     pub allowed_commands: Vec<String>,
     /// Denied commands that are always blocked, regardless of allowlist.
     #[serde(default = "default_shell_denied_commands")]
@@ -264,7 +264,7 @@ impl Default for ExaConfig {
 impl Default for ShellConfig {
     fn default() -> Self {
         Self {
-            allowed_commands: Vec::new(),
+            allowed_commands: default_shell_allowed_commands(),
             denied_commands: default_shell_denied_commands(),
             max_output_bytes: default_shell_max_output_bytes(),
             timeout_secs: default_shell_timeout_secs(),

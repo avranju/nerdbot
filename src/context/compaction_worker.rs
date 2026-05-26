@@ -57,7 +57,7 @@ impl CompactionWorker {
         &self,
         pool: &SqlitePool,
         session_id: &str,
-        budget: &ContextBudget,
+        _budget: &ContextBudget,
     ) -> Result<String, AgentError> {
         // Load the latest summary (if any)
         let latest_summary =

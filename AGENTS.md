@@ -21,8 +21,8 @@ executes them → results fed back → repeat) → Telegram reply.
 ### Source Layout
 ```
 src/
-  main.rs          — CLI entry, long polling loop, service wiring
-  lib.rs           — Crate root, re-exports all modules for tests
+  main.rs          — CLI entry, long polling loop, service wiring (imports from lib crate)
+  lib.rs           — Crate root, re-exports all modules for tests and binary crate
   config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   error.rs         — AgentError enum + domain-specific error types
 

@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use genai::chat::{ChatOptions, ChatRequest, ChatResponse};
-use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
+use genai::resolver::{AuthData, Endpoint};
 
 use crate::config::AppConfig;
 use crate::error::AgentError;

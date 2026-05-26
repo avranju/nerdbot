@@ -4,5 +4,3 @@
 
 pub mod fetcher;
 pub mod search_backend;
-
-pub use search_backend::*;

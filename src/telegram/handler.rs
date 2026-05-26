@@ -283,7 +283,6 @@ impl MessageHandler {
                     debug!(chat_id, "agent completed silently");
                     Ok(None)
                 }
-                AgentOutcome::Cancelled => Ok(Some("The operation was cancelled.".to_string())),
             },
             Err(e) => {
                 error!(chat_id, error = %e, "agent loop failed");

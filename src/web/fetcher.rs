@@ -4,7 +4,7 @@
 ///
 /// Uses the Exa REST API at `https://api.exa.ai/contents` for fetching
 /// full page content with SSRF protections.
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::debug;
 
 use crate::error::WebFetchError;
@@ -19,13 +19,10 @@ struct ExaContentsResponse {
 
 #[derive(Debug, Deserialize)]
 struct ExaContentsResult {
-    url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
 }
 
 // ── Public types ──────────────────────────────────────────────────────────
