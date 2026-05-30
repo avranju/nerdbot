@@ -38,7 +38,7 @@ src/
 
   telegram/
     mod.rs
-    bot.rs         — Telegram Bot API client (long polling)
+    bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling)
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset-context)
     handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply
     service.rs     — TelegramService: send_message, etc.
@@ -100,6 +100,7 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Interactive Telegram message:**
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
 1. Long polling receives update
 2. MessageHandler checks allowlist (chat_id + user_id)
 3. Ensures chat session exists (creates if new)

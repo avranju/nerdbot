@@ -771,6 +771,18 @@ async fn test_get_updates_returns_error_on_503() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires a production Telegram bot token and network access"]
+async fn test_get_me() {
+    let token = std::env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN must be set");
+    let bot = TelegramBot::new(token);
+    let user = bot.get_me().await.unwrap();
+    println!(
+        "Bot info: id={}, name={}, username={:?}",
+        user.id, user.first_name, user.username
+    );
+}
+
 // ── Tool context ──────────────────────────────────────────────────────
 
 #[test]

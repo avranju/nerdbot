@@ -118,7 +118,8 @@ pub struct TelegramBot {
 impl TelegramBot {
     /// Create a new bot client with the default Telegram API base URL.
     pub fn new(token: String) -> Self {
-        Self::new_with_base_url(token, TELEGRAM_API_BASE.to_string())
+        let base_url = format!("{TELEGRAM_API_BASE}{token}");
+        Self::new_with_base_url(token, base_url)
     }
 
     /// Create a new bot client with a custom base URL (useful for testing).
@@ -454,6 +455,12 @@ mod tests {
     fn test_split_short_message() {
         let result = TelegramBot::split_long_message("hello");
         assert_eq!(result, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_default_base_url_includes_token() {
+        let bot = TelegramBot::new("test-token".into());
+        assert_eq!(bot.base_url, "https://api.telegram.org/bottest-token");
     }
 
     #[test]
