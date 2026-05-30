@@ -284,9 +284,12 @@ fn make_test_config() -> AppConfig {
 }
 
 fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
+    let llm = Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
+        "# Summary",
+    )]));
     Arc::new(CompactionService::new(
         pool,
-        Arc::new(CompactionWorker::new()),
+        Arc::new(CompactionWorker::new(llm, "fake-model".into(), 0.0)),
         ContextBudget::default(),
     ))
 }

@@ -38,7 +38,6 @@ fn test_default_budget() {
         hard_context_threshold: 0.85,
         recent_turns_to_preserve: 30,
         reserved_tool_loop_tokens: 8_192,
-        compactor: nerdbot::config::CompactorConfig::default(),
     };
     let budget_from_config = ContextBudget::from_llm_and_context(&llm, &ctx);
     assert_eq!(budget_from_config.context_window_tokens, 128_000);
@@ -552,9 +551,17 @@ async fn test_check_session_below_threshold() {
         .unwrap();
     create_user_message(&pool, &session.id, "hello", None).await;
 
+    let llm =
+        nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
+            "# Summary",
+        )]);
     let service = CompactionService::new(
         pool.clone(),
-        Arc::new(CompactionWorker::new()),
+        Arc::new(CompactionWorker::new(
+            Arc::new(llm),
+            "fake-model".into(),
+            0.0,
+        )),
         ContextBudget::default(),
     );
     service.check_session(&session.id).await.unwrap();
@@ -578,7 +585,13 @@ async fn test_check_session_above_threshold() {
 
     let service = CompactionService::new(
         pool.clone(),
-        Arc::new(CompactionWorker::new()),
+        Arc::new(CompactionWorker::new(
+            Arc::new(nerdbot::llm::fake::FakeProvider::new(vec![
+                nerdbot::llm::fake::FakeResponse::final_text("# Summary"),
+            ])),
+            "fake-model".into(),
+            0.0,
+        )),
         small_budget(100, 0.1),
     );
     service.check_session(&session.id).await.unwrap();
@@ -626,7 +639,7 @@ async fn test_compaction_state_transitions() {
         .unwrap();
     create_user_message(&pool, &session.id, "hello", None).await;
 
-    let worker = CompactionWorker::with_llm(Arc::new(SlowProvider), "fake-model".into(), 0.0);
+    let worker = CompactionWorker::new(Arc::new(SlowProvider), "fake-model".into(), 0.0);
     let service = CompactionService::new(pool, Arc::new(worker), small_budget(100, 0.1));
 
     assert_eq!(service.get_state(&session.id).await, CompactionState::Idle);
@@ -657,7 +670,11 @@ async fn test_compact_no_messages() {
     let session = nerdbot::storage::sessions::create_session(&pool, 1)
         .await
         .unwrap();
-    let worker = CompactionWorker::new();
+    let llm =
+        nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
+            "# Summary",
+        )]);
+    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
 
     let err = worker
         .compact(&pool, &session.id, &ContextBudget::default())
@@ -667,14 +684,18 @@ async fn test_compact_no_messages() {
 }
 
 #[tokio::test]
-async fn test_compact_fallback_no_llm() {
+async fn test_compact_with_llm() {
     let pool = setup_context_pool().await;
     let session = nerdbot::storage::sessions::create_session(&pool, 1)
         .await
         .unwrap();
     let stored = create_user_message(&pool, &session.id, "remember this", None).await;
 
-    let worker = CompactionWorker::new();
+    let llm =
+        nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
+            "# Conversation Working Summary\n\nTest summary content",
+        )]);
+    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
     let summary_text = worker
         .compact(&pool, &session.id, &ContextBudget::default())
         .await
@@ -708,7 +729,11 @@ async fn test_compact_replaces_old_summary() {
         .await
         .unwrap();
 
-    let worker = CompactionWorker::new();
+    let llm =
+        nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
+            "# Summary",
+        )]);
+    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
     worker
         .compact(&pool, &session.id, &ContextBudget::default())
         .await

@@ -60,12 +60,6 @@ recent_turns_to_preserve = 30
 # Tokens reserved for tool-loop headroom (iterative tool calls).
 # reserved_tool_loop_tokens = 8192
 
-# Optional: use a cheaper model for background compaction.
-# If omitted, deterministic fallback summaries are used.
-# [context.compactor]
-# provider = "anthropic"
-# model = "claude-haiku-3-5"
-
 # ── Scheduler ─────────────────────────────────────────────────────
 [scheduler]
 run_overdue_one_shots_on_startup = false

@@ -184,10 +184,6 @@ hard_context_threshold = 0.80
 recent_turns_to_preserve = 20
 reserved_tool_loop_tokens = 4096
 
-[context.compactor]
-provider = "anthropic"
-model = "claude-haiku"
-
 [scheduler]
 run_overdue_one_shots_on_startup = true
 "#;
@@ -247,8 +243,6 @@ fn test_parse_full_config() {
     assert_eq!(config.context.hard_context_threshold, 0.80);
     assert_eq!(config.context.recent_turns_to_preserve, 20);
     assert_eq!(config.context.reserved_tool_loop_tokens, 4_096);
-    assert_eq!(config.context.compactor.provider, "anthropic");
-    assert_eq!(config.context.compactor.model, "claude-haiku");
 
     // Scheduler
     assert!(config.scheduler.run_overdue_one_shots_on_startup);

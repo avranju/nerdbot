@@ -192,26 +192,3 @@ impl CompactionService {
         Ok(messages.len())
     }
 }
-
-impl Default for CompactionService {
-    fn default() -> Self {
-        // Use a minimal in-memory pool for the default case.
-        // This is only used when CompactionService::default() is called
-        // (e.g. in tests or when not explicitly constructed).
-        let pool = match tokio::runtime::Handle::current()
-            .block_on(sqlx::SqlitePool::connect(":memory:"))
-        {
-            Ok(p) => p,
-            Err(_) => {
-                // If we can't create a pool, use a placeholder
-                // This shouldn't happen in practice
-                panic!("Failed to create in-memory SQLite pool for default CompactionService");
-            }
-        };
-        Self::new(
-            pool,
-            Arc::new(CompactionWorker::new()),
-            ContextBudget::default(),
-        )
-    }
-}

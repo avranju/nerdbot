@@ -9,16 +9,16 @@ use crate::config::{ContextConfig, LlmConfig};
 /// Configuration for context budgeting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBudget {
+    /// Total context window size in tokens (from LlmConfig).
+    pub context_window_tokens: usize,
+    /// Tokens reserved for model output (from LlmConfig::max_output_tokens).
+    pub reserved_output_tokens: usize,
     /// Tokens reserved for tool-loop headroom.
     pub reserved_tool_loop_tokens: usize,
     /// Soft compaction threshold (fraction of usable budget).
     pub soft_compaction_threshold: f32,
     /// Hard context threshold (fraction of usable budget).
     pub hard_context_threshold: f32,
-    /// Total context window size in tokens (from LlmConfig).
-    pub context_window_tokens: usize,
-    /// Tokens reserved for model output (from LlmConfig::max_output_tokens).
-    pub reserved_output_tokens: usize,
 }
 
 impl ContextBudget {

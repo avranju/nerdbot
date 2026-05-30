@@ -177,8 +177,6 @@ pub struct ContextConfig {
     /// Tokens reserved for tool-loop headroom (iterative tool calls).
     #[serde(default = "default_reserved_tool_loop_tokens")]
     pub reserved_tool_loop_tokens: usize,
-    #[serde(default)]
-    pub compactor: CompactorConfig,
 }
 
 impl Default for ContextConfig {
@@ -188,17 +186,8 @@ impl Default for ContextConfig {
             hard_context_threshold: default_hard_context_threshold(),
             recent_turns_to_preserve: default_recent_turns_to_preserve(),
             reserved_tool_loop_tokens: default_reserved_tool_loop_tokens(),
-            compactor: CompactorConfig::default(),
         }
     }
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct CompactorConfig {
-    #[serde(default)]
-    pub provider: String,
-    #[serde(default)]
-    pub model: String,
 }
 
 /// Scheduler configuration.

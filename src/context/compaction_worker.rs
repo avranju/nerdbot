@@ -4,7 +4,7 @@
 
 use genai::chat::{ChatMessage, ChatRequest, MessageContent};
 use sqlx::SqlitePool;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::context::budget::ContextBudget;
 use crate::error::AgentError;
@@ -16,33 +16,19 @@ use crate::llm::LlmExecutor;
 /// combines it with the existing summary, calls the LLM to produce a new
 /// structured summary, and persists it.
 pub struct CompactionWorker {
-    llm: Option<std::sync::Arc<dyn LlmExecutor>>,
+    llm: std::sync::Arc<dyn LlmExecutor>,
     model: String,
     temperature: f32,
 }
 
 impl CompactionWorker {
-    /// Create a new CompactionWorker.
-    pub fn new() -> Self {
-        Self {
-            llm: None,
-            model: String::new(),
-            temperature: 0.0,
-        }
-    }
-
     /// Create a new CompactionWorker with an LLM executor.
-    pub fn with_llm(llm: std::sync::Arc<dyn LlmExecutor>, model: String, temperature: f32) -> Self {
+    pub fn new(llm: std::sync::Arc<dyn LlmExecutor>, model: String, temperature: f32) -> Self {
         Self {
-            llm: Some(llm),
+            llm,
             model,
             temperature,
         }
-    }
-
-    /// Get the LLM executor if available.
-    fn llm_executor(&self) -> Option<&dyn LlmExecutor> {
-        self.llm.as_deref()
     }
 
     /// Run compaction on a session, producing a structured summary.
@@ -100,13 +86,9 @@ impl CompactionWorker {
         let prompt = self.build_compaction_prompt(&latest_summary, &messages_to_compact);
 
         // Call the LLM to produce a new summary
-        let new_summary_text = if let Some(llm_ref) = self.llm_executor() {
-            self.call_compaction_model(llm_ref, &self.model, self.temperature, &prompt)
-                .await?
-        } else {
-            // Fallback: produce a basic summary without LLM
-            self.fallback_compaction(&messages_to_compact)?
-        };
+        let new_summary_text = self
+            .call_compaction_model(&*self.llm, &self.model, self.temperature, &prompt)
+            .await?;
 
         // Determine the new boundary message ID (latest message being compacted)
         let new_boundary_id = messages_to_compact
@@ -139,7 +121,7 @@ impl CompactionWorker {
             );
         }
 
-        info!(
+        debug!(
             session_id = %session_id,
             new_boundary_id = %new_boundary_id,
             summary_length = new_summary_text.len(),
@@ -265,95 +247,6 @@ impl CompactionWorker {
         Ok(text)
     }
 
-    /// Fallback compaction when no LLM is available.
-    ///
-    /// Produces a basic summary by concatenating key information from messages.
-    fn fallback_compaction(
-        &self,
-        messages: &[&crate::storage::messages::StoredMessage],
-    ) -> Result<String, AgentError> {
-        let mut summary = String::from("# Conversation Working Summary\n\n");
-
-        // Collect user messages and assistant responses
-        let mut user_msgs = Vec::new();
-        let mut assistant_msgs = Vec::new();
-
-        for msg in messages {
-            match msg.role.as_str() {
-                Some("user") => {
-                    let content = if msg.content.is_empty() {
-                        msg.structured_content_json
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
-                    } else {
-                        msg.content.clone()
-                    };
-                    user_msgs.push(content);
-                }
-                Some("assistant") => {
-                    let content = if msg.content.is_empty() {
-                        msg.structured_content_json
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
-                    } else {
-                        msg.content.clone()
-                    };
-                    assistant_msgs.push(content);
-                }
-                _ => {}
-            }
-        }
-
-        if user_msgs.is_empty() && assistant_msgs.is_empty() {
-            return Err(AgentError::Compaction(
-                "No user or assistant messages to summarize".into(),
-            ));
-        }
-
-        summary.push_str("## User preferences and standing instructions\n");
-        summary.push_str("- No specific preferences identified in compacted history.\n\n");
-
-        summary.push_str("## Ongoing projects or threads\n");
-        if user_msgs.len() <= 5 {
-            for (i, msg) in user_msgs.iter().enumerate() {
-                let truncated = if msg.len() > 200 {
-                    format!("{}...", truncate_str(msg, 200))
-                } else {
-                    msg.clone()
-                };
-                summary.push_str(&format!("- Message {}: {}\n", i + 1, truncated));
-            }
-        } else {
-            summary.push_str(&format!(
-                "- {} user messages were compacted (too many to list individually).\n",
-                user_msgs.len()
-            ));
-        }
-        summary.push('\n');
-
-        summary.push_str("## Decisions already made\n");
-        summary.push_str("- No explicit decisions identified.\n\n");
-
-        summary.push_str("## Important facts introduced by the user\n");
-        summary.push_str("- Information from compacted conversation turns.\n\n");
-
-        summary.push_str("## Open loops\n");
-        summary.push_str("- No explicit open loops identified.\n\n");
-
-        summary.push_str("## Relevant tool outcomes or state changes\n");
-        summary.push_str("- Tool call results from compacted conversation turns.\n");
-
-        info!(
-            summary_length = summary.len(),
-            message_count = messages.len(),
-            "fallback compaction produced basic summary"
-        );
-
-        Ok(summary)
-    }
-
     /// Delete an old summary from the database.
     async fn delete_old_summary(
         &self,
@@ -390,10 +283,4 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
         .take_while(|(i, _)| *i < max_bytes)
         .last()
         .map_or(&s[..0], |(i, _)| &s[..i])
-}
-
-impl Default for CompactionWorker {
-    fn default() -> Self {
-        Self::new()
-    }
 }

@@ -119,7 +119,7 @@ README.md          — Project documentation
 **Context compaction (background):**
 - After each successful agent run, handler checks if total_tokens > soft_threshold
 - If above threshold: calls CompactionService, which tracks per-session state (Idle/Running/RunningAndDirty) and prevents concurrent compactions
-- CompactionService runs CompactionWorker asynchronously with the configured compactor model when `[context.compactor].model` is set, otherwise deterministic fallback summary is used
+- CompactionService runs CompactionWorker asynchronously using the same LLM configured in `[llm]`. If no LLM model is configured, compaction is disabled (no-op).
 - CompactionWorker loads messages after the latest summary boundary, combines them with the existing summary, and persists a new structured summary with updated covers_through_message_id
 - Hard threshold (default 85%): ContextManager bounds messages to fit budget
 
@@ -140,7 +140,7 @@ README.md          — Project documentation
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
 - `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens
-- `[context]` — soft/hard thresholds, recent_turns_to_preserve, compactor provider/model
+- `[context]` — soft/hard thresholds, recent_turns_to_preserve, reserved_tool_loop_tokens
 - `[scheduler]` — run_overdue_one_shots_on_startup
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`)
 - `[exa]` — api_key_env, max_results, max_text_chars

@@ -79,7 +79,8 @@ Copy `config.toml.example` to `config.toml` and adjust as needed. All secrets ar
 | `[context]` | `soft_compaction_threshold` | Fraction that triggers background compaction (default: `0.60`) |
 | | `hard_context_threshold` | Fraction that forces context bounding (default: `0.85`) |
 | | `recent_turns_to_preserve` | Raw turns kept after summary (default: `30`) |
-| | `[context.compactor]` | Optional separate model for background summarization |
+| | `reserved_tool_loop_tokens` | Tokens reserved for tool-loop headroom (default: `8192`) |
+| `[llm]` | `context_window_tokens` | Total context window size in tokens (default: `128000`) |
 | `[scheduler]` | `run_overdue_one_shots_on_startup` | Run missed one-shot jobs on startup (default: `false`) |
 | `[shell]` | `allowed_commands` | Allowlist for shell execution (empty = allow all) |
 | | `denied_commands` | Always-blocked commands |

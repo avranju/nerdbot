@@ -175,20 +175,21 @@ async fn main() {
         }
     };
 
-    // Initialize compaction service.
+    // Validate LLM model is configured (required for both agent and compaction).
+    if config.llm.model.is_empty() {
+        error!(
+            "LLM model not configured. Set llm.model in config.toml (e.g. gpt-4o, claude-sonnet-4-5)."
+        );
+        return;
+    }
+
+    // Initialize compaction service using the same LLM.
     let compaction_budget = ContextBudget::from_llm_and_context(&config.llm, &config.context);
-
-    let compaction_worker = {
-        let compaction_model = config.context.compactor.model.clone();
-        if !compaction_model.is_empty() {
-            // Use the configured compactor model via the main LLM client.
-            CompactionWorker::with_llm(llm.clone(), compaction_model, config.llm.temperature)
-        } else {
-            // No compactor model configured — use deterministic fallback compaction.
-            CompactionWorker::new()
-        }
-    };
-
+    let compaction_worker = CompactionWorker::new(
+        llm.clone(),
+        config.llm.model.clone(),
+        config.llm.temperature,
+    );
     let compaction_service = Arc::new(CompactionService::new(
         db.pool().clone(),
         Arc::new(compaction_worker),
