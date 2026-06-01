@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
@@ -36,6 +36,14 @@ struct Cli {
     /// Path to TOML configuration file.
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Create a config.toml file through an interactive first-run flow.
+    Onboard,
 }
 
 #[tokio::main]
@@ -48,6 +56,13 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
+
+    if let Some(Command::Onboard) = cli.command {
+        if let Err(e) = nerdbot::onboarding::run(&cli.config) {
+            error!(error = %e, "onboarding failed");
+        }
+        return;
+    }
 
     info!(config_path = %cli.config.display(), "starting nerdbot");
 

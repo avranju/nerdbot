@@ -9,6 +9,7 @@
 # Config and data volumes (may contain secrets or DB files)
 config/
 data/
+config.toml
 
 # Database files
 *.db

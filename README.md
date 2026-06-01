@@ -43,18 +43,21 @@ docker compose up -d
 ### Local Development
 
 ```bash
-# 1. Set environment variables
+# 1. Generate config.toml through the guided onboarding flow
+cargo run -- onboard
+
+# 2. Set the environment variables named during onboarding
 export TELEGRAM_BOT_TOKEN="your-bot-token-here"
-export OPENAI_API_KEY="your-openai-key-here"  # needed for default gpt-4o
+export OPENAI_API_KEY="your-openai-key-here"  # when using OpenAI
 export EXA_API_KEY="your-exa-key-here"  # optional
 
-# 2. Run with the local-dev config (host-friendly paths)
-cargo run -- --config config.toml.localdev
+# 3. Run
+cargo run
 ```
 
 ## Configuration
 
-Copy `config.toml.example` to `config.toml` and adjust as needed. All secrets are read from **environment variables**, never from the config file.
+Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.example` to `config.toml` and adjust it manually. When the config file already exists, onboarding uses its current values as prompt defaults and preserves settings outside the guided flow. Pass `--config <path>` before the subcommand to generate or edit a different file, for example `cargo run -- --config config/local.toml onboard`. All secrets are read from **environment variables**, never from the config file.
 
 | Section | Key | Description |
 |---------|-----|-------------|
@@ -128,6 +131,7 @@ The Rust harness **owns orchestration**. The LLM proposes actions through tool c
 src/
   main.rs              — CLI entry, long polling loop, service wiring
   config.rs            — TOML config loader
+  onboarding.rs        — Interactive config.toml generator
   error.rs             — Error types
   agent/               — Agent loop and run modes
   llm/                 — LLM client (via genai crate)

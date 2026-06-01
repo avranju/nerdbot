@@ -8,6 +8,7 @@ pub mod config;
 pub mod context;
 pub mod error;
 pub mod llm;
+pub mod onboarding;
 pub mod scheduler;
 pub mod storage;
 pub mod telegram;

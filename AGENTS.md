@@ -16,7 +16,7 @@ executes them → results fed back → repeat) → Telegram reply.
 - **Logging:** `tracing` + `tracing-subscriber` with `env-filter`
 - **Cron parsing:** `cron` crate
 - **Serialization:** `serde` + `serde_json`
-- **CLI:** `clap` with derive
+- **CLI:** `clap` with derive + `cliclack` interactive prompts
 
 ### Source Layout
 ```
@@ -24,6 +24,7 @@ src/
   main.rs          — CLI entry, long polling loop, service wiring (imports from lib crate)
   lib.rs           — Crate root, re-exports all modules for tests and binary crate
   config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/files/exa sections)
+  onboarding.rs    — Interactive `config.toml` generator for first-run setup
   error.rs         — AgentError enum + domain-specific error types
 
   agent/
@@ -98,6 +99,12 @@ README.md          — Project documentation
 ```
 
 ### Runtime Flows
+
+**CLI onboarding:**
+1. Run `nerdbot onboard` (optionally with `--config <path>`)
+2. If the config file exists, load it and use its current values as prompt defaults
+3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, chat/user allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
+4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, and use `AppConfig` defaults for omitted settings in a new file
 
 **Interactive Telegram message:**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
