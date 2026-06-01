@@ -16,6 +16,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use crate::agent::outcome::AgentOutcome;
 use crate::agent::run_mode::AgentRunMode;
+use crate::agent::system_prompt::append_timezone_context;
 use crate::config::AppConfig;
 use crate::context::budget::ContextBudget;
 use crate::context::compaction_service::CompactionService;
@@ -26,6 +27,7 @@ use crate::storage;
 use crate::tools::registry::ToolRegistry;
 
 use super::commands::{CommandHandler, TelegramCommand};
+use super::service::TelegramService;
 
 /// Handles incoming Telegram messages, routing them to the appropriate handler.
 pub struct MessageHandler {
@@ -47,6 +49,8 @@ pub struct MessageHandler {
     bot_token: String,
     /// Notifier to wake up the scheduler loop immediately on job updates.
     scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
+    /// Service used to show a typing action during interactive agent turns.
+    telegram_service: Option<TelegramService>,
 }
 
 impl MessageHandler {
@@ -56,6 +60,7 @@ impl MessageHandler {
         registry: Arc<ToolRegistry>,
         config: AppConfig,
         scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
+        telegram_service: Option<TelegramService>,
         compaction_service: Arc<CompactionService>,
     ) -> Self {
         let loop_config = AgentLoopConfig {
@@ -82,6 +87,7 @@ impl MessageHandler {
             config,
             bot_token,
             scheduler_notifier,
+            telegram_service,
         }
     }
 
@@ -203,9 +209,16 @@ impl MessageHandler {
             text_len = text.len(),
             "running agent loop"
         );
+        let typing_indicator = self
+            .telegram_service
+            .as_ref()
+            .map(|service| service.start_typing(chat_id));
 
         // Load personality file if configured
-        let personality = self.load_personality().await?;
+        let personality = append_timezone_context(
+            &self.load_personality().await?,
+            &self.config.agent.default_timezone,
+        );
 
         // Build bounded context using ContextManager (summary + recent messages)
         let current_user_message = ChatMessage::user(MessageContent::from_text(text));
@@ -230,6 +243,7 @@ impl MessageHandler {
 
         // Run the agent loop
         let result = run_agent(&ctx, self.llm.as_ref(), &self.registry, &self.loop_config).await;
+        drop(typing_indicator);
 
         // Check if compaction is needed after a successful run
         if let Ok(ref agent_result) = result

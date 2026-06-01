@@ -106,6 +106,10 @@ README.md          — Project documentation
 3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, chat/user allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
 4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, and use `AppConfig` defaults for omitted settings in a new file
 
+**Custom OpenAI-compatible LLM endpoint:**
+- `LlmClient::from_config` normalizes configured endpoint URLs with a trailing slash and binds `genai` to the OpenAI adapter, preventing unknown local model names from falling back to native Ollama routing
+- If no `llm.api_key_env` is configured, the client supplies an empty placeholder auth value so local servers without authentication work
+
 **Interactive Telegram message:**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
 1. Long polling receives update
@@ -113,14 +117,15 @@ README.md          — Project documentation
 3. Ensures chat session exists (creates if new)
 4. Routes: if `/command` → CommandHandler, else → agent loop
 5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once
-6. Agent loop: personality + bounded context → iterative tool loop → final text (with token tracking from genai response)
-7. Persists current user message and assistant reply → sends to Telegram
-8. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
+6. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
+7. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
+8. Persists current user message and assistant reply → sends to Telegram
+9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job
 2. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode)
-3. Agent loop executes with job prompt; model may use web_search, send_user_message, etc.
+3. Agent loop executes with personality, configured timezone runtime context, and job prompt; model may use web_search, send_user_message, etc.
 4. Job status updated to Success/Failed
 5. If notify_on_completion and model didn't send a message, harness sends final text
 

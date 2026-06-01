@@ -310,6 +310,7 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
         Arc::new(registry),
         make_test_config(),
         None,
+        None,
         compaction_service,
     )
 }
@@ -460,6 +461,7 @@ async fn test_message_handler_allowlist_blocks_chat() {
         Arc::new(registry),
         config,
         None,
+        None,
         compaction_service,
     );
 
@@ -490,6 +492,7 @@ async fn test_message_handler_allowlist_blocks_user() {
         provider,
         Arc::new(registry),
         config,
+        None,
         None,
         compaction_service,
     );
@@ -595,6 +598,25 @@ async fn test_send_message_with_options_disable_notification() {
     let result = service
         .send_message_with_options(123, "silent message", None, Some(true))
         .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_typing_action() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendChatAction")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "action": "typing"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true,"result":true}"#))
+        .mount(&server)
+        .await;
+
+    let result = service.bot().send_typing_action(123).await;
     assert!(result.is_ok());
 }
 

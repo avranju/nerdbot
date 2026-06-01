@@ -7,6 +7,7 @@
 //! A `FakeProvider` is kept for testing the agent loop without hitting real APIs.
 
 use async_trait::async_trait;
+use genai::adapter::AdapterKind;
 use genai::chat::{ChatOptions, ChatRequest, ChatResponse};
 use genai::resolver::{AuthData, Endpoint};
 
@@ -50,14 +51,25 @@ impl LlmClient {
         let mut builder = genai::Client::builder();
 
         // Cache optional overrides at construction time.
-        let endpoint = config.llm.endpoint.clone();
+        let endpoint = config.llm.endpoint.as_deref().map(normalize_endpoint);
         let api_key = if let Some(ref env_var) = config.llm.api_key_env {
             Some(std::env::var(env_var).map_err(|_| {
                 AgentError::Config(format!("Missing LLM API key env var: {env_var}"))
             })?)
+        } else if endpoint.is_some() {
+            // OpenAI-compatible local servers often do not require auth, but
+            // genai's OpenAI adapter still expects a single auth value.
+            Some(String::new())
         } else {
             None
         };
+
+        // Custom endpoints are documented as OpenAI-compatible. Binding the
+        // adapter avoids genai's fallback to native Ollama routing for model
+        // names that do not have a recognized provider prefix.
+        if endpoint.is_some() {
+            builder = builder.with_adapter_kind(AdapterKind::OpenAI);
+        }
 
         // Only install a resolver if at least one override is configured.
         if endpoint.is_some() || api_key.is_some() {
@@ -79,6 +91,14 @@ impl LlmClient {
     }
 }
 
+fn normalize_endpoint(endpoint: &str) -> String {
+    if endpoint.ends_with('/') {
+        endpoint.into()
+    } else {
+        format!("{endpoint}/")
+    }
+}
+
 #[async_trait]
 impl LlmExecutor for LlmClient {
     async fn complete(
@@ -91,5 +111,35 @@ impl LlmExecutor for LlmClient {
             .exec_chat(model, request, Some(&options))
             .await
             .map_err(|e| AgentError::LlmProvider(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn custom_endpoint_routes_unknown_model_through_openai_adapter() {
+        let mut config = AppConfig::default();
+        config.llm.endpoint = Some("http://localhost:8001/v1".into());
+
+        let client = LlmClient::from_config(&config).unwrap();
+        let target = client
+            .client
+            .resolve_service_target("qwen3.6-35b-a3b")
+            .await
+            .unwrap();
+
+        assert_eq!(target.model.adapter_kind, AdapterKind::OpenAI);
+        assert_eq!(target.endpoint.base_url(), "http://localhost:8001/v1/");
+        assert_eq!(target.auth.single_key_value().unwrap(), "");
+    }
+
+    #[test]
+    fn endpoint_normalization_preserves_existing_trailing_slash() {
+        assert_eq!(
+            normalize_endpoint("http://localhost:8001/v1/"),
+            "http://localhost:8001/v1/"
+        );
     }
 }

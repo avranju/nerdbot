@@ -211,6 +211,11 @@ impl SchedulerService {
                                     Ok(content) => content,
                                     Err(_) => "You are a helpful assistant.".to_string(),
                                 };
+                                let personality =
+                                    crate::agent::system_prompt::append_timezone_context(
+                                        &personality,
+                                        &config_clone.agent.default_timezone,
+                                    );
 
                                 let run_result = crate::scheduler::runner::run_scheduled_job(
                                     crate::scheduler::runner::RunScheduledJobInput {

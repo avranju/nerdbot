@@ -235,6 +235,7 @@ async fn main() {
         registry,
         config.clone(),
         Some(scheduler.notifier()),
+        Some(service.clone()),
         compaction_service,
     ));
 

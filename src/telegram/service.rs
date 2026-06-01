@@ -4,9 +4,10 @@
 //! automatically splitting them if they exceed Telegram's 4096-char limit.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::error::AgentError;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::bot::TelegramBot;
 
@@ -19,6 +20,17 @@ pub struct TelegramService {
     bot: Arc<TelegramBot>,
 }
 
+/// Keeps Telegram's short-lived typing action refreshed while an agent turn runs.
+pub struct TypingIndicator {
+    refresh_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for TypingIndicator {
+    fn drop(&mut self) {
+        self.refresh_task.abort();
+    }
+}
+
 impl TelegramService {
     /// Create a new service wrapping a bot client.
     pub fn new(bot: Arc<TelegramBot>) -> Self {
@@ -28,6 +40,21 @@ impl TelegramService {
     /// Get a reference to the underlying bot.
     pub fn bot(&self) -> &Arc<TelegramBot> {
         &self.bot
+    }
+
+    /// Start refreshing Telegram's typing action until the returned guard is dropped.
+    pub fn start_typing(&self, chat_id: i64) -> TypingIndicator {
+        let service = self.clone();
+        let refresh_task = tokio::spawn(async move {
+            loop {
+                if let Err(e) = service.bot.send_typing_action(chat_id).await {
+                    warn!(chat_id, error = %e, "failed to send Telegram typing action");
+                }
+                tokio::time::sleep(Duration::from_secs(4)).await;
+            }
+        });
+
+        TypingIndicator { refresh_task }
     }
 
     /// Send a text message to a chat.

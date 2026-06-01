@@ -839,6 +839,41 @@ async fn test_agent_loop_includes_personality() {
     );
 }
 
+#[tokio::test]
+async fn test_agent_loop_includes_personality_alongside_existing_system_message() {
+    let provider = FakeProvider::new(vec![FakeResponse::final_text("Personality loaded.")]);
+
+    let mut ctx = test_context();
+    ctx.personality = "Runtime timezone: Asia/Kolkata.".to_string();
+    ctx.messages.insert(
+        0,
+        ChatMessage::system(MessageContent::from_text("Conversation summary.")),
+    );
+
+    let registry = toy_registry();
+    let config = AgentLoopConfig::default();
+
+    run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
+
+    let last_req = provider.last_request().unwrap();
+    let system_msgs: Vec<_> = last_req
+        .messages
+        .iter()
+        .filter(|m| matches!(m.role, ChatRole::System))
+        .collect();
+    assert_eq!(system_msgs.len(), 2);
+    assert_eq!(
+        system_msgs[0].content.joined_texts().as_deref(),
+        Some("Runtime timezone: Asia/Kolkata.")
+    );
+    assert_eq!(
+        system_msgs[1].content.joined_texts().as_deref(),
+        Some("Conversation summary.")
+    );
+}
+
 // ── Test: Agent Loop Token Tracking ────────────────────────────────────
 
 #[tokio::test]

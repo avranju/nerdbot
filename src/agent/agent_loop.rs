@@ -5,7 +5,7 @@
 //! - Max tool iterations are reached
 //! - An unrecoverable error occurs
 
-use genai::chat::{ChatMessage, ChatRequest, ChatRole, MessageContent, ToolResponse};
+use genai::chat::{ChatMessage, ChatRequest, MessageContent, ToolResponse};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::agent::outcome::{AgentOutcome, AgentResult, RunMetadata, RunTokenUsage};
@@ -43,7 +43,7 @@ impl Default for AgentLoopConfig {
 ///
 /// The messages parameter should already be assembled by [`crate::context::manager::ContextManager`]
 /// with bounded context (summary + recent messages). This function appends
-/// personality as system message (if not already present) and tool specs.
+/// personality as a system message and tool specs.
 ///
 /// 1. Loop: send request to provider, execute tool calls, repeat.
 /// 2. Return final text or an error.
@@ -56,14 +56,9 @@ pub async fn run_agent(
 ) -> Result<AgentResult, AgentError> {
     let mut working_messages = ctx.messages.clone();
 
-    // Append personality as system message if not already present.
-    // ContextManager may have already included a summary as system message;
+    // ContextManager may have already included a summary as a system message;
     // personality is prepended before that.
-    if !ctx.personality.is_empty()
-        && !working_messages
-            .iter()
-            .any(|m| matches!(m.role, ChatRole::System))
-    {
+    if !ctx.personality.is_empty() {
         working_messages.insert(
             0,
             ChatMessage::system(MessageContent::from_text(&ctx.personality)),
