@@ -344,17 +344,6 @@ async fn test_message_handler_runs_agent_for_normal_text() {
 }
 
 #[tokio::test]
-async fn test_message_handler_reset_context_via_text() {
-    let pool = setup_test_db().await;
-    let handler = make_handler(pool);
-
-    // "reset context" (without slash) should be treated as a command
-    let response = handler.handle_message(1, 1, "reset context").await.unwrap();
-    assert!(response.is_some());
-    assert!(response.unwrap().contains("fresh conversation"));
-}
-
-#[tokio::test]
 async fn test_message_handler_creates_session() {
     let pool = setup_test_db().await;
     let handler = make_handler(pool.clone());

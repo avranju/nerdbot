@@ -184,19 +184,6 @@ impl MessageHandler {
             return Ok(Some(response));
         }
 
-        // Check for /reset-context without slash (heuristic)
-        if text.trim().eq_ignore_ascii_case("reset context") {
-            let response = CommandHandler::handle(
-                TelegramCommand::ResetContext,
-                chat_id,
-                user_id,
-                &self.pool,
-                self.scheduler_notifier.as_deref(),
-            )
-            .await?;
-            return Ok(Some(response));
-        }
-
         // Regular message: run through the agent loop
         self.run_agent_for_message(chat_id, user_id, text, session_id)
             .await

@@ -270,7 +270,9 @@ async fn main() {
                                         }
                                     }
                                     Ok(None) => {}
-                                    Err(AgentError::PermissionDenied) => {}
+                                    Err(AgentError::PermissionDenied) => {
+                                        error!(chat_id, user_id, "permission denied");
+                                    }
                                     Err(e) => {
                                         error!(chat_id, error = %e, "message handler error");
                                         let err_msg = format!("❌ Internal error: {e}");
