@@ -38,7 +38,7 @@ struct Cli {
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
     /// Enable the local diagnostics service on this Unix socket path.
-    #[arg(long)]
+    #[arg(short, long)]
     diagnostics_socket: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
