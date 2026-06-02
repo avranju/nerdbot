@@ -37,9 +37,9 @@ impl Tool for SendTelegramMessage {
                 },
                 "formatting": {
                     "type": "string",
-                    "enum": ["plain_text", "markdown"],
+                    "enum": ["plain_text", "markdown", "markdown_raw"],
                     "default": "plain_text",
-                    "description": "Message formatting style. 'plain_text' for no formatting, 'markdown' for MarkdownV2 formatting."
+                    "description": "Message formatting style. 'plain_text' for no formatting, 'markdown' for standard Markdown (automatically formatted and escaped), 'markdown_raw' for raw Telegram MarkdownV2 (requires manual escaping of dots, hyphens, and single-asterisk bold)."
                 },
                 "disable_notification": {
                     "type": "boolean",
@@ -98,6 +98,7 @@ impl Tool for SendTelegramMessage {
         // Determine parse mode
         let parse_mode = match formatting {
             "markdown" => Some("MarkdownV2"),
+            "markdown_raw" => Some("MarkdownV2Raw"),
             _ => None,
         };
 

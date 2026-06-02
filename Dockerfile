@@ -1,5 +1,5 @@
 # ── Stage 1: Build ────────────────────────────────────────────────
-FROM rust:1.96-bullseye-slim AS builder
+FROM rust:1.96-slim-bookworm AS builder
 
 # Install SQLite dev headers (required by sqlx)
 RUN apt-get update && \
@@ -18,7 +18,7 @@ COPY src ./src
 RUN cargo build --release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────
-FROM debian:trixie-slim
+FROM debian:bookworm-slim
 
 # No SQLite dev dependency at runtime — runtime libsqlite3-0 is installed below
 RUN apt-get update && \

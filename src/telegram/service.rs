@@ -74,7 +74,8 @@ impl TelegramService {
     /// # Arguments
     /// * `chat_id` - Target Telegram chat ID
     /// * `text` - Message text
-    /// * `parse_mode` - Optional formatting: `"MarkdownV2"` for markdown, or `None` for plain text
+    /// * `parse_mode` - Optional formatting: `"MarkdownV2"` for standard markdown conversion,
+    ///   `"MarkdownV2Raw"` for pre-escaped Telegram markdown, or `None` for plain text
     /// * `disable_notification` - If true, send without triggering notification sounds
     pub async fn send_message_with_options(
         &self,
@@ -83,39 +84,100 @@ impl TelegramService {
         parse_mode: Option<&str>,
         disable_notification: Option<bool>,
     ) -> Result<(), AgentError> {
-        // Check if the message needs to be split
-        if text.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
-            if parse_mode == Some("MarkdownV2") {
+        match parse_mode {
+            Some("MarkdownV2") => {
                 let formatted = super::markdown::parse_markdown_to_v2(text);
-                match self
-                    .bot
-                    .send_message(chat_id, &formatted, parse_mode, disable_notification)
-                    .await
-                {
-                    Ok(_) => return Ok(()),
-                    Err(e) => {
-                        warn!(chat_id, error = %e, "MarkdownV2 delivery failed, retrying as plain text");
-                        self.bot
-                            .send_message(chat_id, text, None, disable_notification)
-                            .await?;
-                        return Ok(());
-                    }
+                if formatted.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
+                    return self
+                        .send_formatted_with_parse_fallback(
+                            chat_id,
+                            &formatted,
+                            text,
+                            disable_notification,
+                        )
+                        .await;
                 }
-            } else {
-                self.bot
-                    .send_message(chat_id, text, parse_mode, disable_notification)
-                    .await?;
-                return Ok(());
+                warn!(
+                    chat_id,
+                    formatted_len = formatted.chars().count(),
+                    "formatted MarkdownV2 response exceeds Telegram limit, sending split plain text"
+                );
+            }
+            Some("MarkdownV2Raw") => {
+                if text.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
+                    return self
+                        .send_formatted_with_parse_fallback(
+                            chat_id,
+                            text,
+                            text,
+                            disable_notification,
+                        )
+                        .await;
+                }
+                warn!(
+                    chat_id,
+                    text_len = text.chars().count(),
+                    "raw MarkdownV2 response exceeds Telegram limit, sending split plain text"
+                );
+            }
+            _ => {
+                return self
+                    .send_split_message(chat_id, text, parse_mode, disable_notification)
+                    .await;
             }
         }
 
-        // Split into chunks
+        self.send_split_message(chat_id, text, None, disable_notification)
+            .await
+    }
+
+    async fn send_formatted_with_parse_fallback(
+        &self,
+        chat_id: i64,
+        formatted_text: &str,
+        plain_text: &str,
+        disable_notification: Option<bool>,
+    ) -> Result<(), AgentError> {
+        match self
+            .bot
+            .send_message(
+                chat_id,
+                formatted_text,
+                Some("MarkdownV2"),
+                disable_notification,
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) if is_telegram_parse_error(&e) => {
+                warn!(chat_id, error = %e, "MarkdownV2 entity parse failed, retrying as plain text");
+                self.send_split_message(chat_id, plain_text, None, disable_notification)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn send_split_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+        disable_notification: Option<bool>,
+    ) -> Result<(), AgentError> {
+        if text.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
+            self.bot
+                .send_message(chat_id, text, parse_mode, disable_notification)
+                .await?;
+            return Ok(());
+        }
+
         let chunks = TelegramBot::split_long_message(text);
         info!(
             chat_id,
             total_chunks = chunks.len(),
             original_len = text.chars().count(),
-            "splitting long message into chunks"
+            "splitting long Telegram message into chunks"
         );
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -126,29 +188,20 @@ impl TelegramService {
             };
 
             let message = format!("{prefix}{chunk}");
-            if parse_mode == Some("MarkdownV2") {
-                let formatted = super::markdown::parse_markdown_to_v2(&message);
-                match self
-                    .bot
-                    .send_message(chat_id, &formatted, parse_mode, disable_notification)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(chat_id, error = %e, "MarkdownV2 delivery failed for chunk, retrying as plain text");
-                        self.bot
-                            .send_message(chat_id, &message, None, disable_notification)
-                            .await?;
-                    }
-                }
-            } else {
-                self.bot
-                    .send_message(chat_id, &message, parse_mode, disable_notification)
-                    .await?;
-            }
+            self.bot
+                .send_message(chat_id, &message, parse_mode, disable_notification)
+                .await?;
             debug!(chunk = i + 1, total = chunks.len(), "chunk sent");
         }
 
         Ok(())
+    }
+}
+
+fn is_telegram_parse_error(err: &AgentError) -> bool {
+    if let AgentError::Telegram(msg) = err {
+        msg.contains("can't parse entities") || msg.contains("can't parse message")
+    } else {
+        false
     }
 }

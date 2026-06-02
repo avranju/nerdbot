@@ -247,7 +247,7 @@ cargo build --release
 
 ### Cross-compilation
 
-The Dockerfile uses `rust:1.89-slim` as the build stage. For cross-compilation (e.g., `aarch64`), use Docker Buildx:
+The Dockerfile uses `rust:1.96-slim-bookworm` as the build stage. For cross-compilation (e.g., `aarch64`), use Docker Buildx:
 
 ```bash
 docker buildx build --platform linux/arm64 -t nerdbot:latest .

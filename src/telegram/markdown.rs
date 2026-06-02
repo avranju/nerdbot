@@ -149,6 +149,59 @@ impl Parser {
         None
     }
 
+    fn has_matching_delimiter(&self, delim: &str) -> bool {
+        let delim_chars: Vec<char> = delim.chars().collect();
+        let start = self.pos + delim_chars.len();
+        let end = self.chars.len();
+
+        let mut i = start;
+        while i < end {
+            if i + delim_chars.len() <= end {
+                let mut matches = true;
+                for (idx, &c) in delim_chars.iter().enumerate() {
+                    if self.chars[i + idx] != c {
+                        matches = false;
+                        break;
+                    }
+                }
+                if matches {
+                    // For code blocks and inline code, we do not require the non-whitespace check
+                    if delim == "```" || delim == "`" {
+                        return true;
+                    }
+                    // For formatting blocks, closing delimiter must be preceded by a non-whitespace char
+                    if i > start {
+                        let prev_char = self.chars[i - 1];
+                        if !prev_char.is_whitespace() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn can_open_delimiter(&self, delim: &str) -> bool {
+        let delim_len = delim.chars().count();
+        if self.pos + delim_len >= self.chars.len() {
+            return false;
+        }
+        let next_char = self.chars[self.pos + delim_len];
+        if next_char.is_whitespace() {
+            return false;
+        }
+        // Single/double underscore cannot be preceded by alphanumeric to prevent inside-word matching
+        if (delim == "_" || delim == "__") && self.pos > 0 {
+            let prev_char = self.chars[self.pos - 1];
+            if prev_char.is_alphanumeric() {
+                return false;
+            }
+        }
+        self.has_matching_delimiter(delim)
+    }
+
     fn parse_nodes(&mut self, delimiters: &[&str]) -> Vec<Node> {
         let mut nodes = Vec::new();
         let mut current_text = String::new();
@@ -175,16 +228,28 @@ impl Parser {
 
             // Check for Code Block
             if self.starts_with("```") {
-                flush_text(&mut nodes, &mut current_text);
-                nodes.push(self.parse_code_block());
-                continue;
+                if self.has_matching_delimiter("```") {
+                    flush_text(&mut nodes, &mut current_text);
+                    nodes.push(self.parse_code_block());
+                    continue;
+                } else {
+                    current_text.push('`');
+                    self.next();
+                    continue;
+                }
             }
 
             // Check for Inline Code
             if self.starts_with("`") {
-                flush_text(&mut nodes, &mut current_text);
-                nodes.push(self.parse_inline_code());
-                continue;
+                if self.has_matching_delimiter("`") {
+                    flush_text(&mut nodes, &mut current_text);
+                    nodes.push(self.parse_inline_code());
+                    continue;
+                } else {
+                    current_text.push('`');
+                    self.next();
+                    continue;
+                }
             }
 
             // Check for Link
@@ -201,61 +266,91 @@ impl Parser {
 
             // Check for Bold (**)
             if self.starts_with("**") {
-                flush_text(&mut nodes, &mut current_text);
-                self.consume_str("**");
-                let inner = self.parse_nodes(&["**"]);
-                if self.starts_with("**") {
+                if self.can_open_delimiter("**") {
+                    flush_text(&mut nodes, &mut current_text);
                     self.consume_str("**");
+                    let inner = self.parse_nodes(&["**"]);
+                    if self.starts_with("**") {
+                        self.consume_str("**");
+                    }
+                    nodes.push(Node::Bold(inner));
+                    continue;
+                } else {
+                    current_text.push('*');
+                    self.next();
+                    continue;
                 }
-                nodes.push(Node::Bold(inner));
-                continue;
             }
 
             // Check for Underline (__)
             if self.starts_with("__") {
-                flush_text(&mut nodes, &mut current_text);
-                self.consume_str("__");
-                let inner = self.parse_nodes(&["__"]);
-                if self.starts_with("__") {
+                if self.can_open_delimiter("__") {
+                    flush_text(&mut nodes, &mut current_text);
                     self.consume_str("__");
+                    let inner = self.parse_nodes(&["__"]);
+                    if self.starts_with("__") {
+                        self.consume_str("__");
+                    }
+                    nodes.push(Node::Underline(inner));
+                    continue;
+                } else {
+                    current_text.push('_');
+                    self.next();
+                    continue;
                 }
-                nodes.push(Node::Underline(inner));
-                continue;
             }
 
             // Check for Italic (* or _)
             if self.starts_with("*") {
-                flush_text(&mut nodes, &mut current_text);
-                self.consume_str("*");
-                let inner = self.parse_nodes(&["*"]);
-                if self.starts_with("*") {
+                if self.can_open_delimiter("*") {
+                    flush_text(&mut nodes, &mut current_text);
                     self.consume_str("*");
+                    let inner = self.parse_nodes(&["*"]);
+                    if self.starts_with("*") {
+                        self.consume_str("*");
+                    }
+                    nodes.push(Node::Italic(inner));
+                    continue;
+                } else {
+                    current_text.push('*');
+                    self.next();
+                    continue;
                 }
-                nodes.push(Node::Italic(inner));
-                continue;
             }
 
             if self.starts_with("_") {
-                flush_text(&mut nodes, &mut current_text);
-                self.consume_str("_");
-                let inner = self.parse_nodes(&["_"]);
-                if self.starts_with("_") {
+                if self.can_open_delimiter("_") {
+                    flush_text(&mut nodes, &mut current_text);
                     self.consume_str("_");
+                    let inner = self.parse_nodes(&["_"]);
+                    if self.starts_with("_") {
+                        self.consume_str("_");
+                    }
+                    nodes.push(Node::Italic(inner));
+                    continue;
+                } else {
+                    current_text.push('_');
+                    self.next();
+                    continue;
                 }
-                nodes.push(Node::Italic(inner));
-                continue;
             }
 
             // Check for Strikethrough (~~)
             if self.starts_with("~~") {
-                flush_text(&mut nodes, &mut current_text);
-                self.consume_str("~~");
-                let inner = self.parse_nodes(&["~~"]);
-                if self.starts_with("~~") {
+                if self.can_open_delimiter("~~") {
+                    flush_text(&mut nodes, &mut current_text);
                     self.consume_str("~~");
+                    let inner = self.parse_nodes(&["~~"]);
+                    if self.starts_with("~~") {
+                        self.consume_str("~~");
+                    }
+                    nodes.push(Node::Strikethrough(inner));
+                    continue;
+                } else {
+                    current_text.push('~');
+                    self.next();
+                    continue;
                 }
-                nodes.push(Node::Strikethrough(inner));
-                continue;
             }
 
             // Check for backslash escaping
@@ -354,23 +449,23 @@ fn escape_url(s: &str) -> String {
 }
 
 impl Node {
-    fn to_markdown_v2(&self) -> String {
+    fn format_to_v2(&self) -> String {
         match self {
             Node::Text(s) => escape_text(s),
             Node::Bold(children) => {
-                let inner: String = children.iter().map(|c| c.to_markdown_v2()).collect();
+                let inner: String = children.iter().map(|c| c.format_to_v2()).collect();
                 format!("*{inner}*")
             }
             Node::Italic(children) => {
-                let inner: String = children.iter().map(|c| c.to_markdown_v2()).collect();
+                let inner: String = children.iter().map(|c| c.format_to_v2()).collect();
                 format!("_{inner}_")
             }
             Node::Underline(children) => {
-                let inner: String = children.iter().map(|c| c.to_markdown_v2()).collect();
+                let inner: String = children.iter().map(|c| c.format_to_v2()).collect();
                 format!("__{inner}__")
             }
             Node::Strikethrough(children) => {
-                let inner: String = children.iter().map(|c| c.to_markdown_v2()).collect();
+                let inner: String = children.iter().map(|c| c.format_to_v2()).collect();
                 format!("~{inner}~")
             }
             Node::CodeBlock { lang, code } => {
@@ -382,7 +477,7 @@ impl Node {
                 format!("`{escaped_code}`")
             }
             Node::Link { text, url } => {
-                let inner: String = text.iter().map(|c| c.to_markdown_v2()).collect();
+                let inner: String = text.iter().map(|c| c.format_to_v2()).collect();
                 let escaped_url = escape_url(url);
                 format!("[{inner}]({escaped_url})")
             }
@@ -394,7 +489,7 @@ impl Node {
 pub fn parse_markdown_to_v2(input: &str) -> String {
     let mut parser = Parser::new(input);
     let nodes = parser.parse_nodes(&[]);
-    nodes.iter().map(|n| n.to_markdown_v2()).collect()
+    nodes.iter().map(|n| n.format_to_v2()).collect()
 }
 
 #[cfg(test)]
@@ -435,6 +530,17 @@ mod tests {
         assert_eq!(
             parse_markdown_to_v2("[google](https://google.com?a=1&b=2)"),
             "[google](https://google.com?a=1&b=2)"
+        );
+    }
+
+    #[test]
+    fn test_unmatched_delimiters() {
+        // Unmatched delimiters are treated literally and do not create nested formatting or corrupt text
+        assert_eq!(parse_markdown_to_v2("2 * 3"), "2 \\* 3");
+        assert_eq!(parse_markdown_to_v2("snake_case"), "snake\\_case");
+        assert_eq!(
+            parse_markdown_to_v2("unfinished `code"),
+            "unfinished \\`code"
         );
     }
 }

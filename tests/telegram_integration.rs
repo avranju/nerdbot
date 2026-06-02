@@ -901,13 +901,80 @@ async fn test_send_message_markdown_split_messages() {
 
     let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
 
-    // We expect two chunks to be sent with the correct split format and MarkdownV2 escaping
     let part1 = "x".repeat(3000);
     let part2 = "y".repeat(2000);
     let text = format!("{}\n{}", part1, part2);
 
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, &text, Some("MarkdownV2"), Some(false))
+        .await;
+
+    assert!(result.is_ok(), "result was Err: {:?}", result.err());
+
+    let reqs = server.received_requests().await.unwrap_or_default();
+    assert_eq!(reqs.len(), 2);
+
+    let body1: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    let body2: serde_json::Value = serde_json::from_slice(&reqs[1].body).unwrap();
+
+    let expected_chunk1 = format!("[1/2] {}\n", part1);
+    let expected_chunk2 = format!("[2/2] {}", part2);
+
+    assert_eq!(body1["chat_id"], 123);
+    assert!(body1.get("parse_mode").is_none());
+    assert_eq!(body1["disable_notification"], false);
+    assert_eq!(body1["text"], expected_chunk1);
+
+    assert_eq!(body2["chat_id"], 123);
+    assert!(body2.get("parse_mode").is_none());
+    assert_eq!(body2["disable_notification"], false);
+    assert_eq!(body2["text"], expected_chunk2);
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_preserves_paragraph_spacing() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "first\n\nsecond",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, "first\n\nsecond", Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_escape_expansion_falls_back_to_plain_text() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let text = ".".repeat(3000);
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"plain"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": text,
+            "disable_notification": false
+        })))
         .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
         .mount(&server)
         .await;
@@ -955,4 +1022,80 @@ async fn test_send_message_markdown_fallback_delivery() {
         .send_message_with_options(123, "hello. world", Some("MarkdownV2"), Some(false))
         .await;
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_no_fallback_on_500_error() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    // Attempt with MarkdownV2 fails with 500 Internal Server Error
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Error"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // It should fail immediately and not send a fallback request!
+    let result = service
+        .send_message_with_options(123, "hello. world", Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_raw_mode() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body =
+        r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"raw"}}"#;
+
+    // In Raw mode, we pass standard-markdown unchanged without any escaping.
+    // So *italic* remains *italic* (which Telegram interprets as bold).
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "*bold*",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, "*bold*", Some("MarkdownV2Raw"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_long_markdown_raw_falls_back_to_plain_text() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let part1 = "x".repeat(3000);
+    let part2 = "y".repeat(2000);
+    let text = format!("{}\n{}", part1, part2);
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"plain"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, &text, Some("MarkdownV2Raw"), Some(false))
+        .await;
+    assert!(result.is_ok());
+
+    let reqs = server.received_requests().await.unwrap_or_default();
+    assert_eq!(reqs.len(), 2);
+    for req in reqs {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        assert!(body.get("parse_mode").is_none());
+    }
 }
