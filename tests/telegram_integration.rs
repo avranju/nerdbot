@@ -816,3 +816,143 @@ fn test_tool_context_carries_telegram_config() {
     assert_eq!(ctx.allowed_chat_ids, vec![1, 2]);
     assert_eq!(ctx.allowed_user_ids, vec![10, 20]);
 }
+
+// ── Markdown V2 Integration Tests ─────────────────────────────────────
+
+#[tokio::test]
+async fn test_send_message_markdown_headings_lists_links() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "*My Heading*\n\\- bullet item\n1\\. first item\n[google](https://google.com)",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let text = "# My Heading\n- bullet item\n1. first item\n[google](https://google.com)";
+    let result = service
+        .send_message_with_options(123, text, Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_code_blocks() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "```rust\nlet x = 1.0;\n```",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let text = "```rust\nlet x = 1.0;\n```";
+    let result = service
+        .send_message_with_options(123, text, Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_escaped_characters() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "hello\\. world\\! A \\-\\> B",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let text = "hello. world! A -> B";
+    let result = service
+        .send_message_with_options(123, text, Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_split_messages() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    let response_body = r#"{"ok":true,"result":{"message_id":1,"chat":{"id":123,"type":"private"},"text":"formatted"}}"#;
+
+    // We expect two chunks to be sent with the correct split format and MarkdownV2 escaping
+    let part1 = "x".repeat(3000);
+    let part2 = "y".repeat(2000);
+    let text = format!("{}\n{}", part1, part2);
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(response_body))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, &text, Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_message_markdown_fallback_delivery() {
+    let server = MockServer::start().await;
+    let service = make_mock_service(&server).await;
+
+    // First attempt with MarkdownV2 fails with 400 Bad Request
+    let error_response = r#"{"ok":false,"description":"Bad Request: can't parse entities: Character '.' is reserved and must be escaped with the preceding '\\'"}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "hello\\. world",
+            "parse_mode": "MarkdownV2",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(error_response))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // Second attempt fallback with None (plain text) succeeds
+    let success_response = r#"{"ok":true,"result":{"message_id":2,"chat":{"id":123,"type":"private"},"text":"hello. world"}}"#;
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/sendMessage")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "chat_id": 123,
+            "text": "hello. world",
+            "disable_notification": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(success_response))
+        .mount(&server)
+        .await;
+
+    let result = service
+        .send_message_with_options(123, "hello. world", Some("MarkdownV2"), Some(false))
+        .await;
+    assert!(result.is_ok());
+}

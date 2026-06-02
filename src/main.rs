@@ -379,7 +379,10 @@ async fn main() {
 
                                 match handler.handle_rich_message(chat_id, user_id, &inbound).await {
                                     Ok(Some(response)) => {
-                                        if let Err(e) = service.send_message(chat_id, &response).await {
+                                        if let Err(e) = service
+                                            .send_message_with_options(chat_id, &response, Some("MarkdownV2"), None)
+                                            .await
+                                        {
                                             error!(chat_id, error = %e, "failed to send reply");
                                         }
                                     }

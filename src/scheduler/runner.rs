@@ -143,7 +143,12 @@ pub async fn run_scheduled_job(
                         job.name, text
                     );
                     if let Err(e) = telegram_service
-                        .send_message(job.owner_chat_id, &notification)
+                        .send_message_with_options(
+                            job.owner_chat_id,
+                            &notification,
+                            Some("MarkdownV2"),
+                            None,
+                        )
                         .await
                     {
                         tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
@@ -156,7 +161,12 @@ pub async fn run_scheduled_job(
                     let notification =
                         format!("🔔 **Job \"{}\" completed with no output**", job.name);
                     let _ = telegram_service
-                        .send_message(job.owner_chat_id, &notification)
+                        .send_message_with_options(
+                            job.owner_chat_id,
+                            &notification,
+                            Some("MarkdownV2"),
+                            None,
+                        )
                         .await;
                 }
             }
@@ -169,7 +179,12 @@ pub async fn run_scheduled_job(
                 job.name, e
             );
             if let Err(send_err) = telegram_service
-                .send_message(job.owner_chat_id, &err_notification)
+                .send_message_with_options(
+                    job.owner_chat_id,
+                    &err_notification,
+                    Some("MarkdownV2"),
+                    None,
+                )
                 .await
             {
                 tracing::error!(job_id = %job_id, error = %send_err, "Failed to send error notification");

@@ -1,10 +1,10 @@
 # ── Stage 1: Build ────────────────────────────────────────────────
-FROM rust:1.89-slim AS builder
+FROM rust:1.96-bullseye-slim AS builder
 
 # Install SQLite dev headers (required by sqlx)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libsqlite3-dev pkg-config && \
+    libsqlite3-dev pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -23,7 +23,8 @@ FROM debian:trixie-slim
 # No SQLite dev dependency at runtime — runtime libsqlite3-0 is installed below
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libsqlite3-0 ca-certificates && \
+    libsqlite3-0 ca-certificates && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

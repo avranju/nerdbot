@@ -85,10 +85,28 @@ impl TelegramService {
     ) -> Result<(), AgentError> {
         // Check if the message needs to be split
         if text.chars().count() <= super::bot::TELEGRAM_MAX_MESSAGE_LENGTH {
-            self.bot
-                .send_message(chat_id, text, parse_mode, disable_notification)
-                .await?;
-            return Ok(());
+            if parse_mode == Some("MarkdownV2") {
+                let formatted = super::markdown::parse_markdown_to_v2(text);
+                match self
+                    .bot
+                    .send_message(chat_id, &formatted, parse_mode, disable_notification)
+                    .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        warn!(chat_id, error = %e, "MarkdownV2 delivery failed, retrying as plain text");
+                        self.bot
+                            .send_message(chat_id, text, None, disable_notification)
+                            .await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                self.bot
+                    .send_message(chat_id, text, parse_mode, disable_notification)
+                    .await?;
+                return Ok(());
+            }
         }
 
         // Split into chunks
@@ -108,9 +126,26 @@ impl TelegramService {
             };
 
             let message = format!("{prefix}{chunk}");
-            self.bot
-                .send_message(chat_id, &message, parse_mode, disable_notification)
-                .await?;
+            if parse_mode == Some("MarkdownV2") {
+                let formatted = super::markdown::parse_markdown_to_v2(&message);
+                match self
+                    .bot
+                    .send_message(chat_id, &formatted, parse_mode, disable_notification)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(chat_id, error = %e, "MarkdownV2 delivery failed for chunk, retrying as plain text");
+                        self.bot
+                            .send_message(chat_id, &message, None, disable_notification)
+                            .await?;
+                    }
+                }
+            } else {
+                self.bot
+                    .send_message(chat_id, &message, parse_mode, disable_notification)
+                    .await?;
+            }
             debug!(chunk = i + 1, total = chunks.len(), "chunk sent");
         }
 

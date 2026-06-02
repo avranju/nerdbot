@@ -43,6 +43,7 @@ src/
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset-context)
     handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
+    markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
     service.rs     — TelegramService: send_message, etc.
 
   scheduler/
@@ -208,6 +209,7 @@ README.md          — Project documentation
 - **Phase 10** (Docker and Documentation) — ✅ Complete
 - **Phase 11** (Bubblewrap Shell Sandbox) — ✅ Complete (namespace isolation for shell_execute)
 - **Phase 12** (Telegram Attachments) — ✅ Complete — `telegram/attachment.rs` module with MIME validation, magic-byte signature inspection, bounded file download with injectable Bot API/CDN bases for tests, multimodal LLM content conversion (photos, PDFs, text documents), persisted attachment outcome markers, `recent_turns_to_preserve` enforcement in context assembly and compaction, and binary payload exclusion from token estimation
+- **Phase 13** (Markdown Formatting for Replies) — ✅ Complete — Added Telegram-compatible `MarkdownV2` formatting for interactive agent replies and scheduled job notifications. Includes custom Markdown AST parser to escape reserved characters safely, preserve split-message boundaries, and fallback gracefully to plain-text transmission if Telegram rejects the formatted payload.
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.89-slim` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
