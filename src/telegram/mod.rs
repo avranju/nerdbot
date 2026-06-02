@@ -1,5 +1,6 @@
 //! Telegram integration — long polling, commands, messaging, and message routing.
 
+pub mod attachment;
 pub mod bot;
 pub mod commands;
 pub mod handler;

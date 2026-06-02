@@ -39,9 +39,10 @@ src/
 
   telegram/
     mod.rs
-    bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling)
+    bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, get_file, download_file)
+    attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset-context)
-    handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply
+    handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
     service.rs     — TelegramService: send_message, etc.
 
   scheduler/
@@ -100,6 +101,27 @@ README.md          — Project documentation
 
 ### Runtime Flows
 
+**Telegram message with attachments (rich ingress):**
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
+1. Long polling receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
+2. `build_inbound_message` (in main.rs) processes the update:
+   a. Selects the largest photo variant (by width × height area)
+   b. Downloads supported attachments via `TelegramBot::process_attachment` (which calls `get_file` plus the bounded CDN download helper; API and file base URLs are independently injectable for testing)
+   c. Classifies each attachment: binary (images, PDFs) → base64-encoded ContentPart::Binary; text documents (txt, md, json, csv, etc.) → ContentPart::Text with filename markers
+   d. Validates MIME types and inspects file signatures (PNG, JPEG, GIF, WebP, PDF magic bytes)
+   e. Sanitizes filenames (strips path separators, null bytes, truncates to 200 chars)
+   f. Builds a user prompt from `caption` (priority) → `text` → default prompt ("Please analyze the attached file(s).")
+   g. Never exposes token-qualified Telegram download URLs to the LLM
+   h. Omits structured inbound payloads from tracing spans so attachment base64 content is not written to logs; records only text length and attachment counts
+3. MessageHandler checks allowlist (chat_id + user_id) BEFORE downloading any files
+4. Ensures chat session exists (creates if new)
+5. Routes: if `/command` → CommandHandler, else → agent loop
+6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, and excludes binary payloads from token estimation
+7. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
+8. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
+9. Persists current user message and assistant reply → sends to Telegram
+10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
+
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
 2. If the config file exists, load it and use its current values as prompt defaults
@@ -133,7 +155,7 @@ README.md          — Project documentation
 - After each successful agent run, handler checks if total_tokens > soft_threshold
 - If above threshold: calls CompactionService, which tracks per-session state (Idle/Running/RunningAndDirty) and prevents concurrent compactions
 - CompactionService runs CompactionWorker asynchronously using the same LLM configured in `[llm]`. If no LLM model is configured, compaction is disabled (no-op).
-- CompactionWorker loads messages after the latest summary boundary, combines them with the existing summary, and persists a new structured summary with updated covers_through_message_id
+- CompactionWorker loads messages after the latest summary boundary, excludes the configured recent raw-message preservation window, combines eligible older messages with the existing summary, and persists a new structured summary with updated covers_through_message_id
 - Hard threshold (default 85%): ContextManager bounds messages to fit budget
 
 ### Built-in Tools (registered in main.rs)
@@ -148,7 +170,7 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
-- `[telegram]` — bot_token_env, allowed_chat_ids, allowed_user_ids
+- `[telegram]` — bot_token_env, allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
@@ -170,6 +192,7 @@ README.md          — Project documentation
 - **Phase 9** (Context Management and Compaction) — ✅ Complete
 - **Phase 10** (Docker and Documentation) — ✅ Complete
 - **Phase 11** (Bubblewrap Shell Sandbox) — ✅ Complete (namespace isolation for shell_execute)
+- **Phase 12** (Telegram Attachments) — ✅ Complete — `telegram/attachment.rs` module with MIME validation, magic-byte signature inspection, bounded file download with injectable Bot API/CDN bases for tests, multimodal LLM content conversion (photos, PDFs, text documents), persisted attachment outcome markers, `recent_turns_to_preserve` enforcement in context assembly and compaction, and binary payload exclusion from token estimation
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.89-slim` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user

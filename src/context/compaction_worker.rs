@@ -15,19 +15,35 @@ use crate::llm::LlmExecutor;
 /// Loads eligible history (older messages not covered by the latest summary),
 /// combines it with the existing summary, calls the LLM to produce a new
 /// structured summary, and persists it.
+///
+/// The `recent_turns_to_preserve` count (default 30) is respected: the N
+/// most recent messages are excluded from compaction so they are never lost
+/// when the summary boundary advances.
 pub struct CompactionWorker {
     llm: std::sync::Arc<dyn LlmExecutor>,
     model: String,
     temperature: f32,
+    recent_turns_to_preserve: usize,
 }
 
 impl CompactionWorker {
     /// Create a new CompactionWorker with an LLM executor.
     pub fn new(llm: std::sync::Arc<dyn LlmExecutor>, model: String, temperature: f32) -> Self {
+        Self::new_with_preserve(llm, model, temperature, 30)
+    }
+
+    /// Create a new CompactionWorker with a custom `recent_turns_to_preserve` count.
+    pub fn new_with_preserve(
+        llm: std::sync::Arc<dyn LlmExecutor>,
+        model: String,
+        temperature: f32,
+        recent_turns_to_preserve: usize,
+    ) -> Self {
         Self {
             llm,
             model,
             temperature,
+            recent_turns_to_preserve,
         }
     }
 
@@ -59,7 +75,7 @@ impl CompactionWorker {
         // Identify messages to compact. When a summary already exists, only
         // incorporate messages that arrived after the message covered by the
         // latest summary.
-        let messages_to_compact: Vec<_> = if let Some(ref summary) = latest_summary {
+        let mut messages_to_compact: Vec<_> = if let Some(ref summary) = latest_summary {
             let boundary_created_at = all_messages
                 .iter()
                 .find(|m| m.id == summary.covers_through_message_id)
@@ -73,6 +89,20 @@ impl CompactionWorker {
         } else {
             all_messages.iter().collect()
         };
+
+        // Exclude the N most recent messages (most recent from newest-first).
+        // list_messages returns DESC (newest first), so the first N entries
+        // are the most recent — preserve them from compaction.
+        let preserve = self.recent_turns_to_preserve;
+        let preserve_count = messages_to_compact.len().min(preserve);
+        // Split: first N (most recent) are preserved, rest are compacted.
+        let (_, compactable) = messages_to_compact.split_at(preserve_count);
+        messages_to_compact = compactable.to_vec();
+        debug!(
+            preserved = preserve_count,
+            compacting = messages_to_compact.len(),
+            "excluded recent turns from compaction"
+        );
 
         if messages_to_compact.is_empty() {
             // Nothing to compact — all messages are within the recent window

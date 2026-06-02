@@ -6,15 +6,21 @@
 //!
 //! API reference: https://core.telegram.org/bots/api
 
-use crate::error::AgentError;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use futures::StreamExt;
+use genai::chat::ContentPart;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+use super::attachment::{self, AttachmentKind};
+use crate::error::AgentError;
 
 /// Maximum message length before Telegram rejects it (4096 UTF-8 code points).
 pub const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 
 /// Base URL template for the Telegram Bot API.
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org/bot";
+const TELEGRAM_FILE_BASE: &str = "https://api.telegram.org/file/bot";
 
 // ── Telegram API JSON types ──────────────────────────────────────────
 
@@ -45,7 +51,55 @@ pub struct Message {
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
     pub entities: Option<Vec<MessageEntity>>,
+    #[serde(default)]
+    pub photo: Vec<PhotoSize>,
+    #[serde(default)]
+    pub document: Option<Document>,
+}
+
+/// A photo size object from Telegram.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PhotoSize {
+    pub file_id: String,
+    pub file_unique_id: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+/// A Telegram document object.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Document {
+    #[serde(default)]
+    pub file_id: String,
+    #[serde(default)]
+    pub file_unique_id: String,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default, flatten)]
+    pub thumbnail: Option<PhotoSize>,
+}
+
+/// Response from the Telegram `getFile` API endpoint.
+#[derive(Debug, Deserialize)]
+struct TelegramGetFileResponse {
+    pub file_path: Option<String>,
+}
+
+/// Response from the Telegram `getFile` API (wrapped).
+#[derive(Debug, Deserialize)]
+struct TelegramGetFileWrapper {
+    pub ok: bool,
+    pub result: Option<TelegramGetFileResponse>,
+    pub description: Option<String>,
 }
 
 /// A Telegram user (sender).
@@ -120,21 +174,29 @@ pub struct TelegramBot {
     token: String,
     http: reqwest::Client,
     base_url: String,
+    file_base_url: String,
 }
 
 impl TelegramBot {
     /// Create a new bot client with the default Telegram API base URL.
     pub fn new(token: String) -> Self {
         let base_url = format!("{TELEGRAM_API_BASE}{token}");
-        Self::new_with_base_url(token, base_url)
+        let file_base_url = format!("{TELEGRAM_FILE_BASE}{token}");
+        Self::new_with_base_urls(token, base_url, file_base_url)
     }
 
     /// Create a new bot client with a custom base URL (useful for testing).
     pub fn new_with_base_url(token: String, base_url: String) -> Self {
+        Self::new_with_base_urls(token, base_url.clone(), base_url)
+    }
+
+    /// Create a new bot client with custom API and file base URLs.
+    pub fn new_with_base_urls(token: String, base_url: String, file_base_url: String) -> Self {
         Self {
             token,
             http: reqwest::Client::new(),
             base_url,
+            file_base_url,
         }
     }
 
@@ -431,6 +493,345 @@ impl TelegramBot {
             "Telegram bot authenticated"
         );
         Ok(user)
+    }
+
+    /// Get the file path for a Telegram file_id.
+    ///
+    /// Returns `Ok(None)` if the file does not exist or Telegram considers it
+    /// too large to download (no `file_path` is returned).
+    pub async fn get_file(&self, file_id: &str) -> Result<Option<String>, AgentError> {
+        let url = format!("{}/getFile", self.base_url);
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::to_string(&serde_json::json!({
+                    "file_id": file_id,
+                }))
+                .map_err(|e| {
+                    AgentError::Telegram(format!("Failed to serialize getFile request: {e}"))
+                })?,
+            )
+            .send()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("HTTP error during getFile: {e}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AgentError::Telegram(format!(
+                "getFile returned HTTP {status}: {body}"
+            )));
+        }
+
+        let wrapper: TelegramGetFileWrapper = response
+            .json()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("Failed to parse getFile response: {e}")))?;
+
+        if !wrapper.ok {
+            return Err(AgentError::Telegram(format!(
+                "getFile failed: {}",
+                wrapper.description.as_deref().unwrap_or("unknown")
+            )));
+        }
+
+        let file_info = wrapper
+            .result
+            .ok_or_else(|| AgentError::Telegram("getFile response had no result".into()))?;
+
+        if file_info.file_path.is_none() {
+            warn!(
+                file_id = file_id,
+                "Telegram returned no file_path, file may be too large"
+            );
+        }
+
+        Ok(file_info.file_path)
+    }
+
+    /// Download a file from Telegram's CDN, bounded by `max_bytes`.
+    ///
+    /// Calls `get_file` internally to obtain the file path, then streams
+    /// the file from Telegram's CDN. The response is capped at `max_bytes`.
+    ///
+    /// # Arguments
+    /// * `file_id` — Telegram file_id.
+    /// * `max_bytes` — Maximum bytes to download.
+    pub async fn download_file(
+        &self,
+        file_id: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AgentError> {
+        let file_path = match self.get_file(file_id).await? {
+            Some(path) => path,
+            None => {
+                return Err(AgentError::Telegram(
+                    "No file path returned by Telegram; file may be too large".into(),
+                ));
+            }
+        };
+
+        let collected = self.download_file_via_path(&file_path, max_bytes).await?;
+
+        debug!(
+            file_id = file_id,
+            downloaded_bytes = collected.len(),
+            "file downloaded"
+        );
+
+        Ok(collected)
+    }
+
+    /// Process a Telegram attachment: download, validate, and convert to a ContentPart.
+    ///
+    /// This is the production attachment processing path — it uses `self.get_file`
+    /// and `self.download_file` internally, ensuring a single download path through
+    /// the bot client.
+    ///
+    /// # Arguments
+    /// * `file_id` — Telegram file_id to download.
+    /// * `filename` — Original filename (from Telegram, untrusted).
+    /// * `mime_type` — MIME type from Telegram (validated).
+    /// * `size_bytes` — File size in bytes (from Telegram metadata).
+    /// * `max_attachment_bytes` — Maximum download size.
+    /// * `max_text_chars` — Maximum characters for text documents.
+    pub async fn process_attachment(
+        &self,
+        file_id: &str,
+        filename: Option<&str>,
+        mime_type: Option<&str>,
+        size_bytes: u64,
+        max_attachment_bytes: usize,
+        max_text_chars: usize,
+    ) -> Result<attachment::ProcessedAttachment, AgentError> {
+        let kind = attachment::classify_attachment(mime_type, filename);
+        let sanitized_name = filename.map(attachment::sanitize_filename);
+
+        // Early returns for unsupported types or oversized files — no download needed.
+        if kind == AttachmentKind::Unsupported {
+            let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+            let mime = mime_type.unwrap_or("unknown");
+            let marker = format!("[Unsupported attachment: {display_name}, type={mime}]");
+
+            return Ok(attachment::ProcessedAttachment {
+                content_part: ContentPart::Text(format!(
+                    "Unsupported attachment type: {mime} ({display_name}).\n\
+                        Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                )),
+                persistence_marker: marker,
+                downloaded: false,
+                extracted_text: None,
+            });
+        }
+
+        // Early size check: reject before downloading
+        if size_bytes > max_attachment_bytes as u64 {
+            let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+            return Ok(attachment::ProcessedAttachment {
+                content_part: ContentPart::Text(format!(
+                    "⚠️ Attachment {display_name} is {size_bytes} bytes, exceeding the {max_attachment_bytes}-byte limit.\n\
+                        Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                )),
+                persistence_marker: format!(
+                    "[Attachment too large: {display_name}, {size_bytes} bytes]"
+                ),
+                downloaded: false,
+                extracted_text: None,
+            });
+        }
+
+        // Call get_file to obtain the CDN file path, then download from the CDN.
+        let file_path = match self.get_file(file_id).await? {
+            Some(path) => path,
+            None => {
+                let display_name = sanitized_name.as_deref().unwrap_or("file");
+                return Ok(attachment::ProcessedAttachment {
+                    content_part: ContentPart::Text(format!(
+                        "⚠️ Failed to download {display_name}: file not available."
+                    )),
+                    persistence_marker: "[Attachment: not available]".to_string(),
+                    downloaded: false,
+                    extracted_text: None,
+                });
+            }
+        };
+
+        match kind {
+            AttachmentKind::Binary => {
+                // Download the file using the already-obtained file_path
+                let data = self
+                    .download_file_via_path(&file_path, max_attachment_bytes)
+                    .await?;
+
+                // Normalize MIME type based on signature inspection.
+                // For images: reject if no known signature is found (prevents
+                // forwarding arbitrary binary data as an image).
+                // For PDFs: reject if magic bytes don't match.
+                let mime = if let Some(inferred) = attachment::inspect_mime_signature(&data) {
+                    debug!(
+                        reported_mime = ?mime_type,
+                        inferred_mime = inferred,
+                        "MIME signature inspection"
+                    );
+                    inferred.to_string()
+                } else if mime_type.map(|m| m == "application/pdf").unwrap_or(false) {
+                    let display_name = sanitized_name.as_deref().unwrap_or("file");
+                    return Err(AgentError::Telegram(format!(
+                        "Attachment {display_name} claims to be a PDF but does not contain valid PDF magic bytes (%PDF-)."
+                    )));
+                } else if mime_type.map(|m| m.starts_with("image/")).unwrap_or(false) {
+                    // Image with unrecognized signature — reject to prevent
+                    // arbitrary binary data from being forwarded as an image.
+                    let display_name = sanitized_name.as_deref().unwrap_or("file");
+                    return Err(AgentError::Telegram(format!(
+                        "Attachment {display_name} has an unrecognized image signature. The file may be corrupted or not a valid image."
+                    )));
+                } else {
+                    mime_type.unwrap_or("application/octet-stream").to_string()
+                };
+
+                let content_part = ContentPart::from_binary_base64(
+                    &mime,
+                    &*BASE64.encode(&data),
+                    sanitized_name.clone(),
+                );
+
+                let kb = size_bytes / 1024;
+                let marker = if let Some(ref name) = sanitized_name {
+                    format!("[Attached {mime}: {name}, {kb} KB]")
+                } else {
+                    format!("[Attached {mime}, {kb} KB]")
+                };
+
+                Ok(attachment::ProcessedAttachment {
+                    content_part,
+                    persistence_marker: marker,
+                    downloaded: true,
+                    extracted_text: None,
+                })
+            }
+
+            AttachmentKind::Text => {
+                // Download and decode as strict UTF-8 using the already-obtained file_path
+                let data = self
+                    .download_file_via_path(&file_path, max_attachment_bytes)
+                    .await?;
+
+                let text = match String::from_utf8(data) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let display_name = sanitized_name.as_deref().unwrap_or("document");
+                        return Err(AgentError::Telegram(format!(
+                            "Attachment {display_name} is not valid UTF-8 text: {e}"
+                        )));
+                    }
+                };
+
+                let (text, actual_len) = if text.chars().count() > max_text_chars {
+                    let truncated: String = text.chars().take(max_text_chars).collect();
+                    let len = text.chars().count();
+                    (
+                        format!(
+                            "{truncated}\n\n[Truncated — exceeded {max_text_chars} character limit]"
+                        ),
+                        len,
+                    )
+                } else {
+                    let len = text.chars().count();
+                    (text, len)
+                };
+
+                let display_name = sanitized_name.as_deref().unwrap_or("document");
+                let marker =
+                    format!("[Attached text document: {display_name}, {actual_len} chars]");
+
+                Ok(attachment::ProcessedAttachment {
+                    content_part: ContentPart::Text(format!(
+                        "--- File: {display_name} ---\n{text}"
+                    )),
+                    persistence_marker: marker,
+                    downloaded: true,
+                    extracted_text: Some(text),
+                })
+            }
+
+            AttachmentKind::Unsupported => {
+                let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+                let mime = mime_type.unwrap_or("unknown");
+                let marker = format!("[Unsupported attachment: {display_name}, type={mime}]");
+
+                Ok(attachment::ProcessedAttachment {
+                    content_part: ContentPart::Text(format!(
+                        "Unsupported attachment type: {mime} ({display_name}).\n\
+                            Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                    )),
+                    persistence_marker: marker,
+                    downloaded: false,
+                    extracted_text: None,
+                })
+            }
+        }
+    }
+
+    /// Download a file from Telegram's CDN using a known file_path.
+    ///
+    /// This is an internal helper used by `process_attachment` to avoid
+    /// calling `get_file` twice.
+    async fn download_file_via_path(
+        &self,
+        file_path: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AgentError> {
+        let url = format!("{}/{}", self.file_base_url, file_path);
+
+        debug!(
+            file_path = file_path,
+            max_bytes, "downloading Telegram file via path"
+        );
+
+        let response =
+            self.http.get(&url).send().await.map_err(|e| {
+                AgentError::Telegram(format!("HTTP error during file download: {e}"))
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AgentError::Telegram(format!(
+                "File download returned HTTP {status}"
+            )));
+        }
+
+        // Check content-length before streaming
+        if let Some(content_length) = response.content_length()
+            && content_length as usize > max_bytes
+        {
+            return Err(AgentError::Telegram(format!(
+                "File size {} exceeds maximum {} bytes",
+                content_length, max_bytes
+            )));
+        }
+
+        // Stream with a byte limit to prevent unbounded memory usage
+        let mut collected: Vec<u8> = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result
+                .map_err(|e| AgentError::Telegram(format!("Failed to read file chunk: {e}")))?;
+
+            if collected.len() + chunk.len() > max_bytes {
+                return Err(AgentError::Telegram(format!(
+                    "File download exceeded maximum of {} bytes",
+                    max_bytes
+                )));
+            }
+
+            collected.extend_from_slice(&chunk);
+        }
+
+        Ok(collected)
     }
 
     /// Split a long message into chunks that fit Telegram's 4096-char limit.

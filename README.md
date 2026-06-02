@@ -13,6 +13,7 @@ NerdBot communicates with users via **Telegram**, uses an **iterative tool-calli
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
 - **Single binary, Docker-friendly** — multi-stage build, non-root runtime user, no external services required
+- **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. Supported formats: JPEG, PNG, WebP, GIF, PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
 
 ## Quick Start
 
@@ -68,6 +69,8 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | `[telegram]` | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
 | | `allowed_chat_ids` | List of allowed Telegram chat IDs (empty = all) |
 | | `allowed_user_ids` | List of allowed Telegram user IDs (empty = all) |
+| | `max_attachment_bytes` | Maximum download size for Telegram attachments in bytes (default: `5242880`, 5 MB) |
+| | `max_text_document_chars` | Max characters when extracting text from text documents (default: `32768`, 32 KB) |
 | `[storage]` | `sqlite_path` | Path to the SQLite database file |
 | `[workspace]` | `root` | Sandbox root for file tools |
 | | `max_read_bytes` | Max bytes for file reads (default: `262144`) |

@@ -13,7 +13,9 @@ toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 thiserror = "2"
-reqwest = { version = "0.13", features = ["json", "rustls"] }
+reqwest = { version = "0.13", features = ["json", "rustls", "stream"] }
+futures = "0.3"
+base64 = "0.22"
 url = "2"
 genai = "0.6"
 clap = { version = "4", features = ["derive"] }

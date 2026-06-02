@@ -16,8 +16,9 @@ use nerdbot::error::AgentError;
 use nerdbot::llm::LlmClient;
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
+use nerdbot::telegram::attachment::{self, AttachmentKind};
 use nerdbot::telegram::bot::TelegramBot;
-use nerdbot::telegram::handler::MessageHandler;
+use nerdbot::telegram::handler::{AttachmentInfo, InboundMessage, MessageHandler};
 use nerdbot::telegram::service::TelegramService;
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
@@ -118,7 +119,7 @@ async fn main() {
         }
     };
 
-    let bot = TelegramBot::new(bot_token);
+    let bot = TelegramBot::new(bot_token.clone());
 
     // Verify the bot token
     match bot.get_me().await {
@@ -200,10 +201,11 @@ async fn main() {
 
     // Initialize compaction service using the same LLM.
     let compaction_budget = ContextBudget::from_llm_and_context(&config.llm, &config.context);
-    let compaction_worker = CompactionWorker::new(
+    let compaction_worker = CompactionWorker::new_with_preserve(
         llm.clone(),
         config.llm.model.clone(),
         config.llm.temperature,
+        config.context.recent_turns_to_preserve,
     );
     let compaction_service = Arc::new(CompactionService::new(
         db.pool().clone(),
@@ -268,18 +270,41 @@ async fn main() {
                             };
 
                             let chat_id = msg.chat.id;
-                            let text = match &msg.text {
-                                Some(t) => t.clone(),
-                                None => continue,
-                            };
-
                             let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
+                            let msg = msg.clone();
 
+                            // Allowlist check BEFORE building/downloading attachments.
+                            // This prevents untrusted users from triggering expensive downloads.
+                            let allowed_chat_ids = config.telegram.allowed_chat_ids.clone();
+                            let allowed_user_ids = config.telegram.allowed_user_ids.clone();
+                            let allowed = (allowed_chat_ids.is_empty() || allowed_chat_ids.contains(&chat_id))
+                                && (allowed_user_ids.is_empty() || allowed_user_ids.contains(&user_id));
+                            if !allowed {
+                                warn!(chat_id, user_id, "skipping message: not in allowlist");
+                                continue;
+                            }
+
+                            // Build a structured inbound message from the Telegram update.
+                            // Extract the user prompt from text or caption (captions take priority
+                            // for attachment-only messages). Use a default prompt when neither exists.
                             let handler = handler.clone();
                             let service = service.clone();
+                            let bot = bot.clone();
+                            let max_attachment_bytes = config.telegram.max_attachment_bytes;
+                            let max_text_chars = config.telegram.max_text_document_chars;
 
                             tokio::spawn(async move {
-                                match handler.handle_message(chat_id, user_id, &text).await {
+                                // Build the inbound message
+                                let (text, attachment_parts, attachment_infos) =
+                                    build_inbound_message(&msg, bot.as_ref(), max_attachment_bytes, max_text_chars).await;
+
+                                let inbound = InboundMessage {
+                                    text,
+                                    attachment_parts,
+                                    attachments: attachment_infos,
+                                };
+
+                                match handler.handle_rich_message(chat_id, user_id, &inbound).await {
                                     Ok(Some(response)) => {
                                         if let Err(e) = service.send_message(chat_id, &response).await {
                                             error!(chat_id, error = %e, "failed to send reply");
@@ -322,6 +347,185 @@ async fn main() {
         error!(error = %e, "Failed to stop scheduler gracefully");
     }
     info!("Shutdown complete.");
+}
+
+/// Build an `InboundMessage` from a Telegram update.
+///
+/// Processes attachments (photos, documents) by:
+/// 1. Selecting the largest photo variant
+/// 2. Downloading supported files (bounded by config limits) via `TelegramBot::process_attachment`
+/// 3. Converting to LLM content parts (binary or text)
+/// 4. Building a user prompt from caption or text
+///
+/// Returns (user_prompt, content_parts, attachment_infos).
+async fn build_inbound_message(
+    msg: &nerdbot::telegram::bot::Message,
+    bot: &TelegramBot,
+    max_attachment_bytes: usize,
+    max_text_chars: usize,
+) -> (String, Vec<genai::chat::ContentPart>, Vec<AttachmentInfo>) {
+    let mut attachment_parts = Vec::new();
+    let mut attachment_infos = Vec::new();
+    let mut user_text = String::new();
+
+    // Extract caption first (for photo/document messages)
+    let caption = msg.caption.as_deref().unwrap_or("");
+
+    // Process photos — select the largest variant
+    if !msg.photo.is_empty()
+        && let Some(largest) = attachment::largest_photo_size(&msg.photo)
+    {
+        let file_id = &largest.file_id;
+        let size_bytes = largest.file_size.unwrap_or(0);
+
+        // Download and process as binary via TelegramBot
+        match bot
+            .process_attachment(
+                file_id,
+                None,               // Photos don't have filenames
+                Some("image/jpeg"), // Telegram photos are JPEG
+                size_bytes,
+                max_attachment_bytes,
+                max_text_chars,
+            )
+            .await
+        {
+            Ok(processed) => {
+                attachment_parts.push(processed.content_part);
+                attachment_infos.push(AttachmentInfo {
+                    display_name: format!(
+                        "photo_{}x{}",
+                        largest.width.unwrap_or(0),
+                        largest.height.unwrap_or(0)
+                    ),
+                    mime_type: "image/jpeg".to_string(),
+                    size_bytes,
+                    downloaded: processed.downloaded,
+                    persistence_marker: processed.persistence_marker,
+                    extracted_text: processed.extracted_text,
+                });
+            }
+            Err(e) => {
+                warn!(chat_id = msg.chat.id, error = %e, "failed to process photo attachment");
+                attachment_infos.push(AttachmentInfo {
+                    display_name: "photo".to_string(),
+                    mime_type: "image/jpeg".to_string(),
+                    size_bytes,
+                    downloaded: false,
+                    persistence_marker: format!("[Attachment processing failed: photo, {e}]"),
+                    extracted_text: None,
+                });
+                attachment_parts.push(genai::chat::ContentPart::Text(format!(
+                    "⚠️ Failed to process photo: {e}"
+                )));
+            }
+        }
+    }
+
+    // Track whether an unsupported warning was set (must not be overwritten).
+    let mut unsupported_warn_set = false;
+
+    // Process documents
+    if let Some(doc) = &msg.document {
+        let mime = doc.mime_type.as_deref();
+        let filename = doc.file_name.as_deref();
+        let size_bytes = doc.file_size.unwrap_or(0);
+
+        // Validate before downloading
+        let kind = attachment::classify_attachment(mime, filename);
+
+        if kind == AttachmentKind::Unsupported {
+            let display_name = attachment::sanitize_filename(filename.unwrap_or("document"));
+            let mime_str = mime.unwrap_or("unknown");
+            // For unsupported attachments, prepend the warning to the caption
+            // so the LLM receives both the warning and any user text.
+            let unsupported_msg = format!(
+                "⚠️ Unsupported attachment type: {mime_str} ({display_name}).\n\
+                 Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents.",
+            );
+            if !caption.is_empty() {
+                user_text = format!("{unsupported_msg}\n\n{caption}");
+            } else if let Some(text) = &msg.text {
+                user_text = format!("{unsupported_msg}\n\n{text}");
+            } else {
+                user_text = unsupported_msg;
+            }
+            attachment_infos.push(AttachmentInfo {
+                display_name: display_name.clone(),
+                mime_type: mime_str.to_string(),
+                size_bytes,
+                downloaded: false,
+                persistence_marker: format!(
+                    "[Unsupported attachment: {display_name}, type={mime_str}]"
+                ),
+                extracted_text: None,
+            });
+            unsupported_warn_set = true;
+        } else {
+            // Download and process via TelegramBot
+            let file_id = &doc.file_id;
+            match bot
+                .process_attachment(
+                    file_id,
+                    filename,
+                    mime,
+                    size_bytes,
+                    max_attachment_bytes,
+                    max_text_chars,
+                )
+                .await
+            {
+                Ok(processed) => {
+                    attachment_parts.push(processed.content_part);
+                    let display_name =
+                        attachment::sanitize_filename(filename.unwrap_or("document"));
+                    attachment_infos.push(AttachmentInfo {
+                        display_name,
+                        mime_type: mime.unwrap_or("application/octet-stream").to_string(),
+                        size_bytes,
+                        downloaded: processed.downloaded,
+                        persistence_marker: processed.persistence_marker,
+                        extracted_text: processed.extracted_text,
+                    });
+                }
+                Err(e) => {
+                    warn!(chat_id = msg.chat.id, error = %e, "failed to process document attachment");
+                    let display_name =
+                        attachment::sanitize_filename(filename.unwrap_or("document"));
+                    attachment_infos.push(AttachmentInfo {
+                        display_name: display_name.clone(),
+                        mime_type: mime.unwrap_or("application/octet-stream").to_string(),
+                        size_bytes,
+                        downloaded: false,
+                        persistence_marker: format!(
+                            "[Attachment processing failed: {display_name}, {e}]"
+                        ),
+                        extracted_text: None,
+                    });
+                    attachment_parts.push(genai::chat::ContentPart::Text(format!(
+                        "⚠️ Failed to process document: {e}"
+                    )));
+                }
+            }
+        }
+    }
+
+    // Determine the user prompt text only if no unsupported warning was set.
+    // Unsupported warnings already include the caption/text, so we must not
+    // overwrite them.
+    if !unsupported_warn_set {
+        // Priority: caption > message text > default prompt
+        if !caption.is_empty() {
+            user_text = caption.to_string();
+        } else if let Some(text) = &msg.text {
+            user_text = text.clone();
+        } else if !attachment_parts.is_empty() {
+            // Attachment-only message: use default prompt
+            user_text = "Please analyze the attached file(s).".to_string();
+        }
+    }
+
+    (user_text, attachment_parts, attachment_infos)
 }
 
 /// Drop guard to guarantee scheduler shutdown when the main execution exits or panics.

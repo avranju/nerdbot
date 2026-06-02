@@ -71,6 +71,14 @@ pub struct TelegramConfig {
     /// If empty, all users are allowed (useful for local development).
     #[serde(default)]
     pub allowed_user_ids: Vec<i64>,
+    /// Maximum size in bytes for downloaded Telegram attachments (images, PDFs, etc.).
+    /// Files larger than this limit are rejected before download begins.
+    #[serde(default = "default_max_attachment_bytes")]
+    pub max_attachment_bytes: usize,
+    /// Maximum number of characters when extracting text from text documents.
+    /// Text documents exceeding this limit are truncated with a notice.
+    #[serde(default = "default_max_text_document_chars")]
+    pub max_text_document_chars: usize,
 }
 
 impl Default for TelegramConfig {
@@ -79,6 +87,8 @@ impl Default for TelegramConfig {
             bot_token_env: default_telegram_token_env(),
             allowed_chat_ids: Vec::new(),
             allowed_user_ids: Vec::new(),
+            max_attachment_bytes: default_max_attachment_bytes(),
+            max_text_document_chars: default_max_text_document_chars(),
         }
     }
 }
@@ -377,6 +387,12 @@ fn default_exa_num_results() -> usize {
 }
 fn default_exa_max_text_chars() -> usize {
     8000
+}
+fn default_max_attachment_bytes() -> usize {
+    5_242_880 // 5 MB
+}
+fn default_max_text_document_chars() -> usize {
+    32_768 // 32 KB
 }
 impl AppConfig {
     /// Load configuration from a TOML file.

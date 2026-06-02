@@ -499,7 +499,8 @@ async fn test_assemble_messages_budget_exceeded() {
         set_message_created_at(&pool, &msg.id, 1_700_000_000 + i).await;
     }
 
-    let manager = ContextManager::new(pool, small_budget(10, 0.5));
+    // Use preserve=0 so budget bounds are actually enforced
+    let manager = ContextManager::new_with_preserve(pool, small_budget(10, 0.5), 0);
     let messages = manager
         .assemble_messages(
             &session.id,
@@ -585,12 +586,13 @@ async fn test_check_session_above_threshold() {
 
     let service = CompactionService::new(
         pool.clone(),
-        Arc::new(CompactionWorker::new(
+        Arc::new(CompactionWorker::new_with_preserve(
             Arc::new(nerdbot::llm::fake::FakeProvider::new(vec![
                 nerdbot::llm::fake::FakeResponse::final_text("# Summary"),
             ])),
             "fake-model".into(),
             0.0,
+            0,
         )),
         small_budget(100, 0.1),
     );
@@ -639,7 +641,8 @@ async fn test_compaction_state_transitions() {
         .unwrap();
     create_user_message(&pool, &session.id, "hello", None).await;
 
-    let worker = CompactionWorker::new(Arc::new(SlowProvider), "fake-model".into(), 0.0);
+    let worker =
+        CompactionWorker::new_with_preserve(Arc::new(SlowProvider), "fake-model".into(), 0.0, 0);
     let service = CompactionService::new(pool, Arc::new(worker), small_budget(100, 0.1));
 
     assert_eq!(service.get_state(&session.id).await, CompactionState::Idle);
@@ -674,7 +677,7 @@ async fn test_compact_no_messages() {
         nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
             "# Summary",
         )]);
-    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
+    let worker = CompactionWorker::new_with_preserve(Arc::new(llm), "fake-model".into(), 0.0, 0);
 
     let err = worker
         .compact(&pool, &session.id, &ContextBudget::default())
@@ -695,7 +698,7 @@ async fn test_compact_with_llm() {
         nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
             "# Conversation Working Summary\n\nTest summary content",
         )]);
-    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
+    let worker = CompactionWorker::new_with_preserve(Arc::new(llm), "fake-model".into(), 0.0, 0);
     let summary_text = worker
         .compact(&pool, &session.id, &ContextBudget::default())
         .await
@@ -733,7 +736,7 @@ async fn test_compact_replaces_old_summary() {
         nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
             "# Summary",
         )]);
-    let worker = CompactionWorker::new(Arc::new(llm), "fake-model".into(), 0.0);
+    let worker = CompactionWorker::new_with_preserve(Arc::new(llm), "fake-model".into(), 0.0, 0);
     worker
         .compact(&pool, &session.id, &ContextBudget::default())
         .await
@@ -753,4 +756,120 @@ async fn test_compact_replaces_old_summary() {
     assert_eq!(count, 1);
     assert_ne!(latest.id, stored_old_summary.id);
     assert_eq!(latest.covers_through_message_id, new.id);
+}
+
+// ── Fix 1: Preserve exact order and IDs ────────────────────────────────
+
+#[tokio::test]
+async fn test_preserve_exact_order_and_ids() {
+    use nerdbot::context::manager::ContextManager;
+    use nerdbot::storage::sessions;
+
+    let pool = setup_context_pool().await;
+    let session = sessions::create_session(&pool, 1).await.unwrap();
+
+    // Create 5 messages with 2 tokens each, in chronological order.
+    // list_messages returns them newest-first: [m5, m4, m3, m2, m1].
+    for i in 1..=5 {
+        create_user_message(&pool, &session.id, &format!("m{i}"), Some(2)).await;
+    }
+
+    // Set preserve=2: the 2 most recent (m5, m4) should be preserved.
+    // Budget allows 10 tokens. Preserved = 4 tokens, remaining = 6 tokens.
+    // So 3 of the remaining 3 (m3, m2, m1) fit (6 tokens).
+    let manager = ContextManager::new_with_preserve(
+        pool.clone(),
+        small_budget(10, 0.5),
+        2, // preserve 2 most recent
+    );
+
+    let messages = manager
+        .assemble_messages(
+            &session.id,
+            "personality",
+            ChatMessage::user(MessageContent::from_text("current")),
+        )
+        .await
+        .unwrap();
+
+    // Extract text content from messages (skip system messages at index 0).
+    let texts: Vec<String> = messages.iter().skip(1).map(msg_text).collect();
+
+    // Expected order: bounded (m1, m2, m3 — chronological) + preserved (m4, m5 — chronological) + current
+    // Total: 6 messages + personality + current = 7 messages
+    assert_eq!(
+        texts.len(),
+        6,
+        "expected 6 non-system messages: m1, m2, m3, m4, m5, current"
+    );
+    assert_eq!(
+        texts[0], "m1",
+        "first bounded message should be m1 (oldest)"
+    );
+    assert_eq!(texts[1], "m2", "second bounded message should be m2");
+    assert_eq!(
+        texts[2], "m3",
+        "third bounded message should be m3 (newest bounded)"
+    );
+    assert_eq!(texts[3], "m4", "first preserved message should be m4");
+    assert_eq!(
+        texts[4], "m5",
+        "second preserved message should be m5 (most recent)"
+    );
+    assert_eq!(texts[5], "current", "last message should be current user");
+}
+
+#[tokio::test]
+async fn test_preserve_window_is_trimmed_when_it_exceeds_budget() {
+    let pool = setup_context_pool().await;
+    let session = nerdbot::storage::sessions::create_session(&pool, 1)
+        .await
+        .unwrap();
+
+    for i in 1..=3 {
+        let msg = create_user_message(&pool, &session.id, &format!("m{i}"), Some(6)).await;
+        set_message_created_at(&pool, &msg.id, 1_700_000_000 + i).await;
+    }
+
+    let manager = ContextManager::new_with_preserve(pool, small_budget(10, 0.5), 3);
+    let messages = manager
+        .assemble_messages(
+            &session.id,
+            "",
+            ChatMessage::user(MessageContent::from_text("current")),
+        )
+        .await
+        .unwrap();
+    let texts: Vec<String> = messages.iter().map(msg_text).collect();
+
+    assert!(texts.iter().any(|t| t == "m3"));
+    assert!(!texts.iter().any(|t| t == "m2"));
+    assert!(!texts.iter().any(|t| t == "m1"));
+}
+
+#[tokio::test]
+async fn test_compact_skips_when_all_messages_are_in_preserve_window() {
+    let pool = setup_context_pool().await;
+    let session = nerdbot::storage::sessions::create_session(&pool, 1)
+        .await
+        .unwrap();
+    create_user_message(&pool, &session.id, "recent", None).await;
+
+    let llm =
+        nerdbot::llm::fake::FakeProvider::new(vec![nerdbot::llm::fake::FakeResponse::final_text(
+            "# Summary",
+        )]);
+    let worker = CompactionWorker::new_with_preserve(Arc::new(llm), "fake-model".into(), 0.0, 1);
+    let err = worker
+        .compact(&pool, &session.id, &ContextBudget::default())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AgentError::Compaction(_)));
+    assert!(
+        nerdbot::storage::summaries::get_latest_summary(&pool, &session.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

@@ -20,6 +20,12 @@ allowed_chat_ids = []
 # Allowed Telegram user IDs.
 # Leave empty to allow all users (development mode).
 allowed_user_ids = []
+# Maximum download size for Telegram attachments (images, PDFs, etc.) in bytes.
+# Files larger than this limit are rejected before download.
+max_attachment_bytes = 5242880
+# Maximum number of characters when extracting text from text documents.
+# Text documents exceeding this limit are truncated with a notice.
+max_text_document_chars = 32768
 
 # ── Storage ───────────────────────────────────────────────────────
 [storage]
