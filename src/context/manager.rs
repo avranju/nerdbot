@@ -294,7 +294,7 @@ impl ContextManager {
 }
 
 /// Estimate token count from a ChatMessage, accounting for binary parts.
-fn estimate_tokens_for_message(msg: &ChatMessage) -> usize {
+pub(crate) fn estimate_tokens_for_message(msg: &ChatMessage) -> usize {
     let total_chars: usize = msg
         .content
         .parts()

@@ -291,6 +291,7 @@ fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
         pool,
         Arc::new(CompactionWorker::new(llm, "fake-model".into(), 0.0)),
         ContextBudget::default(),
+        30,
     ))
 }
 

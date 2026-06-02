@@ -51,6 +51,9 @@ pub enum AgentError {
     #[error("Compaction error: {0}")]
     Compaction(String),
 
+    #[error("Diagnostics error: {0}")]
+    Diagnostics(String),
+
     #[error("Permission denied: unauthorized sender")]
     PermissionDenied,
 

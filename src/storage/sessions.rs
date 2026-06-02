@@ -82,6 +82,16 @@ pub async fn get_session_for_chat(
     Ok(row)
 }
 
+/// List all chat sessions, most recently updated first.
+pub async fn list_sessions(pool: &SqlitePool) -> Result<Vec<ChatSession>, AgentError> {
+    sqlx::query_as::<_, ChatSession>(
+        "SELECT id, telegram_chat_id, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AgentError::Storage(format!("Failed to list sessions: {e}")))
+}
+
 /// Update a session's updated_at timestamp.
 pub async fn update_session(pool: &SqlitePool, session_id: &str) -> Result<(), AgentError> {
     sqlx::query(

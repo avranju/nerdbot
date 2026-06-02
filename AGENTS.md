@@ -67,10 +67,17 @@ src/
   context/
     mod.rs
     budget.rs      — ContextBudget: token budgeting (soft/hard thresholds, usable budget)
+    diagnostics.rs — Shared session context snapshot calculation for diagnostics and compaction pressure
     manager.rs     — ContextManager: bounded context assembly (summary + recent messages)
     summaries.rs   — ContextSummary struct + CRUD via storage layer
     compaction_service.rs — Monitors session pressure, triggers async compaction with per-session state tracking
     compaction_worker.rs  — Loads old history, calls LLM to produce structured summary, persists it
+
+  diagnostics/
+    mod.rs
+    client.rs       — Unix socket client plus human-readable and JSON renderers
+    protocol.rs     — Newline-delimited JSON request/response DTOs for local diagnostics
+    server.rs       — Opt-in owner-only Unix socket server for live session snapshots
 
   storage/
     mod.rs
@@ -155,8 +162,16 @@ README.md          — Project documentation
 - After each successful agent run, handler checks if total_tokens > soft_threshold
 - If above threshold: calls CompactionService, which tracks per-session state (Idle/Running/RunningAndDirty) and prevents concurrent compactions
 - CompactionService runs CompactionWorker asynchronously using the same LLM configured in `[llm]`. If no LLM model is configured, compaction is disabled (no-op).
+- CompactionService uses `ContextDiagnosticsSnapshot` to estimate uncompacted raw-history tokens from stored estimates with content-based fallback. This shared calculation reports soft/hard threshold distance and replaces the older fixed `message_count * 100` pressure heuristic.
 - CompactionWorker loads messages after the latest summary boundary, excludes the configured recent raw-message preservation window, combines eligible older messages with the existing summary, and persists a new structured summary with updated covers_through_message_id
 - Hard threshold (default 85%): ContextManager bounds messages to fit budget
+
+**Local diagnostics socket (opt-in):**
+1. Start NerdBot with `--diagnostics-socket <path>` to bind a local Unix domain socket; no diagnostics service runs unless this option is provided
+2. The socket uses owner-only (`0600`) permissions, refuses to replace regular files or active sockets, removes stale socket nodes, and is cleaned up during graceful shutdown
+3. The newline-delimited JSON protocol supports `ping`, `list_sessions`, and `show_session` by database session ID or Telegram chat ID
+4. Query the running instance with `nerdbot --diagnostics-socket <path> diagnostics ping`, `list-sessions`, or `show (--chat-id <id> | --session-id <uuid>)`; add `--json` for scripting
+5. `show_session` returns the shared context snapshot, live in-memory `CompactionState`, the effective personality prompt (with timezone context), the summary prompt metadata, and tool-spec count/cost. The full prompt and spec bodies are hidden by default and returned only when requested (e.g. `--show-prompts`).
 
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo

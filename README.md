@@ -56,6 +56,58 @@ export EXA_API_KEY="your-exa-key-here"  # optional
 cargo run
 ```
 
+### Local Diagnostics Socket
+
+Diagnostics are disabled by default. To expose a local owner-only Unix domain socket for live process state, context snapshots, and prompt/tool spec metadata, pass an explicit socket path:
+
+```bash
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock
+```
+
+Query the running instance with the same socket path:
+
+```bash
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics ping
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics list-sessions
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --chat-id 123456
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --session-id <uuid> --json
+```
+
+#### Viewing Full Prompt and Spec Bodies
+
+By default, the actual text of prompts and tool specs is hidden from the console rendering to prevent terminal noise. To inspect the full effective personality prompt (with timezone context), the compaction summary prompt, and the full JSON specs of all registered tools, add the `--show-prompts` flag:
+
+```bash
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --chat-id 123456 --show-prompts
+```
+
+#### Docker Diagnostics Mount
+
+When running NerdBot inside a Docker container with diagnostics enabled, you must bind-mount a writable directory from the host to house the Unix socket file. Because NerdBot runs as a non-root user (`nerdbot`, UID `1000` / GID `1000`), the directory mounted from the host must be writable by UID `1000`.
+
+Update your `docker-compose.yml` to specify a socket path inside a mounted directory:
+
+```yaml
+services:
+  nerdbot:
+    image: nerdbot:latest
+    user: "1000:1000"
+    command: ["--config", "/config/config.toml", "--diagnostics-socket", "/var/run/nerdbot/nerdbot.sock"]
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data:rw
+      - ./workspace:/workspace:rw
+      - ./run:/var/run/nerdbot:rw  # Mount writable directory for Unix domain socket
+```
+
+Before starting the container, create and set correct permissions on the host path:
+
+```bash
+mkdir -p ./run
+chown -R 1000:1000 ./run
+chmod 700 ./run
+```
+
 ## Configuration
 
 Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.example` to `config.toml` and adjust it manually. When the config file already exists, onboarding uses its current values as prompt defaults and preserves settings outside the guided flow. Pass `--config <path>` before the subcommand to generate or edit a different file, for example `cargo run -- --config config/local.toml onboard`. All secrets are read from **environment variables**, never from the config file.

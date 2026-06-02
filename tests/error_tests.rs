@@ -119,6 +119,12 @@ fn test_agent_error_display_compaction() {
 }
 
 #[test]
+fn test_agent_error_display_diagnostics() {
+    let err = AgentError::Diagnostics("socket unavailable".into());
+    assert_eq!(err.to_string(), "Diagnostics error: socket unavailable");
+}
+
+#[test]
 fn test_agent_error_display_permission_denied() {
     let err = AgentError::PermissionDenied;
     assert_eq!(err.to_string(), "Permission denied: unauthorized sender");

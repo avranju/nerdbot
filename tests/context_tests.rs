@@ -564,6 +564,7 @@ async fn test_check_session_below_threshold() {
             0.0,
         )),
         ContextBudget::default(),
+        30,
     );
     service.check_session(&session.id).await.unwrap();
 
@@ -582,7 +583,7 @@ async fn test_check_session_above_threshold() {
     let session = nerdbot::storage::sessions::create_session(&pool, 1)
         .await
         .unwrap();
-    create_user_message(&pool, &session.id, "hello", None).await;
+    create_user_message(&pool, &session.id, &"x".repeat(80), None).await;
 
     let service = CompactionService::new(
         pool.clone(),
@@ -595,6 +596,7 @@ async fn test_check_session_above_threshold() {
             0,
         )),
         small_budget(100, 0.1),
+        0,
     );
     service.check_session(&session.id).await.unwrap();
 
@@ -639,11 +641,11 @@ async fn test_compaction_state_transitions() {
     let session = nerdbot::storage::sessions::create_session(&pool, 1)
         .await
         .unwrap();
-    create_user_message(&pool, &session.id, "hello", None).await;
+    create_user_message(&pool, &session.id, &"x".repeat(80), None).await;
 
     let worker =
         CompactionWorker::new_with_preserve(Arc::new(SlowProvider), "fake-model".into(), 0.0, 0);
-    let service = CompactionService::new(pool, Arc::new(worker), small_budget(100, 0.1));
+    let service = CompactionService::new(pool, Arc::new(worker), small_budget(100, 0.1), 0);
 
     assert_eq!(service.get_state(&session.id).await, CompactionState::Idle);
     service.check_session(&session.id).await.unwrap();
@@ -872,4 +874,70 @@ async fn test_compact_skips_when_all_messages_are_in_preserve_window() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn test_context_diagnostics_snapshot_reports_token_pressure() {
+    let pool = setup_context_pool().await;
+    let session = nerdbot::storage::sessions::create_session(&pool, 1)
+        .await
+        .unwrap();
+    create_user_message(&pool, &session.id, "first", Some(10)).await;
+    create_user_message(&pool, &session.id, "second", Some(20)).await;
+
+    let snapshot = nerdbot::context::diagnostics::ContextDiagnosticsSnapshot::calculate(
+        &pool,
+        &session.id,
+        &small_budget(100, 0.5),
+        1,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot.raw_message_count, 2);
+    assert_eq!(snapshot.preserved_raw_message_count, 1);
+    assert_eq!(snapshot.estimated_uncompacted_tokens, 30);
+    assert_eq!(snapshot.usable_input_budget, 100);
+    assert_eq!(snapshot.soft_threshold_tokens, 50);
+    assert_eq!(snapshot.hard_threshold_tokens, 90);
+    assert_eq!(snapshot.remaining_before_compaction_tokens, 20);
+    assert_eq!(snapshot.remaining_before_hard_bound_tokens, 60);
+    assert!((snapshot.pressure - 0.3).abs() < f32::EPSILON);
+    assert!(snapshot.values_are_estimated);
+    assert!(!snapshot.should_compact());
+}
+
+#[tokio::test]
+async fn test_context_diagnostics_snapshot_excludes_summary_covered_history() {
+    let pool = setup_context_pool().await;
+    let session = nerdbot::storage::sessions::create_session(&pool, 1)
+        .await
+        .unwrap();
+    let covered = create_user_message(&pool, &session.id, "covered", Some(40)).await;
+    let recent = create_user_message(&pool, &session.id, "recent", Some(15)).await;
+    set_message_created_at(&pool, &covered.id, 1_700_000_000).await;
+    set_message_created_at(&pool, &recent.id, 1_700_000_010).await;
+
+    let summary = ContextSummary::new(
+        session.id.clone(),
+        "summary text".to_string(),
+        covered.id.clone(),
+    );
+    let stored_summary = nerdbot::storage::summaries::create_summary(&pool, &summary)
+        .await
+        .unwrap();
+
+    let snapshot = nerdbot::context::diagnostics::ContextDiagnosticsSnapshot::calculate(
+        &pool,
+        &session.id,
+        &small_budget(100, 0.5),
+        30,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot.raw_message_count, 1);
+    assert_eq!(snapshot.preserved_raw_message_count, 1);
+    assert_eq!(snapshot.estimated_uncompacted_tokens, 15);
+    assert_eq!(snapshot.latest_summary.unwrap().id, stored_summary.id);
 }

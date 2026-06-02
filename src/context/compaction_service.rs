@@ -5,16 +5,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::context::budget::ContextBudget;
 use crate::context::compaction_worker::CompactionWorker;
+use crate::context::diagnostics::ContextDiagnosticsSnapshot;
 use crate::error::AgentError;
 
 /// State of compaction for a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum CompactionState {
     /// No compaction is happening.
     Idle,
@@ -33,64 +36,59 @@ pub struct CompactionService {
     pool: SqlitePool,
     worker: Arc<CompactionWorker>,
     budget: ContextBudget,
+    recent_turns_to_preserve: usize,
     state: Arc<Mutex<HashMap<String, CompactionState>>>,
 }
 
 impl CompactionService {
     /// Create a new CompactionService.
-    pub fn new(pool: SqlitePool, worker: Arc<CompactionWorker>, budget: ContextBudget) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        worker: Arc<CompactionWorker>,
+        budget: ContextBudget,
+        recent_turns_to_preserve: usize,
+    ) -> Self {
         Self {
             pool,
             worker,
             budget,
+            recent_turns_to_preserve,
             state: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Check if a session needs compaction and enqueue if so.
     ///
-    /// Compares the current message count against the soft threshold.
+    /// Compares estimated uncompacted raw-history tokens against the soft threshold.
     /// If compaction is already running for the session, marks it dirty
     /// so a follow-up compaction will be triggered after the current one.
     pub async fn check_session(&self, session_id: &str) -> Result<(), AgentError> {
-        // Count messages in the session
-        let message_count = self.count_messages(session_id).await?;
-
         // Load latest summary to understand coverage
         let latest_summary =
             crate::storage::summaries::get_latest_summary(&self.pool, session_id).await?;
-
-        // Calculate pressure: fraction of usable budget consumed
-        let usable_budget = self.budget.usable_input_budget();
-        // Rough estimate: average message ~100 tokens
-        let estimated_tokens = message_count.saturating_mul(100);
-        let pressure = if usable_budget > 0 {
-            estimated_tokens as f32 / usable_budget as f32
-        } else {
-            0.0
-        };
+        let snapshot = self.diagnostics_snapshot(session_id).await?;
 
         debug!(
             session_id = %session_id,
-            message_count,
-            estimated_tokens,
-            usable_budget,
-            pressure,
-            soft_threshold = self.budget.soft_compaction_threshold,
+            raw_message_count = snapshot.raw_message_count,
+            estimated_tokens = snapshot.estimated_uncompacted_tokens,
+            usable_budget = snapshot.usable_input_budget,
+            pressure = snapshot.pressure,
+            soft_threshold_tokens = snapshot.soft_threshold_tokens,
             "compaction pressure check"
         );
 
-        if pressure >= self.budget.soft_compaction_threshold {
+        if snapshot.should_compact() {
             info!(
                 session_id = %session_id,
-                pressure,
+                pressure = snapshot.pressure,
                 "session pressure exceeds soft threshold, triggering compaction"
             );
             self.trigger_compaction(session_id, &latest_summary).await;
         } else {
             debug!(
                 session_id = %session_id,
-                pressure,
+                pressure = snapshot.pressure,
                 "session pressure below soft threshold"
             );
         }
@@ -105,6 +103,27 @@ impl CompactionService {
             .get(session_id)
             .cloned()
             .unwrap_or(CompactionState::Idle)
+    }
+
+    /// Get the compaction prompt for a session.
+    pub async fn get_compaction_prompt(&self, session_id: &str) -> Result<String, AgentError> {
+        self.worker
+            .get_compaction_prompt(&self.pool, session_id)
+            .await
+    }
+
+    /// Calculate persisted context and compaction pressure for a session.
+    pub async fn diagnostics_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<ContextDiagnosticsSnapshot, AgentError> {
+        ContextDiagnosticsSnapshot::calculate(
+            &self.pool,
+            session_id,
+            &self.budget,
+            self.recent_turns_to_preserve,
+        )
+        .await
     }
 
     /// Trigger compaction for a session, managing state transitions.
@@ -183,12 +202,5 @@ impl CompactionService {
                 });
             }
         }
-    }
-
-    /// Count messages in a session.
-    async fn count_messages(&self, session_id: &str) -> Result<usize, AgentError> {
-        let messages =
-            crate::storage::messages::list_messages(&self.pool, session_id, None).await?;
-        Ok(messages.len())
     }
 }

@@ -5,5 +5,6 @@
 pub mod budget;
 pub mod compaction_service;
 pub mod compaction_worker;
+pub mod diagnostics;
 pub mod manager;
 pub mod summaries;

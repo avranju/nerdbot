@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod config;
 pub mod context;
+pub mod diagnostics;
 pub mod error;
 pub mod llm;
 pub mod onboarding;

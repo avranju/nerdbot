@@ -161,8 +161,41 @@ impl CompactionWorker {
         Ok(new_summary_text)
     }
 
+    /// Build the compaction prompt that would be generated for the session currently.
+    pub async fn get_compaction_prompt(
+        &self,
+        pool: &SqlitePool,
+        session_id: &str,
+    ) -> Result<String, AgentError> {
+        let latest_summary =
+            crate::storage::summaries::get_latest_summary(pool, session_id).await?;
+
+        let all_messages = crate::storage::messages::list_messages(pool, session_id, None).await?;
+
+        let messages_to_compact: Vec<_> = if let Some(ref summary) = latest_summary {
+            let boundary_created_at = all_messages
+                .iter()
+                .find(|m| m.id == summary.covers_through_message_id)
+                .map(|m| m.created_at)
+                .unwrap_or(summary.created_at);
+
+            all_messages
+                .iter()
+                .filter(|m| m.created_at > boundary_created_at)
+                .collect()
+        } else {
+            all_messages.iter().collect()
+        };
+
+        let preserve = self.recent_turns_to_preserve;
+        let preserve_count = messages_to_compact.len().min(preserve);
+        let (_, compactable) = messages_to_compact.split_at(preserve_count);
+
+        Ok(self.build_compaction_prompt(&latest_summary, compactable))
+    }
+
     /// Build a compaction prompt for the LLM.
-    fn build_compaction_prompt(
+    pub fn build_compaction_prompt(
         &self,
         existing_summary: &Option<crate::storage::summaries::StoredSummary>,
         messages: &[&crate::storage::messages::StoredMessage],

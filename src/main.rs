@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
@@ -37,6 +37,9 @@ struct Cli {
     /// Path to TOML configuration file.
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
+    /// Enable the local diagnostics service on this Unix socket path.
+    #[arg(long)]
+    diagnostics_socket: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -45,6 +48,41 @@ struct Cli {
 enum Command {
     /// Create a config.toml file through an interactive first-run flow.
     Onboard,
+    /// Query a running NerdBot instance through its diagnostics Unix socket.
+    Diagnostics(DiagnosticsArgs),
+}
+
+#[derive(Debug, Args)]
+struct DiagnosticsArgs {
+    /// Emit machine-readable JSON instead of human-readable output.
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    command: DiagnosticsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DiagnosticsCommand {
+    /// Verify that the diagnostics service is available.
+    Ping,
+    /// List persisted chat sessions.
+    ListSessions,
+    /// Show token usage and compaction state for one chat session.
+    Show {
+        /// Database session UUID.
+        #[arg(long, conflicts_with = "chat_id", required_unless_present = "chat_id")]
+        session_id: Option<String>,
+        /// Telegram chat ID. Uses the latest session for that chat.
+        #[arg(
+            long,
+            conflicts_with = "session_id",
+            required_unless_present = "session_id"
+        )]
+        chat_id: Option<i64>,
+        /// Include full personality and compaction prompt bodies.
+        #[arg(long)]
+        show_prompts: bool,
+    },
 }
 
 #[tokio::main]
@@ -58,9 +96,23 @@ async fn main() {
 
     let cli = Cli::parse();
 
-    if let Some(Command::Onboard) = cli.command {
-        if let Err(e) = nerdbot::onboarding::run(&cli.config) {
-            error!(error = %e, "onboarding failed");
+    if let Some(command) = cli.command {
+        match command {
+            Command::Onboard => {
+                if let Err(e) = nerdbot::onboarding::run(&cli.config) {
+                    error!(error = %e, "onboarding failed");
+                }
+            }
+            Command::Diagnostics(args) => {
+                let Some(socket_path) = cli.diagnostics_socket.as_deref() else {
+                    eprintln!("error: --diagnostics-socket <path> is required");
+                    std::process::exit(2);
+                };
+                if let Err(e) = run_diagnostics_command(socket_path, args).await {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         return;
     }
@@ -211,7 +263,28 @@ async fn main() {
         db.pool().clone(),
         Arc::new(compaction_worker),
         compaction_budget,
+        config.context.recent_turns_to_preserve,
     ));
+    let mut diagnostics_server = match cli.diagnostics_socket {
+        Some(socket_path) => {
+            match nerdbot::diagnostics::server::DiagnosticsServer::start(
+                socket_path,
+                db.pool().clone(),
+                compaction_service.clone(),
+                config.clone(),
+                registry.clone(),
+            )
+            .await
+            {
+                Ok(server) => Some(server),
+                Err(e) => {
+                    error!(error = %e, "failed to start diagnostics service");
+                    return;
+                }
+            }
+        }
+        None => None,
+    };
 
     let bot = Arc::new(bot);
     let service = TelegramService::new(bot.clone());
@@ -346,7 +419,40 @@ async fn main() {
     if let Err(e) = scheduler.stop().await {
         error!(error = %e, "Failed to stop scheduler gracefully");
     }
+    if let Some(server) = diagnostics_server.as_mut() {
+        server.stop().await;
+    }
     info!("Shutdown complete.");
+}
+
+async fn run_diagnostics_command(
+    socket_path: &std::path::Path,
+    args: DiagnosticsArgs,
+) -> Result<(), AgentError> {
+    use nerdbot::diagnostics::client::{render_human, render_json, send_request};
+    use nerdbot::diagnostics::protocol::DiagnosticsRequest;
+
+    let request = match args.command {
+        DiagnosticsCommand::Ping => DiagnosticsRequest::Ping,
+        DiagnosticsCommand::ListSessions => DiagnosticsRequest::ListSessions,
+        DiagnosticsCommand::Show {
+            session_id,
+            chat_id,
+            show_prompts,
+        } => DiagnosticsRequest::ShowSession {
+            session_id,
+            chat_id,
+            include_prompts: show_prompts,
+        },
+    };
+    let response = send_request(socket_path, &request).await?;
+    let output = if args.json {
+        render_json(&response)?
+    } else {
+        render_human(&response)
+    };
+    println!("{output}");
+    Ok(())
 }
 
 /// Build an `InboundMessage` from a Telegram update.
