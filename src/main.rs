@@ -18,6 +18,7 @@ use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
 use nerdbot::telegram::bot::TelegramBot;
+use nerdbot::telegram::commands::TelegramCommand;
 use nerdbot::telegram::handler::{AttachmentInfo, InboundMessage, MessageHandler};
 use nerdbot::telegram::service::TelegramService;
 use nerdbot::tools::calculator::CalculatorTool;
@@ -186,6 +187,13 @@ async fn main() {
             error!(error = %e, "Telegram bot authentication failed");
             return;
         }
+    }
+
+    if let Err(e) = bot.set_my_commands(&TelegramCommand::menu_commands()).await {
+        warn!(
+            error = %e,
+            "failed to configure Telegram command menu; slash commands still work when typed manually"
+        );
     }
 
     // Clear any existing webhook so long polling works

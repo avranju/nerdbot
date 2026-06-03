@@ -41,7 +41,7 @@ src/
     mod.rs
     bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, get_file, download_file)
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
-    commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset-context)
+    commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic)
     handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
     service.rs     — TelegramService: send_message, etc.
@@ -110,7 +110,7 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Telegram message with attachments (rich ingress):**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup
 1. Long polling receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
@@ -141,7 +141,7 @@ README.md          — Project documentation
 - If no `llm.api_key_env` is configured, the client supplies an empty placeholder auth value so local servers without authentication work
 
 **Interactive Telegram message:**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>` and verifies credentials with `getMe` during startup
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. Reset commands use Telegram-safe underscore names (`/reset_context`, `/new_topic`) because Telegram command menus only allow lowercase letters, digits, and underscores.
 1. Long polling receives update
 2. MessageHandler checks allowlist (chat_id + user_id)
 3. Ensures chat session exists (creates if new)
@@ -210,6 +210,7 @@ README.md          — Project documentation
 - **Phase 11** (Bubblewrap Shell Sandbox) — ✅ Complete (namespace isolation for shell_execute)
 - **Phase 12** (Telegram Attachments) — ✅ Complete — `telegram/attachment.rs` module with MIME validation, magic-byte signature inspection, bounded file download with injectable Bot API/CDN bases for tests, multimodal LLM content conversion (photos, PDFs, text documents), persisted attachment outcome markers, `recent_turns_to_preserve` enforcement in context assembly and compaction, and binary payload exclusion from token estimation
 - **Phase 13** (Markdown Formatting for Replies) — ✅ Complete — Added Telegram-compatible `MarkdownV2` formatting for interactive agent replies and scheduled job notifications. Includes a custom Markdown AST parser to escape reserved characters safely, an explicit raw Telegram MarkdownV2 mode for tool calls, plain-text degradation for oversized formatted replies, and plain-text retry when Telegram rejects formatted entities.
+- **Phase 14** (Telegram Command Menu) — ✅ Complete — `TelegramCommand::menu_commands` defines Telegram-safe slash-menu entries, `TelegramBot::set_my_commands` publishes them with the Bot API during startup, and reset-context commands use underscore names (`/reset_context`, `/new_topic`).
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user

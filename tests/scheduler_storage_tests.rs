@@ -389,9 +389,10 @@ fn test_telegram_command_parse_delete_with_id() {
 #[test]
 fn test_telegram_command_parse_reset_context() {
     assert_eq!(
-        TelegramCommand::parse("/reset-context"),
+        TelegramCommand::parse("/reset_context"),
         Some(TelegramCommand::ResetContext)
     );
+    assert_eq!(TelegramCommand::parse("/reset-context"), None);
 }
 
 #[test]

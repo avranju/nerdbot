@@ -155,6 +155,28 @@ struct SendChatActionRequest {
     action: &'static str,
 }
 
+/// A command advertised to Telegram clients for slash-command menus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BotCommand {
+    pub command: String,
+    pub description: String,
+}
+
+impl BotCommand {
+    pub fn new(command: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            description: description.into(),
+        }
+    }
+}
+
+/// Payload for the setMyCommands call.
+#[derive(Debug, Serialize)]
+struct SetMyCommandsRequest {
+    commands: Vec<BotCommand>,
+}
+
 /// Response from sendMessage (we only need ok/description but destructure the result).
 #[derive(Debug, Deserialize, Default)]
 pub struct SentMessage {
@@ -350,6 +372,59 @@ impl TelegramBot {
             "Telegram message sent"
         );
         Ok(sent)
+    }
+
+    /// Set the bot command list shown by Telegram clients when users type `/`.
+    pub async fn set_my_commands(&self, commands: &[BotCommand]) -> Result<(), AgentError> {
+        let url = format!("{}/setMyCommands", self.base_url);
+        let payload = SetMyCommandsRequest {
+            commands: commands.to_vec(),
+        };
+
+        debug!(
+            command_count = payload.commands.len(),
+            "setting Telegram bot commands"
+        );
+
+        let response = self
+            .http
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("HTTP error during setMyCommands: {e}")))?;
+
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("Failed to read setMyCommands body: {e}")))?;
+
+        if !status.is_success() {
+            return Err(AgentError::Telegram(format!(
+                "setMyCommands returned HTTP {status}: {body_text}"
+            )));
+        }
+
+        let api_response: TelegramApiResponse<bool> =
+            serde_json::from_str(&body_text).map_err(|e| {
+                AgentError::Telegram(format!(
+                    "Failed to parse setMyCommands response: {e}. Body: {body_text}"
+                ))
+            })?;
+
+        if !api_response.ok {
+            return Err(AgentError::Telegram(format!(
+                "Telegram setMyCommands failed: {}",
+                api_response.description.as_deref().unwrap_or("unknown")
+            )));
+        }
+
+        info!(
+            command_count = payload.commands.len(),
+            "Telegram bot command menu configured"
+        );
+        Ok(())
     }
 
     /// Notify Telegram that the bot is composing a response.

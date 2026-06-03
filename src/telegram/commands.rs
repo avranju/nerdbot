@@ -8,6 +8,8 @@ use crate::error::AgentError;
 use sqlx::SqlitePool;
 use tracing::debug;
 
+use super::bot::BotCommand;
+
 /// Supported Telegram commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TelegramCommand {
@@ -20,6 +22,22 @@ pub enum TelegramCommand {
 }
 
 impl TelegramCommand {
+    /// Commands advertised to Telegram clients for the slash-command menu.
+    ///
+    /// Telegram requires command names without the leading slash and allows
+    /// only lowercase letters, digits, and underscores.
+    pub fn menu_commands() -> Vec<BotCommand> {
+        vec![
+            BotCommand::new("start", "Introduction and welcome message"),
+            BotCommand::new("help", "Show available commands"),
+            BotCommand::new("jobs", "List scheduled jobs"),
+            BotCommand::new("run", "Run a scheduled job by ID"),
+            BotCommand::new("delete", "Delete a scheduled job by ID"),
+            BotCommand::new("reset_context", "Start a fresh conversation"),
+            BotCommand::new("new_topic", "Start a fresh conversation"),
+        ]
+    }
+
     /// Parse a command string (e.g. "/jobs" -> Jobs).
     ///
     /// Returns `None` if the text does not start with a recognized command.
@@ -56,7 +74,7 @@ impl TelegramCommand {
             "/start" => Some(Self::Start),
             "/help" => Some(Self::Help),
             "/jobs" => Some(Self::Jobs),
-            "/reset-context" | "/new-topic" => Some(Self::ResetContext),
+            "/reset_context" | "/new_topic" => Some(Self::ResetContext),
             "/run" => {
                 if had_space {
                     Some(Self::Run(arg))
@@ -125,7 +143,8 @@ impl CommandHandler {
         /jobs — List all your scheduled jobs\n\
         /run <job-id> — Trigger a scheduled job immediately\n\
         /delete <job-id> — Delete a scheduled job\n\
-        /reset-context — Start a fresh conversation (forgets current chat context)\n\n\
+        /reset_context — Start a fresh conversation (forgets current chat context)\n\
+        /new_topic — Start a fresh conversation (alias)\n\n\
         You can also just send me a message to chat normally!"
             .to_string()
     }
@@ -299,17 +318,40 @@ mod tests {
     #[test]
     fn test_parse_reset_context() {
         assert_eq!(
-            TelegramCommand::parse("/reset-context"),
+            TelegramCommand::parse("/reset_context"),
             Some(TelegramCommand::ResetContext)
         );
+        assert_eq!(TelegramCommand::parse("/reset-context"), None);
     }
 
     #[test]
     fn test_parse_new_topic_alias() {
         assert_eq!(
-            TelegramCommand::parse("/new-topic"),
+            TelegramCommand::parse("/new_topic"),
             Some(TelegramCommand::ResetContext)
         );
+        assert_eq!(TelegramCommand::parse("/new-topic"), None);
+    }
+
+    #[test]
+    fn test_menu_commands_are_telegram_safe() {
+        let commands = TelegramCommand::menu_commands();
+        assert!(!commands.is_empty());
+
+        for command in commands {
+            assert!(!command.command.starts_with('/'));
+            assert!(command.command.len() <= 32);
+            assert!(
+                command
+                    .command
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "invalid command name: {}",
+                command.command
+            );
+            assert!(!command.description.is_empty());
+            assert!(command.description.len() <= 256);
+        }
     }
 
     #[test]

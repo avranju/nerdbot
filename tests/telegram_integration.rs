@@ -29,6 +29,7 @@ use nerdbot::llm::LlmExecutor;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::storage;
 use nerdbot::telegram::TelegramBot;
+use nerdbot::telegram::bot::BotCommand;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
 use nerdbot::telegram::handler::MessageHandler;
 use nerdbot::telegram::service::TelegramService;
@@ -78,19 +79,29 @@ fn test_parse_run_with_bot_mention_no_arg_is_none() {
 }
 
 #[test]
+fn test_parse_telegram_menu_safe_aliases() {
+    assert_eq!(
+        TelegramCommand::parse("/reset_context"),
+        Some(TelegramCommand::ResetContext)
+    );
+    assert_eq!(
+        TelegramCommand::parse("/new_topic"),
+        Some(TelegramCommand::ResetContext)
+    );
+}
+
+#[test]
+fn test_parse_hyphenated_reset_commands_are_not_supported() {
+    assert_eq!(TelegramCommand::parse("/reset-context"), None);
+    assert_eq!(TelegramCommand::parse("/new-topic"), None);
+}
+
+#[test]
 fn test_parse_run_with_bot_mention_empty_arg() {
     // /run@NerdBot followed by space but no text
     assert_eq!(
         TelegramCommand::parse("/run@NerdBot "),
         Some(TelegramCommand::Run("".into()))
-    );
-}
-
-#[test]
-fn test_parse_new_topic() {
-    assert_eq!(
-        TelegramCommand::parse("/new-topic"),
-        Some(TelegramCommand::ResetContext)
     );
 }
 
@@ -129,7 +140,7 @@ async fn test_command_handler_help() {
     assert!(response.contains("/start"));
     assert!(response.contains("/help"));
     assert!(response.contains("/jobs"));
-    assert!(response.contains("/reset-context"));
+    assert!(response.contains("/reset_context"));
 }
 
 #[tokio::test]
@@ -398,7 +409,7 @@ async fn test_message_handler_active_reset_context() {
 
     // 2. Call reset context
     let _ = handler
-        .handle_message(42, 100, "/reset-context")
+        .handle_message(42, 100, "/reset_context")
         .await
         .unwrap();
 
@@ -755,6 +766,65 @@ async fn test_delete_webhook_returns_error_on_404() {
     let err_str = err.to_string();
     assert!(
         err_str.contains("deleteWebhook returned HTTP 404"),
+        "unexpected error: {err_str}"
+    );
+}
+
+#[tokio::test]
+async fn test_set_my_commands_succeeds_on_200() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/setMyCommands")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "commands": [
+                {
+                    "command": "help",
+                    "description": "Show available commands"
+                },
+                {
+                    "command": "reset_context",
+                    "description": "Start a fresh conversation"
+                }
+            ]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true,"result":true}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot
+        .set_my_commands(&[
+            BotCommand::new("help", "Show available commands"),
+            BotCommand::new("reset_context", "Start a fresh conversation"),
+        ])
+        .await;
+
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_set_my_commands_returns_error_on_not_ok() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/setMyCommands")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"ok":false,"description":"Bad Request"}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let result = bot
+        .set_my_commands(&[BotCommand::new("bad-command", "Invalid")])
+        .await;
+
+    assert!(result.is_err());
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("Telegram setMyCommands failed: Bad Request"),
         "unexpected error: {err_str}"
     );
 }

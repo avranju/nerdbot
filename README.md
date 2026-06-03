@@ -6,7 +6,7 @@ NerdBot communicates with users via **Telegram**, uses an **iterative tool-calli
 
 ## Features
 
-- **Telegram integration** — long-polling bot with chat/user allowlists and slash commands (`/help`, `/jobs`, `/run`, `/delete`, `/reset-context`)
+- **Telegram integration** — long-polling bot with chat/user allowlists and slash commands (`/help`, `/jobs`, `/run`, `/delete`, `/reset_context`)
 - **Iterative tool loop** — the harness owns orchestration; the LLM proposes tool calls, Rust validates and executes them, and the loop continues until completion
 - **Built-in tools** — scheduling, Telegram messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
@@ -159,7 +159,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | `/jobs` | List all scheduled jobs |
 | `/run <job-id>` | Immediately execute a scheduled job |
 | `/delete <job-id>` | Delete a scheduled job |
-| `/reset-context` | Reset the conversation context for the current chat |
+| `/reset_context` | Reset the conversation context for the current chat |
 
 ## Architecture
 
