@@ -8,9 +8,9 @@
 //! - Optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS)
 //!
 //! Sandbox modes (configured via `[shell].sandbox_mode`):
-//! - `none` — Direct execution (current behavior, no namespace isolation).
+//! - `none` — Direct execution (current behaviour, no namespace isolation).
 //! - `bwrap` — Bubblewrap namespace isolation with read-only system files,
-//!   read-write workspace, clean environment, no network access.
+//!   read-write workspace, clean environment, and configurable network access.
 //! - `bwrap-strict` — Reserved for future resource limit enforcement.
 //!   Currently identical to `bwrap`.
 
@@ -19,7 +19,10 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::config::{SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE};
+use crate::config::{
+    SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE,
+    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST,
+};
 use crate::error::AgentError;
 use crate::tools::traits::{Tool, ToolContext, ToolOutput};
 use crate::workspace::sandbox::WorkspaceSandbox;
@@ -37,6 +40,8 @@ pub struct ShellConfig {
     pub timeout_secs: u64,
     /// Sandbox isolation mode: "none", "bwrap", or "bwrap-strict".
     pub sandbox_mode: String,
+    /// Bubblewrap network access policy: "disabled" or "host".
+    pub network_access: String,
 }
 
 impl Default for ShellConfig {
@@ -55,6 +60,7 @@ impl Default for ShellConfig {
             max_output_bytes: 1_048_576, // 1 MB
             timeout_secs: 30,
             sandbox_mode: SANDBOX_MODE_NONE.into(),
+            network_access: SHELL_NETWORK_ACCESS_DISABLED.into(),
         }
     }
 }
@@ -78,6 +84,13 @@ impl BwrapPolicy {
     }
 }
 
+struct ShellOutputMetadata<'a> {
+    sandbox_mode: &'a str,
+    network_access: &'a str,
+    timeout_secs: u64,
+    working_directory: Option<String>,
+}
+
 /// Check if bubblewrap is available on the system.
 pub fn bwrap_available() -> bool {
     std::process::Command::new("bwrap")
@@ -96,7 +109,7 @@ pub fn bwrap_available() -> bool {
 /// executed inside a bubblewrap sandbox providing namespace isolation:
 /// - Filesystem: read-only system files, read-write workspace
 /// - Process: PID namespace isolation
-/// - Network: loopback-only (no external network access)
+/// - Network: configurable as loopback-only or shared host networking
 /// - Environment: clean environment (no host secrets leaked)
 /// - IPC/UTS: isolated IPC and hostname
 pub struct ShellExecute {
@@ -176,8 +189,10 @@ impl ShellExecute {
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
-            "--unshare-net",
         ]);
+        if self.config.network_access == SHELL_NETWORK_ACCESS_DISABLED {
+            cmd.arg("--unshare-net");
+        }
 
         // Clean environment — no host secrets leaked
         cmd.arg("--clearenv");
@@ -239,9 +254,7 @@ impl ShellExecute {
         stdout: &[u8],
         stderr: &[u8],
         max_output_bytes: usize,
-        sandbox_mode: &str,
-        timeout_secs: u64,
-        working_directory: Option<String>,
+        metadata: ShellOutputMetadata<'_>,
     ) -> ToolOutput {
         let mut combined = stdout.to_vec();
         combined.extend_from_slice(stderr);
@@ -253,10 +266,11 @@ impl ShellExecute {
             "output": output_str,
             "exit_code": exit_code,
             "truncated": truncated,
-            "sandbox_mode": sandbox_mode,
-            "timeout_seconds": timeout_secs,
+            "sandbox_mode": metadata.sandbox_mode,
+            "network_access": metadata.network_access,
+            "timeout_seconds": metadata.timeout_secs,
         });
-        if let Some(wd) = working_directory {
+        if let Some(wd) = metadata.working_directory {
             data["working_directory"] = json!(wd);
         }
 
@@ -339,9 +353,12 @@ impl ShellExecute {
             &stdout,
             &stderr,
             max_output_bytes,
-            "bwrap",
-            timeout_secs,
-            None,
+            ShellOutputMetadata {
+                sandbox_mode: "bwrap",
+                network_access: &self.config.network_access,
+                timeout_secs,
+                working_directory: None,
+            },
         ))
     }
 
@@ -411,9 +428,12 @@ impl ShellExecute {
             &stdout,
             &stderr,
             max_output_bytes,
-            "bwrap-strict",
-            timeout_secs,
-            None,
+            ShellOutputMetadata {
+                sandbox_mode: "bwrap-strict",
+                network_access: &self.config.network_access,
+                timeout_secs,
+                working_directory: None,
+            },
         ))
     }
 }
@@ -425,7 +445,7 @@ impl Tool for ShellExecute {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command within a sandboxed workspace. Supports command validation (allowlist/denylist), timeout, output size limits, and optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). When sandbox_mode is set, system files are read-only and the workspace is read-write."
+        "Execute a shell command within a sandboxed workspace. Supports command validation (allowlist/denylist), timeout, output size limits, and optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). When sandbox_mode is set, system files are read-only, the workspace is read-write, and network access follows shell.network_access."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -502,6 +522,15 @@ impl Tool for ShellExecute {
 
         // Build the sandbox policy
         let policy = BwrapPolicy::for_workspace(&ctx.workspace_root);
+        if !matches!(
+            self.config.network_access.as_str(),
+            SHELL_NETWORK_ACCESS_DISABLED | SHELL_NETWORK_ACCESS_HOST
+        ) {
+            return Err(AgentError::Config(format!(
+                "invalid shell network access: '{}' (must be 'disabled' or 'host')",
+                self.config.network_access
+            )));
+        }
 
         // Execute based on sandbox mode
         match self.config.sandbox_mode.as_str() {
@@ -547,9 +576,12 @@ impl Tool for ShellExecute {
                     &stdout,
                     &stderr,
                     max_output_bytes,
-                    "none",
-                    timeout_secs,
-                    Some(resolved_dir.to_string_lossy().to_string()),
+                    ShellOutputMetadata {
+                        sandbox_mode: "none",
+                        network_access: &self.config.network_access,
+                        timeout_secs,
+                        working_directory: Some(resolved_dir.to_string_lossy().to_string()),
+                    },
                 ))
             }
             SANDBOX_MODE_BWRAP => {
@@ -618,11 +650,54 @@ mod tests {
     fn test_sandbox_mode_none_is_default() {
         let config = ShellConfig::default();
         assert_eq!(config.sandbox_mode, SANDBOX_MODE_NONE);
+        assert_eq!(config.network_access, SHELL_NETWORK_ACCESS_DISABLED);
     }
 
     #[test]
     fn test_policy_for_workspace() {
         let policy = BwrapPolicy::for_workspace(Path::new("/workspace"));
         assert!(policy.writable_roots.iter().any(|p| p == "/workspace"));
+    }
+
+    #[test]
+    fn test_bwrap_disabled_network_adds_unshare_net() {
+        let tool = ShellExecute::new(ShellConfig {
+            sandbox_mode: SANDBOX_MODE_BWRAP.into(),
+            network_access: SHELL_NETWORK_ACCESS_DISABLED.into(),
+            ..ShellConfig::default()
+        });
+        let policy = BwrapPolicy::for_workspace(Path::new("/workspace"));
+
+        let cmd = tool.build_bwrap_command(
+            "echo hello",
+            &policy,
+            Path::new("/workspace"),
+            Path::new("/workspace"),
+            false,
+        );
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+
+        assert!(args.iter().any(|arg| *arg == "--unshare-net"));
+    }
+
+    #[test]
+    fn test_bwrap_host_network_omits_unshare_net() {
+        let tool = ShellExecute::new(ShellConfig {
+            sandbox_mode: SANDBOX_MODE_BWRAP.into(),
+            network_access: SHELL_NETWORK_ACCESS_HOST.into(),
+            ..ShellConfig::default()
+        });
+        let policy = BwrapPolicy::for_workspace(Path::new("/workspace"));
+
+        let cmd = tool.build_bwrap_command(
+            "echo hello",
+            &policy,
+            Path::new("/workspace"),
+            Path::new("/workspace"),
+            false,
+        );
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+
+        assert!(!args.iter().any(|arg| *arg == "--unshare-net"));
     }
 }

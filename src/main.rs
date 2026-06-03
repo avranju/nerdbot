@@ -228,6 +228,7 @@ async fn main() {
         max_output_bytes: config.shell.max_output_bytes,
         timeout_secs: config.shell.timeout_secs,
         sandbox_mode: config.shell.sandbox_mode.clone(),
+        network_access: config.shell.network_access.clone(),
     }));
     let registry = Arc::new(registry);
 

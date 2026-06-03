@@ -89,7 +89,7 @@ timeout_secs = 30
 #   • Read-only system files (/usr, /etc, /lib, /bin, /sbin)
 #   • Read-write workspace access
 #   • PID namespace (can't see host processes)
-#   • Network namespace (loopback-only, no external access)
+#   • Network access controlled by network_access below
 #   • Clean environment (no host secrets leaked)
 #   • IPC and UTS namespace isolation
 #
@@ -107,6 +107,19 @@ timeout_secs = 30
 #   kernel.apparmor_restrict_unprivileged_userns=0
 # via sysctl or GRUB.
 sandbox_mode = "none"
+
+# Bubblewrap network access policy: "disabled" or "host".
+#
+# - "disabled" (default): pass --unshare-net to bubblewrap. The sandbox gets
+#   a separate network namespace with no external network access.
+#
+# - "host": omit --unshare-net so the sandbox shares the host network namespace.
+#   This allows outbound tools such as curl or ssh, subject to allowed_commands
+#   and denied_commands. SSH keys, known_hosts, and SSH_AUTH_SOCK are still not
+#   available unless separately exposed via filesystem/env configuration.
+#
+# This setting only affects sandbox_mode = "bwrap" or "bwrap-strict".
+network_access = "disabled"
 
 # ── Exa Web Search ────────────────────────────────────────────────
 [exa]

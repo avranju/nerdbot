@@ -7,7 +7,10 @@ use std::path::Path;
 use cliclack::{input, intro, note, outro, select};
 use toml::Value;
 
-use crate::config::{AppConfig, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE};
+use crate::config::{
+    AppConfig, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE,
+    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST,
+};
 
 const DEFAULT_PERSONALITY_FILE: &str = "/config/personality.md";
 const DEFAULT_SQLITE_PATH: &str = "/data/agent.db";
@@ -33,6 +36,7 @@ struct OnboardingAnswers {
     endpoint: Option<String>,
     api_key_env: Option<String>,
     sandbox_mode: String,
+    shell_network_access: String,
     exa_api_key_env: String,
 }
 
@@ -149,6 +153,19 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
         )
         .initial_value(&defaults.shell.sandbox_mode)
         .interact()?;
+    let shell_network_access = select("Shell sandbox network access")
+        .item(
+            SHELL_NETWORK_ACCESS_DISABLED,
+            "disabled",
+            "loopback-only when using bwrap",
+        )
+        .item(
+            SHELL_NETWORK_ACCESS_HOST,
+            "host",
+            "allow outbound network from bwrap",
+        )
+        .initial_value(&defaults.shell.network_access)
+        .interact()?;
     let exa_api_key_env: String =
         input("Optional Exa API key environment variable ('-' clears the value)")
             .default_input(&defaults.exa.api_key_env)
@@ -165,6 +182,7 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
         endpoint,
         api_key_env: optional_value(&api_key_env),
         sandbox_mode: sandbox_mode.into(),
+        shell_network_access: shell_network_access.into(),
         exa_api_key_env: optional_value(&exa_api_key_env).unwrap_or_default(),
     };
 
@@ -224,9 +242,14 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
     set_optional_string(llm, "endpoint", answers.endpoint.as_deref());
     set_optional_string(llm, "api_key_env", answers.api_key_env.as_deref());
 
-    table_mut(root, "shell")?.insert(
+    let shell = table_mut(root, "shell")?;
+    shell.insert(
         "sandbox_mode".into(),
         Value::String(answers.sandbox_mode.clone()),
+    );
+    shell.insert(
+        "network_access".into(),
+        Value::String(answers.shell_network_access.clone()),
     );
     table_mut(root, "exa")?.insert(
         "api_key_env".into(),
@@ -345,6 +368,7 @@ mod tests {
             endpoint: Some("http://localhost:8080/v1".into()),
             api_key_env: Some("CUSTOM_API_KEY".into()),
             sandbox_mode: SANDBOX_MODE_BWRAP.into(),
+            shell_network_access: SHELL_NETWORK_ACCESS_HOST.into(),
             exa_api_key_env: "EXA_TOKEN".into(),
         };
 
@@ -374,6 +398,7 @@ mod tests {
             PathBuf::from(DEFAULT_SQLITE_PATH)
         );
         assert_eq!(config.shell.sandbox_mode, SANDBOX_MODE_BWRAP);
+        assert_eq!(config.shell.network_access, SHELL_NETWORK_ACCESS_HOST);
         assert_eq!(config.exa.api_key_env, "EXA_TOKEN");
     }
 
@@ -403,6 +428,7 @@ temperature = 0.7
             endpoint: None,
             api_key_env: None,
             sandbox_mode: SANDBOX_MODE_NONE.into(),
+            shell_network_access: SHELL_NETWORK_ACCESS_DISABLED.into(),
             exa_api_key_env: String::new(),
         };
 

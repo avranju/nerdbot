@@ -182,7 +182,7 @@ README.md          — Project documentation
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search
 - `web_fetch` — Fetch URL content with SSRF protection
-- `shell_execute` — Sandboxed command execution with optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). Configurable via `sandbox_mode`: `none` (direct exec), `bwrap` (full namespace isolation), `bwrap-strict` (reserved for future resource limits).
+- `shell_execute` — Sandboxed command execution with optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). Configurable via `sandbox_mode`: `none` (direct exec), `bwrap` (namespace isolation), `bwrap-strict` (reserved for future resource limits), plus `network_access`: `disabled` (default, passes `--unshare-net`) or `host` (omits `--unshare-net` so bwrap shares host networking).
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
@@ -193,7 +193,7 @@ README.md          — Project documentation
 - `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens
 - `[context]` — soft/hard thresholds, recent_turns_to_preserve, reserved_tool_loop_tokens
 - `[scheduler]` — run_overdue_one_shots_on_startup
-- `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`)
+- `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`), network_access (`"disabled"` | `"host"`)
 - `[exa]` — api_key_env, max_results, max_text_chars
 
 ### Phase Implementation Status
@@ -234,7 +234,8 @@ Timeout, Generic.
 - **Kernel version**: User namespaces require kernel 3.8+. Both are widely
   available on modern systems.
 - **No L7 network filtering**: Bubblewrap provides network namespace isolation
-  (all-or-nothing), not HTTP-level policy. Sufficient for nerdbot's use case.
+  (all-or-nothing), not HTTP-level policy. NerdBot defaults to `network_access = "disabled"`;
+  setting `network_access = "host"` omits `--unshare-net` and allows normal host networking.
 
 # Agent Instructions & Standing Rules
 

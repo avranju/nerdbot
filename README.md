@@ -145,6 +145,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `max_output_bytes` | Max shell output size (default: `1048576`) |
 | | `timeout_secs` | Shell command timeout (default: `30`) |
 | | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`) |
+| | `network_access` | Bubblewrap network policy: `disabled` or `host` (default: `disabled`) |
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |

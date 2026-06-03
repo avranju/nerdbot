@@ -231,6 +231,8 @@ impl Default for FilesConfig {
 pub const SANDBOX_MODE_NONE: &str = "none";
 pub const SANDBOX_MODE_BWRAP: &str = "bwrap";
 pub const SANDBOX_MODE_BWRAP_STRICT: &str = "bwrap-strict";
+pub const SHELL_NETWORK_ACCESS_DISABLED: &str = "disabled";
+pub const SHELL_NETWORK_ACCESS_HOST: &str = "host";
 
 /// Shell execution configuration.
 #[derive(Debug, Deserialize, Clone)]
@@ -252,7 +254,7 @@ pub struct ShellConfig {
     /// - `none`: Direct execution (current behavior, no namespace isolation).
     /// - `bwrap`: Bubblewrap namespace isolation — filesystem, PID, network,
     ///   IPC, and UTS namespaces. System files are read-only; workspace is
-    ///   read-write. No network access.
+    ///   read-write. Network access is controlled by `network_access`.
     /// - `bwrap-strict`: Reserved for future resource limit enforcement
     ///   (--rlimit-nproc, --rlimit-as, --rlimit-core). Currently identical
     ///   to `bwrap`; the distinction is a hook for when bwrap supports these
@@ -262,6 +264,14 @@ pub struct ShellConfig {
     /// installed, the tool returns an error explaining how to install it.
     #[serde(default = "default_shell_sandbox_mode")]
     pub sandbox_mode: String,
+    /// Network access policy for bubblewrap sandboxing.
+    ///
+    /// - `disabled`: Unshare the network namespace; loopback-only, no external access.
+    /// - `host`: Share the host network namespace; commands can make outbound connections.
+    ///
+    /// This setting only affects `bwrap` and `bwrap-strict` sandbox modes.
+    #[serde(default = "default_shell_network_access")]
+    pub network_access: String,
 }
 
 /// Exa web search configuration.
@@ -296,6 +306,7 @@ impl Default for ShellConfig {
             max_output_bytes: default_shell_max_output_bytes(),
             timeout_secs: default_shell_timeout_secs(),
             sandbox_mode: default_shell_sandbox_mode(),
+            network_access: default_shell_network_access(),
         }
     }
 }
@@ -378,6 +389,9 @@ fn default_shell_timeout_secs() -> u64 {
 }
 fn default_shell_sandbox_mode() -> String {
     SANDBOX_MODE_NONE.into()
+}
+fn default_shell_network_access() -> String {
+    SHELL_NETWORK_ACCESS_DISABLED.into()
 }
 fn default_exa_api_key_env() -> String {
     "EXA_API_KEY".to_string()

@@ -1115,6 +1115,7 @@ async fn test_shell_execute_allows_specific_command_with_allowlist() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1162,6 +1163,7 @@ async fn test_shell_execute_respects_denylist_over_allowlist() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1195,6 +1197,7 @@ async fn test_shell_execute_output_truncation() {
         max_output_bytes: 1024,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1420,6 +1423,7 @@ async fn test_shell_execute_multiple_denylisted_commands() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1455,6 +1459,7 @@ async fn test_shell_execute_custom_max_output_bytes() {
         max_output_bytes: 1024,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1561,6 +1566,7 @@ async fn test_shell_execute_bwrap_missing_command() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "bwrap".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1594,6 +1600,7 @@ async fn test_shell_execute_bwrap_strict_missing_command() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "bwrap-strict".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1642,6 +1649,7 @@ async fn test_shell_execute_invalid_sandbox_mode() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "invalid-mode".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1670,6 +1678,7 @@ async fn test_shell_execute_sandbox_mode_none_in_output() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "none".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
@@ -1700,6 +1709,7 @@ async fn test_shell_execute_sandbox_mode_denied_in_bwrap() {
         max_output_bytes: 1_048_576,
         timeout_secs: 30,
         sandbox_mode: "bwrap".into(),
+        network_access: "disabled".into(),
     };
     let tool = nerdbot::tools::shell::ShellExecute::new(config);
     let ctx = ToolContext {
