@@ -246,6 +246,28 @@ cargo build --release
 ./target/release/nerdbot --config config.toml
 ```
 
+## Systemd User Service
+
+A sample user service unit is available at [`docs/nerdbot-user.service.example`](docs/nerdbot-user.service.example). It assumes:
+
+- binary: `~/.local/bin/nerdbot`
+- config: `~/.config/nerdbot/config.toml`
+- secrets env file: `~/.config/nerdbot/nerdbot.env`
+- working/data directory: `~/.local/share/nerdbot`
+
+Install it with:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/nerdbot ~/.local/bin ~/.local/share/nerdbot
+cp target/release/nerdbot ~/.local/bin/nerdbot
+cp docs/nerdbot-user.service.example ~/.config/systemd/user/nerdbot.service
+systemctl --user daemon-reload
+systemctl --user enable --now nerdbot.service
+journalctl --user -u nerdbot.service -f
+```
+
+To let the service continue after logout, run `loginctl enable-linger "$USER"` once.
+
 ### Cross-compilation
 
 The Dockerfile uses `rust:1.96-slim-bookworm` as the build stage. For cross-compilation (e.g., `aarch64`), use Docker Buildx:

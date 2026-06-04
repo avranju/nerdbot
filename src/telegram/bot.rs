@@ -253,8 +253,6 @@ impl TelegramBot {
             r#"["message","edited_message"]"#.to_string(),
         ));
 
-        debug!(?offset, timeout_secs, "polling for Telegram updates");
-
         let response = self
             .http
             .post(&url)
@@ -294,7 +292,6 @@ impl TelegramBot {
         }
 
         let updates = api_response.result.unwrap_or_default();
-        debug!(count = updates.len(), "received Telegram updates");
         Ok(updates)
     }
 
@@ -432,10 +429,8 @@ impl TelegramBot {
         let url = format!("{}/sendChatAction", self.base_url);
         let payload = SendChatActionRequest {
             chat_id,
-            action: "typing",
+            action: "thinking",
         };
-
-        debug!(chat_id, "sending Telegram typing action");
 
         let response = self
             .http

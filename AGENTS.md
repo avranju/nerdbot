@@ -99,6 +99,7 @@ src/
 
 tests/             — Integration tests (agent_loop, storage, scheduler, telegram, workspace, context, tools, access_control, config)
 docs/              — System design document and other docs
+  nerdbot-user.service.example — Sample user systemd unit for running NerdBot from ~/.local/bin with config/secrets under ~/.config/nerdbot
 migrations/        — SQLx migrations (00000000000001_init.sql)
 Dockerfile         — Multi-stage Docker build (builder → runtime)
 docker-compose.yml — Example Docker Compose setup
@@ -219,6 +220,9 @@ README.md          — Project documentation
 - **config.toml.example** — annotated example configuration covering all sections
 - **personality.md.example** — example personality/system prompt file
 - **README.md** — comprehensive project documentation (features, quick start, config reference, architecture, deployment)
+
+### Systemd User Service
+- **docs/nerdbot-user.service.example** — sample `systemd --user` unit. It runs `%h/.local/bin/nerdbot --config %h/.config/nerdbot/config.toml`, loads optional secrets from `%h/.config/nerdbot/nerdbot.env`, uses `%h/.local/share/nerdbot` as the working directory, restarts on failure, and sets conservative user-service hardening (`UMask=0077`, `NoNewPrivileges=true`, `PrivateTmp=true`). README includes install commands and the `loginctl enable-linger "$USER"` note for running after logout.
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,
