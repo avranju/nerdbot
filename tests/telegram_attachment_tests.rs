@@ -653,6 +653,7 @@ async fn test_context_manager_respects_preserve_count() {
             &session.id,
             "You are a bot.",
             genai::chat::ChatMessage::user(genai::chat::MessageContent::from_text("Current")),
+            "UTC",
         )
         .await
         .unwrap();
@@ -685,4 +686,37 @@ async fn test_context_manager_estimate_tokens_excludes_binary() {
     // Binary part should NOT contribute to token count
     assert!(tokens > 0);
     assert!(tokens < 10); // Should be small, not inflated by base64
+}
+
+#[tokio::test]
+async fn test_context_manager_appends_datetime_without_dropping_binary_parts() {
+    let pool = setup_test_db().await;
+    let budget = ContextBudget::default();
+    let manager = nerdbot::context::manager::ContextManager::new(pool.clone(), budget);
+    let session = storage::sessions::create_session(&pool, 1).await.unwrap();
+
+    let binary_part = genai::chat::ContentPart::from_binary_base64(
+        "image/png",
+        "iVBORw0KGgo=",
+        Some("test.png".to_string()),
+    );
+    let current = genai::chat::ChatMessage::user(genai::chat::MessageContent::from_parts(vec![
+        genai::chat::ContentPart::Text("Analyze this image".to_string()),
+        binary_part,
+    ]));
+
+    let messages = manager
+        .assemble_messages(&session.id, "You are a bot.", current, "UTC")
+        .await
+        .unwrap();
+    let last = messages.last().unwrap();
+    let parts = last.content.parts();
+
+    assert_eq!(parts.len(), 3);
+    assert!(matches!(parts[0], genai::chat::ContentPart::Text(_)));
+    assert!(matches!(parts[1], genai::chat::ContentPart::Binary(_)));
+    assert!(matches!(
+        &parts[2],
+        genai::chat::ContentPart::Text(t) if t.contains("## Current Date/Time")
+    ));
 }

@@ -69,7 +69,7 @@ src/
     mod.rs
     budget.rs      — ContextBudget: token budgeting (soft/hard thresholds, usable budget)
     diagnostics.rs — Shared session context snapshot calculation for diagnostics and compaction pressure
-    manager.rs     — ContextManager: bounded context assembly (summary + recent messages)
+    manager.rs     — ContextManager: bounded context assembly (summary + recent messages) and current-turn datetime enrichment
     summaries.rs   — ContextSummary struct + CRUD via storage layer
     compaction_service.rs — Monitors session pressure, triggers async compaction with per-session state tracking
     compaction_worker.rs  — Loads old history, calls LLM to produce structured summary, persists it
@@ -125,7 +125,7 @@ README.md          — Project documentation
 3. MessageHandler checks allowlist (chat_id + user_id) BEFORE downloading any files
 4. Ensures chat session exists (creates if new)
 5. Routes: if `/command` → CommandHandler, else → agent loop
-6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, and excludes binary payloads from token estimation
+6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, excludes binary payloads from token estimation, and appends the current date/time as a trailing text part on the current user message without flattening rich attachment parts. The datetime is formatted in 24-hour local time with timezone abbreviation and UTC offset.
 7. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
 8. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 9. Persists current user message and assistant reply → sends to Telegram
@@ -147,7 +147,7 @@ README.md          — Project documentation
 2. MessageHandler checks allowlist (chat_id + user_id)
 3. Ensures chat session exists (creates if new)
 4. Routes: if `/command` → CommandHandler, else → agent loop
-5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once
+5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once, and adds the current date/time as trailing 24-hour timezone-qualified text in that user message to preserve cacheable prompt prefixes
 6. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
 7. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 8. Persists current user message and assistant reply → sends to Telegram
@@ -156,7 +156,7 @@ README.md          — Project documentation
 **Scheduled job:**
 1. SchedulerService background loop detects due job
 2. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode)
-3. Agent loop executes with personality, configured timezone runtime context, and job prompt; model may use web_search, send_user_message, etc.
+3. Agent loop executes with personality, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
 4. Job status updated to Success/Failed
 5. If notify_on_completion and model didn't send a message, harness sends final text
 

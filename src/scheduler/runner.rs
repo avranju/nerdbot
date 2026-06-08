@@ -22,6 +22,7 @@ pub struct RunScheduledJobInput {
     pub telegram_service: crate::telegram::service::TelegramService,
     pub allowed_chat_ids: Vec<i64>,
     pub allowed_user_ids: Vec<i64>,
+    pub timezone: String,
 }
 
 /// Runs a scheduled job by assembling context, running the agent loop,
@@ -45,6 +46,7 @@ pub async fn run_scheduled_job(
         telegram_service,
         allowed_chat_ids,
         allowed_user_ids,
+        timezone,
     } = input;
     info!(job_id = %job_id, "retrieving job details for run");
 
@@ -92,7 +94,9 @@ pub async fn run_scheduled_job(
     // Save scheduled prompt to DB history and append to message context
     let user_msg = ChatMessage::user(MessageContent::from_text(&job.prompt));
     let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;
-    messages.push(user_msg);
+    messages.push(
+        crate::context::manager::append_current_datetime_to_user_message(user_msg, &timezone),
+    );
 
     // 4. Construct AgentContext
     let agent_ctx = crate::agent::agent_loop::AgentContext {

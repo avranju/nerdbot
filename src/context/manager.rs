@@ -11,6 +11,7 @@ use genai::chat::{ChatMessage, ContentPart, MessageContent};
 use sqlx::SqlitePool;
 use tracing::debug;
 
+use crate::agent::system_prompt::current_datetime_in_timezone;
 use crate::config::ContextConfig;
 use crate::context::budget::ContextBudget;
 use crate::storage::messages::StoredMessage;
@@ -22,7 +23,8 @@ use crate::storage::summaries::StoredSummary;
 /// 1. Personality / system prompt
 /// 2. Latest rolling summary of older context
 /// 3. Recent raw messages after the summary boundary (bounded by budget)
-/// 4. Current user message (with optional attachment content parts)
+/// 4. Current user message (with optional attachment content parts,
+///    and current date/time appended as trailing text context)
 ///
 /// Also enforces `recent_turns_to_preserve`: the N most recent turns are
 /// preferred during bounding, ensuring the latest conversation context
@@ -64,12 +66,18 @@ impl ContextManager {
     /// - System message: personality (if provided)
     /// - System message: summary (if available, covering older context)
     /// - Recent raw messages (bounded by budget, preserving recent turns)
-    /// - Current user message
+    /// - Current user message (with optional attachment content parts,
+    ///   and current date/time appended as context)
+    ///
+    /// The `timezone` parameter is used for the datetime appended to the
+    /// current user message. This avoids introducing a system message
+    /// after non-system messages, which llama.cpp's Jinja templates reject.
     pub async fn assemble_messages(
         &self,
         session_id: &str,
         personality: &str,
         current_user_message: ChatMessage,
+        timezone: &str,
     ) -> Result<Vec<ChatMessage>, crate::error::AgentError> {
         let mut messages = Vec::new();
 
@@ -96,12 +104,17 @@ impl ContextManager {
         let recent = self.load_recent_messages(session_id, &summary_opt).await?;
         let (bounded, _preserve_tokens) = self.bound_messages(recent);
 
-        // 4. Append recent messages and current user message.
+        // 4. Append recent messages.
         // The bounded function already enforces the budget for recent messages.
-        // The current user message is always included (it's needed for the
-        // model to understand the latest request).
         messages.extend(bounded);
-        messages.push(current_user_message);
+
+        // 5. Append the current user message with the current date/time
+        // appended as context. This avoids introducing a system message
+        // after non-system messages, which llama.cpp's Jinja templates reject.
+        messages.push(append_current_datetime_to_user_message(
+            current_user_message,
+            timezone,
+        ));
 
         let recent_count = messages.len();
         debug!(
@@ -291,6 +304,23 @@ impl ContextManager {
 
         (result, preserve_tokens)
     }
+}
+
+/// Append the current date/time to a user message without flattening content parts.
+///
+/// Rich Telegram turns may include binary image/PDF parts or extracted document
+/// text parts. Preserving the existing parts keeps those payloads available to
+/// the LLM while still placing the volatile datetime at the tail of the prompt.
+pub fn append_current_datetime_to_user_message(
+    current_user_message: ChatMessage,
+    timezone: &str,
+) -> ChatMessage {
+    let datetime_text = current_datetime_in_timezone(timezone);
+    let mut parts = current_user_message.content.parts().clone();
+    parts.push(ContentPart::Text(format!(
+        "\n\n[Current date/time: {datetime_text}]"
+    )));
+    ChatMessage::user(MessageContent::from_parts(parts))
 }
 
 /// Estimate token count from a ChatMessage, accounting for binary parts.

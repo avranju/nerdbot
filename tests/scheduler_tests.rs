@@ -421,9 +421,10 @@ async fn test_run_scheduled_job_execution() {
 
     // 4. Create dependencies
     // Use FakeProvider to return a known final text response
-    let provider: Arc<dyn LlmExecutor> = Arc::new(FakeProvider::new(vec![
+    let provider = Arc::new(FakeProvider::new(vec![
         nerdbot::llm::fake::FakeResponse::final_text("Mock scheduled task output"),
     ]));
+    let llm: Arc<dyn LlmExecutor> = provider.clone();
     let registry = Arc::new(ToolRegistry::new());
     let loop_config = nerdbot::agent::agent_loop::AgentLoopConfig {
         max_tool_iterations: 2,
@@ -443,7 +444,7 @@ async fn test_run_scheduled_job_execution() {
     nerdbot::scheduler::runner::run_scheduled_job(
         nerdbot::scheduler::runner::RunScheduledJobInput {
             pool: pool.clone(),
-            llm: provider,
+            llm,
             registry,
             loop_config,
             personality: "You are an assistant".into(),
@@ -452,11 +453,23 @@ async fn test_run_scheduled_job_execution() {
             telegram_service,
             allowed_chat_ids: vec![123],
             allowed_user_ids: vec![],
+            timezone: "UTC".to_string(),
         },
         &job.id,
     )
     .await
     .unwrap();
+
+    let request = provider.last_request().unwrap();
+    let prompt_sent_to_llm = request
+        .messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, ChatRole::User))
+        .and_then(|m| m.content.joined_texts())
+        .unwrap();
+    assert!(prompt_sent_to_llm.starts_with("Say hello"));
+    assert!(prompt_sent_to_llm.contains("## Current Date/Time"));
 
     // 6. Verify job is still enabled
     let updated_job = storage::jobs::get_job(&pool, &job.id)

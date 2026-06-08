@@ -416,6 +416,7 @@ async fn test_assemble_messages_no_summary() {
             &session.id,
             "test personality",
             ChatMessage::user(MessageContent::from_text("current user")),
+            "UTC",
         )
         .await
         .unwrap();
@@ -425,7 +426,10 @@ async fn test_assemble_messages_no_summary() {
     assert_eq!(msg_text(&messages[0]), "test personality");
     assert_eq!(msg_text(&messages[1]), "stored one");
     assert_eq!(msg_text(&messages[2]), "stored two");
-    assert_eq!(msg_text(&messages[3]), "current user");
+    // Datetime is appended to the current user message.
+    assert!(matches!(messages[3].role, ChatRole::User));
+    assert!(msg_text(&messages[3]).starts_with("current user"));
+    assert!(msg_text(&messages[3]).contains("## Current Date/Time"));
 }
 
 #[tokio::test]
@@ -454,6 +458,7 @@ async fn test_assemble_messages_with_summary() {
             &session.id,
             "test personality",
             ChatMessage::user(MessageContent::from_text("current user")),
+            "UTC",
         )
         .await
         .unwrap();
@@ -462,7 +467,14 @@ async fn test_assemble_messages_with_summary() {
     assert!(texts.iter().any(|t| t == "test personality"));
     assert!(texts.iter().any(|t| t.contains("summary text")));
     assert!(texts.iter().any(|t| t == "recent raw message"));
-    assert!(texts.iter().any(|t| t == "current user"));
+    assert!(
+        texts.iter().any(|t| t.starts_with("current user")),
+        "current user message should be present (with datetime suffix)"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("## Current Date/Time")),
+        "datetime should be appended to current user message"
+    );
     assert!(!texts.iter().any(|t| t == "old covered message"));
 }
 
@@ -479,13 +491,15 @@ async fn test_assemble_messages_empty_personality() {
             &session.id,
             "",
             ChatMessage::user(MessageContent::from_text("current user")),
+            "UTC",
         )
         .await
         .unwrap();
 
     assert_eq!(messages.len(), 1);
+    // Datetime is appended to the current user message.
     assert!(matches!(messages[0].role, ChatRole::User));
-    assert_eq!(msg_text(&messages[0]), "current user");
+    assert!(msg_text(&messages[0]).contains("## Current Date/Time"));
 }
 
 #[tokio::test]
@@ -506,6 +520,7 @@ async fn test_assemble_messages_budget_exceeded() {
             &session.id,
             "personality",
             ChatMessage::user(MessageContent::from_text("current")),
+            "UTC",
         )
         .await
         .unwrap();
@@ -515,7 +530,10 @@ async fn test_assemble_messages_budget_exceeded() {
     assert!(texts.iter().any(|t| t == "m4"));
     assert!(!texts.iter().any(|t| t == "m1"));
     assert!(!texts.iter().any(|t| t == "m2"));
-    assert!(texts.iter().any(|t| t == "current"));
+    assert!(
+        texts.iter().any(|t| t.starts_with("current")),
+        "current user message should be present (with datetime suffix)"
+    );
 }
 
 #[tokio::test]
@@ -534,14 +552,19 @@ async fn test_assemble_messages_budget_not_exceeded() {
             &session.id,
             "personality",
             ChatMessage::user(MessageContent::from_text("current")),
+            "UTC",
         )
         .await
         .unwrap();
     let texts: Vec<String> = messages.iter().map(msg_text).collect();
 
-    for expected in ["m1", "m2", "m3", "current"] {
+    for expected in ["m1", "m2", "m3"] {
         assert!(texts.iter().any(|t| t == expected), "missing {expected}");
     }
+    assert!(
+        texts.iter().any(|t| t.starts_with("current")),
+        "current user message should be present (with datetime suffix)"
+    );
 }
 
 #[tokio::test]
@@ -790,12 +813,17 @@ async fn test_preserve_exact_order_and_ids() {
             &session.id,
             "personality",
             ChatMessage::user(MessageContent::from_text("current")),
+            "UTC",
         )
         .await
         .unwrap();
 
-    // Extract text content from messages (skip system messages at index 0).
-    let texts: Vec<String> = messages.iter().skip(1).map(msg_text).collect();
+    // Extract text content from messages (skip all system messages).
+    let texts: Vec<String> = messages
+        .iter()
+        .filter(|m| !matches!(m.role, ChatRole::System))
+        .map(msg_text)
+        .collect();
 
     // Expected order: bounded (m1, m2, m3 — chronological) + preserved (m4, m5 — chronological) + current
     // Total: 6 messages + personality + current = 7 messages
@@ -818,7 +846,10 @@ async fn test_preserve_exact_order_and_ids() {
         texts[4], "m5",
         "second preserved message should be m5 (most recent)"
     );
-    assert_eq!(texts[5], "current", "last message should be current user");
+    assert!(
+        texts[5].starts_with("current"),
+        "last message should start with 'current' (has datetime suffix)"
+    );
 }
 
 #[tokio::test]
@@ -839,6 +870,7 @@ async fn test_preserve_window_is_trimmed_when_it_exceeds_budget() {
             &session.id,
             "",
             ChatMessage::user(MessageContent::from_text("current")),
+            "UTC",
         )
         .await
         .unwrap();

@@ -311,7 +311,12 @@ impl MessageHandler {
         let current_user_message = ChatMessage::user(MessageContent::from_text(text));
         let messages = self
             .context_manager
-            .assemble_messages(session_id, &personality, current_user_message)
+            .assemble_messages(
+                session_id,
+                &personality,
+                current_user_message,
+                &self.config.agent.default_timezone,
+            )
             .await?;
 
         // Build agent context
@@ -420,7 +425,12 @@ impl MessageHandler {
 
         let messages = self
             .context_manager
-            .assemble_messages(session_id, &personality, current_user_message)
+            .assemble_messages(
+                session_id,
+                &personality,
+                current_user_message,
+                &self.config.agent.default_timezone,
+            )
             .await?;
 
         let ctx = AgentContext {

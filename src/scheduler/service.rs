@@ -235,6 +235,7 @@ impl SchedulerService {
                                             .telegram
                                             .allowed_user_ids
                                             .clone(),
+                                        timezone: config_clone.agent.default_timezone.clone(),
                                     },
                                     &job_id,
                                 )
