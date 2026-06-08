@@ -34,7 +34,7 @@ src/
     run_mode.rs    — AgentRunMode (InteractiveReply, ScheduledJob, Internal)
 
   llm/
-    mod.rs         — LlmExecutor trait + LlmClient wrapping genai::Client
+    mod.rs         — LlmExecutor trait + LlmClient wrapping genai::Client, including configurable retries for transient network/server failures
     fake.rs        — FakeProvider for testing without real LLM APIs
 
   telegram/
@@ -191,7 +191,7 @@ README.md          — Project documentation
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
-- `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens
+- `[llm]` — model, endpoint (override), api_key_env (override), temperature, max_output_tokens, context_window_tokens, max_retries (default 4), retry_interval_secs (default 10)
 - `[context]` — soft/hard thresholds, recent_turns_to_preserve, reserved_tool_loop_tokens
 - `[scheduler]` — run_overdue_one_shots_on_startup
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`), network_access (`"disabled"` | `"host"`)

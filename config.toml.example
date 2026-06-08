@@ -57,6 +57,10 @@ temperature = 0.2
 max_output_tokens = 4096
 # Context window size in tokens (model-specific).
 # context_window_tokens = 128000
+# Retry transient LLM network/server failures. Defaults allow about 40 seconds
+# for a local LLM server to come back after the first failed call.
+# max_retries = 4
+# retry_interval_secs = 10
 
 # ── Context Management ────────────────────────────────────────────
 [context]

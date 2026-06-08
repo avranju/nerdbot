@@ -134,6 +134,8 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `api_key_env` | Optional env var for API key override |
 | | `temperature` | Sampling temperature (default: `0.2`) |
 | | `max_output_tokens` | Max output tokens (default: `4096`) |
+| | `max_retries` | Retries after transient LLM network/server failures (default: `4`) |
+| | `retry_interval_secs` | Seconds between transient LLM retry attempts (default: `10`) |
 | `[context]` | `soft_compaction_threshold` | Fraction that triggers background compaction (default: `0.60`) |
 | | `hard_context_threshold` | Fraction that forces context bounding (default: `0.85`) |
 | | `recent_turns_to_preserve` | Raw turns kept after summary (default: `30`) |

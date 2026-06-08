@@ -110,6 +110,13 @@ fn test_default_config_llm_context_window_tokens() {
 }
 
 #[test]
+fn test_default_config_llm_retries() {
+    let config = AppConfig::default();
+    assert_eq!(config.llm.max_retries, 4);
+    assert_eq!(config.llm.retry_interval_secs, 10);
+}
+
+#[test]
 fn test_default_config_exa() {
     let config = AppConfig::default();
     assert_eq!(config.exa.api_key_env, "EXA_API_KEY");
@@ -176,6 +183,8 @@ api_key_env = "OPENAI_KEY"
 temperature = 0.7
 max_output_tokens = 2048
 context_window_tokens = 65536
+max_retries = 6
+retry_interval_secs = 5
 
 
 [context]
@@ -237,6 +246,8 @@ fn test_parse_full_config() {
     assert_eq!(config.llm.temperature, 0.7);
     assert_eq!(config.llm.max_output_tokens, 2048);
     assert_eq!(config.llm.context_window_tokens, 65_536);
+    assert_eq!(config.llm.max_retries, 6);
+    assert_eq!(config.llm.retry_interval_secs, 5);
 
     // Context
     assert_eq!(config.context.soft_compaction_threshold, 0.50);

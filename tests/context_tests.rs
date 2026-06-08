@@ -32,6 +32,8 @@ fn test_default_budget() {
         temperature: 0.2,
         max_output_tokens: 4096,
         context_window_tokens: 128_000,
+        max_retries: 4,
+        retry_interval_secs: 10,
     };
     let ctx = nerdbot::config::ContextConfig {
         soft_compaction_threshold: 0.60,

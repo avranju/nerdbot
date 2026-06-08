@@ -6,10 +6,14 @@
 //!
 //! A `FakeProvider` is kept for testing the agent loop without hitting real APIs.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use genai::adapter::AdapterKind;
 use genai::chat::{ChatOptions, ChatRequest, ChatResponse};
 use genai::resolver::{AuthData, Endpoint};
+use reqwest::StatusCode;
+use tracing::warn;
 
 use crate::config::AppConfig;
 use crate::error::AgentError;
@@ -39,6 +43,8 @@ pub trait LlmExecutor: Send + Sync {
 #[derive(Clone)]
 pub struct LlmClient {
     client: genai::Client,
+    max_retries: u32,
+    retry_interval: Duration,
 }
 
 impl LlmClient {
@@ -87,6 +93,8 @@ impl LlmClient {
 
         Ok(Self {
             client: builder.build(),
+            max_retries: config.llm.max_retries,
+            retry_interval: Duration::from_secs(config.llm.retry_interval_secs),
         })
     }
 }
@@ -107,11 +115,60 @@ impl LlmExecutor for LlmClient {
         request: ChatRequest,
         options: ChatOptions,
     ) -> Result<ChatResponse, AgentError> {
-        self.client
-            .exec_chat(model, request, Some(&options))
-            .await
-            .map_err(|e| AgentError::LlmProvider(e.to_string()))
+        let mut attempt = 0;
+
+        loop {
+            match self
+                .client
+                .exec_chat(model, request.clone(), Some(&options))
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err) if attempt < self.max_retries && is_transient_llm_error(&err) => {
+                    attempt += 1;
+                    warn!(
+                        attempt,
+                        max_retries = self.max_retries,
+                        retry_interval_secs = self.retry_interval.as_secs(),
+                        error = %err,
+                        "transient LLM call failed; retrying"
+                    );
+                    tokio::time::sleep(self.retry_interval).await;
+                }
+                Err(err) => return Err(AgentError::LlmProvider(err.to_string())),
+            }
+        }
     }
+}
+
+fn is_transient_llm_error(error: &genai::Error) -> bool {
+    match error {
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => is_transient_webc_error(webc_error),
+        genai::Error::HttpError { status, .. } => is_transient_status(*status),
+        genai::Error::WebStream { error, .. } => error
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(is_transient_reqwest_error),
+        _ => false,
+    }
+}
+
+fn is_transient_webc_error(error: &genai::webc::Error) -> bool {
+    match error {
+        genai::webc::Error::ResponseFailedStatus { status, .. } => is_transient_status(*status),
+        genai::webc::Error::Reqwest(err) => is_transient_reqwest_error(err),
+        _ => false,
+    }
+}
+
+fn is_transient_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_connect() || error.is_timeout() || (error.is_request() && !error.is_builder())
+}
+
+fn is_transient_status(status: StatusCode) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status.is_server_error()
 }
 
 #[cfg(test)]
@@ -133,6 +190,27 @@ mod tests {
         assert_eq!(target.model.adapter_kind, AdapterKind::OpenAI);
         assert_eq!(target.endpoint.base_url(), "http://localhost:8001/v1/");
         assert_eq!(target.auth.single_key_value().unwrap(), "");
+    }
+
+    #[test]
+    fn retry_config_is_loaded_from_app_config() {
+        let mut config = AppConfig::default();
+        config.llm.max_retries = 7;
+        config.llm.retry_interval_secs = 3;
+
+        let client = LlmClient::from_config(&config).unwrap();
+
+        assert_eq!(client.max_retries, 7);
+        assert_eq!(client.retry_interval, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn http_retry_classification_only_retries_transient_statuses() {
+        assert!(is_transient_status(StatusCode::REQUEST_TIMEOUT));
+        assert!(is_transient_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_transient_status(StatusCode::BAD_GATEWAY));
+        assert!(!is_transient_status(StatusCode::UNAUTHORIZED));
+        assert!(!is_transient_status(StatusCode::BAD_REQUEST));
     }
 
     #[test]

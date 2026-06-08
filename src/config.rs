@@ -160,6 +160,12 @@ pub struct LlmConfig {
     /// Total context window size in tokens (model-specific).
     #[serde(default = "default_context_window_tokens")]
     pub context_window_tokens: usize,
+    /// Number of retry attempts after a transient LLM network failure.
+    #[serde(default = "default_llm_max_retries")]
+    pub max_retries: u32,
+    /// Delay between transient LLM network retry attempts, in seconds.
+    #[serde(default = "default_llm_retry_interval_secs")]
+    pub retry_interval_secs: u64,
 }
 
 impl Default for LlmConfig {
@@ -171,6 +177,8 @@ impl Default for LlmConfig {
             temperature: default_temperature(),
             max_output_tokens: default_max_output_tokens(),
             context_window_tokens: default_context_window_tokens(),
+            max_retries: default_llm_max_retries(),
+            retry_interval_secs: default_llm_retry_interval_secs(),
         }
     }
 }
@@ -348,6 +356,12 @@ fn default_max_output_tokens() -> u32 {
 }
 fn default_context_window_tokens() -> usize {
     128_000
+}
+fn default_llm_max_retries() -> u32 {
+    4
+}
+fn default_llm_retry_interval_secs() -> u64 {
+    10
 }
 fn default_soft_compaction_threshold() -> f32 {
     0.60
