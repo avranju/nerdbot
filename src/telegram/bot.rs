@@ -429,7 +429,7 @@ impl TelegramBot {
         let url = format!("{}/sendChatAction", self.base_url);
         let payload = SendChatActionRequest {
             chat_id,
-            action: "thinking",
+            action: "typing",
         };
 
         let response = self
