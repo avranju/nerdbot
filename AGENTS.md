@@ -32,7 +32,7 @@ src/
     mod.rs
     agent_loop.rs  — Core iterative tool-loop (run_agent) via genai
     outcome.rs     — AgentOutcome enum (FinalText, Silent, Cancelled)
-    personality.rs — Personality prompt cache: loads `[agent].personality_file`, watches its directory, and hot-reloads in memory
+    personality.rs — Personality prompt cache: loads `[agent].personality_file`, watches its directory, filters create/content-modify/name-modify events for that file, and hot-reloads changed contents in memory
     run_mode.rs    — AgentRunMode (InteractiveReply, ScheduledJob, Internal)
 
   llm/
@@ -168,7 +168,7 @@ README.md          — Project documentation
 
 **Personality prompt cache:**
 - Startup creates one `agent::personality::Personality` from `[agent].personality_file`, loads the file contents once, and hands clones to `MessageHandler`, `SchedulerService`, and the diagnostics server.
-- `Personality` keeps the prompt in memory behind shared ownership, watches the configured file's parent directory with `notify`, and reloads the cache when the file changes.
+- `Personality` keeps the prompt in memory behind shared ownership, watches the configured file's parent directory with `notify`, only reacts to `Create` or content/name `Modify` events for the configured file path, hashes the file contents, and reloads the cache only when the hash changes. Access and metadata-only events are ignored so reading the file cannot trigger a reload loop.
 - If the file is missing or cannot be read, NerdBot uses the built-in default prompt and logs watcher/read failures instead of failing startup.
 
 **Context compaction (background):**
