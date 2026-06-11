@@ -138,8 +138,8 @@ README.md          — Project documentation
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
 2. If the config file exists, load it and use its current values as prompt defaults
-3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, chat/user allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
-4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, and use `AppConfig` defaults for omitted settings in a new file
+3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, Telegram ingress mode (`poll` or `push`), push-mode webhook URL/host/port when applicable, chat/user allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
+4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, use `AppConfig` defaults for omitted settings in a new file, and clear `[telegram].web_hook_url` when onboarding is set back to poll mode
 
 **Custom OpenAI-compatible LLM endpoint:**
 - `LlmClient::from_config` normalizes configured endpoint URLs with a trailing slash and binds `genai` to the OpenAI adapter, preventing unknown local model names from falling back to native Ollama routing

@@ -6,10 +6,11 @@ use std::path::Path;
 
 use cliclack::{input, intro, note, outro, select};
 use toml::Value;
+use url::Url;
 
 use crate::config::{
     AppConfig, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE,
-    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST,
+    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramMode,
 };
 
 const DEFAULT_PERSONALITY_FILE: &str = "/config/personality.md";
@@ -29,7 +30,11 @@ enum LlmProvider {
 struct OnboardingAnswers {
     agent_name: String,
     default_timezone: String,
+    telegram_mode: String,
     telegram_token_env: String,
+    web_hook_url: Option<String>,
+    telegram_host: String,
+    telegram_port: u16,
     allowed_chat_ids: Vec<i64>,
     allowed_user_ids: Vec<i64>,
     model: String,
@@ -69,6 +74,39 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
             .default_input(&defaults.telegram.bot_token_env)
             .validate(|value: &String| required(value))
             .interact()?;
+    let telegram_mode = select("Telegram ingress mode")
+        .item("poll", "poll", "use Telegram getUpdates long polling")
+        .item("push", "push", "receive Telegram webhooks")
+        .initial_value(match defaults.telegram.mode {
+            TelegramMode::Poll => "poll",
+            TelegramMode::Push => "push",
+        })
+        .interact()?;
+    let web_hook_url = if telegram_mode == "push" {
+        let web_hook_url: String = input("Public HTTPS Telegram webhook URL")
+            .default_input(defaults.telegram.web_hook_url.as_deref().unwrap_or(""))
+            .validate(|value: &String| validate_webhook_url(value))
+            .interact()?;
+        Some(web_hook_url)
+    } else {
+        None
+    };
+    let telegram_host: String = if telegram_mode == "push" {
+        input("Local webhook bind host")
+            .default_input(&defaults.telegram.host)
+            .validate(|value: &String| required(value))
+            .interact()?
+    } else {
+        defaults.telegram.host.clone()
+    };
+    let telegram_port: String = if telegram_mode == "push" {
+        input("Local webhook bind port")
+            .default_input(&defaults.telegram.port.to_string())
+            .validate(|value: &String| validate_port(value))
+            .interact()?
+    } else {
+        defaults.telegram.port.to_string()
+    };
 
     note(
         "Finding a Telegram chat ID",
@@ -175,7 +213,11 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
     let answers = OnboardingAnswers {
         agent_name,
         default_timezone,
+        telegram_mode: telegram_mode.into(),
         telegram_token_env,
+        web_hook_url,
+        telegram_host,
+        telegram_port: telegram_port.parse()?,
         allowed_chat_ids: parse_id_list(&allowed_chat_ids)?,
         allowed_user_ids: parse_id_list(&allowed_user_ids)?,
         model,
@@ -217,9 +259,16 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
     );
 
     let telegram = table_mut(root, "telegram")?;
+    telegram.insert("mode".into(), Value::String(answers.telegram_mode.clone()));
     telegram.insert(
         "bot_token_env".into(),
         Value::String(answers.telegram_token_env.clone()),
+    );
+    set_optional_string(telegram, "web_hook_url", answers.web_hook_url.as_deref());
+    telegram.insert("host".into(), Value::String(answers.telegram_host.clone()));
+    telegram.insert(
+        "port".into(),
+        Value::Integer(i64::from(answers.telegram_port)),
     );
     telegram.insert(
         "allowed_chat_ids".into(),
@@ -343,6 +392,25 @@ fn required(value: &str) -> Result<(), String> {
     }
 }
 
+fn validate_port(value: &str) -> Result<(), String> {
+    match value.trim().parse::<u16>() {
+        Ok(port) if port > 0 => Ok(()),
+        _ => Err("Use a TCP port from 1 to 65535.".to_string()),
+    }
+}
+
+fn validate_webhook_url(value: &str) -> Result<(), String> {
+    required(value)?;
+    let parsed = Url::parse(value.trim()).map_err(|_| "Use a valid HTTPS URL.".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("Webhook URL must use https.".to_string());
+    }
+    if parsed.host_str().is_none() {
+        return Err("Webhook URL must include a host.".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,7 +429,11 @@ mod tests {
         let answers = OnboardingAnswers {
             agent_name: "test-bot".into(),
             default_timezone: "Asia/Kolkata".into(),
+            telegram_mode: "push".into(),
             telegram_token_env: "BOT_TOKEN".into(),
+            web_hook_url: Some("https://example.test/telegram/webhook".into()),
+            telegram_host: "0.0.0.0".into(),
+            telegram_port: 24_683,
             allowed_chat_ids: vec![123],
             allowed_user_ids: vec![456],
             model: "custom-model".into(),
@@ -383,7 +455,14 @@ mod tests {
             PathBuf::from(DEFAULT_PERSONALITY_FILE)
         );
         assert_eq!(config.agent.default_timezone, "Asia/Kolkata");
+        assert_eq!(config.telegram.mode, TelegramMode::Push);
         assert_eq!(config.telegram.bot_token_env, "BOT_TOKEN");
+        assert_eq!(
+            config.telegram.web_hook_url.as_deref(),
+            Some("https://example.test/telegram/webhook")
+        );
+        assert_eq!(config.telegram.host, "0.0.0.0");
+        assert_eq!(config.telegram.port, 24_683);
         assert_eq!(config.telegram.allowed_chat_ids, vec![123]);
         assert_eq!(config.telegram.allowed_user_ids, vec![456]);
         assert_eq!(config.llm.model, "custom-model");
@@ -421,7 +500,11 @@ temperature = 0.7
         let answers = OnboardingAnswers {
             agent_name: "updated-name".into(),
             default_timezone: "UTC".into(),
+            telegram_mode: "poll".into(),
             telegram_token_env: "BOT_TOKEN".into(),
+            web_hook_url: None,
+            telegram_host: "127.0.0.1".into(),
+            telegram_port: 24_682,
             allowed_chat_ids: vec![],
             allowed_user_ids: vec![],
             model: "new-model".into(),
@@ -436,6 +519,10 @@ temperature = 0.7
         let config = AppConfig::from_file(&path).unwrap();
 
         assert_eq!(config.agent.name, "updated-name");
+        assert_eq!(config.telegram.mode, TelegramMode::Poll);
+        assert_eq!(config.telegram.web_hook_url, None);
+        assert_eq!(config.telegram.host, "127.0.0.1");
+        assert_eq!(config.telegram.port, 24_682);
         assert_eq!(config.llm.model, "new-model");
         assert_eq!(config.llm.temperature, 0.7);
     }
@@ -455,5 +542,24 @@ temperature = 0.7
         assert_eq!(optional_value(""), None);
         assert_eq!(optional_value(" - "), None);
         assert_eq!(optional_value(" CUSTOM_KEY "), Some("CUSTOM_KEY".into()));
+    }
+
+    #[test]
+    fn validate_port_accepts_valid_tcp_ports() {
+        assert!(validate_port("1").is_ok());
+        assert!(validate_port("24682").is_ok());
+        assert!(validate_port("65535").is_ok());
+        assert!(validate_port("0").is_err());
+        assert!(validate_port("65536").is_err());
+        assert!(validate_port("abc").is_err());
+    }
+
+    #[test]
+    fn validate_webhook_url_requires_https_url_with_host() {
+        assert!(validate_webhook_url("https://example.test/telegram/webhook").is_ok());
+        assert!(validate_webhook_url("").is_err());
+        assert!(validate_webhook_url("not a url").is_err());
+        assert!(validate_webhook_url("http://example.test/telegram/webhook").is_err());
+        assert!(validate_webhook_url("https://").is_err());
     }
 }
