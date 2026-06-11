@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::routing::{get, post};
 use humantime::format_duration;
 use tokio::sync::{mpsc, oneshot};
@@ -175,10 +175,24 @@ impl Drop for WebhookServer {
     }
 }
 
-async fn handle_health(State(state): State<WebhookState>) -> (StatusCode, String) {
+async fn handle_health(State(state): State<WebhookState>) -> (StatusCode, HeaderMap, String) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("cache-control"),
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    headers.insert(
+        HeaderName::from_static("pragma"),
+        HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        HeaderName::from_static("expires"),
+        HeaderValue::from_static("0"),
+    );
     let uptime = state.start_time.elapsed();
     (
         StatusCode::OK,
+        headers,
         format!(
             "NerdBot is healthy and running for {}\n",
             format_duration(uptime)
