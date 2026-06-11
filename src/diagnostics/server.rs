@@ -32,6 +32,7 @@ impl DiagnosticsServer {
         pool: SqlitePool,
         compaction_service: Arc<CompactionService>,
         config: crate::config::AppConfig,
+        personality: crate::agent::personality::Personality,
         tools: Arc<crate::tools::registry::ToolRegistry>,
     ) -> Result<Self, AgentError> {
         prepare_socket_path(&socket_path).await?;
@@ -52,6 +53,7 @@ impl DiagnosticsServer {
         let task_socket_path = socket_path.clone();
         let config = Arc::new(config);
         let task_config = config.clone();
+        let task_personality = personality.clone();
         let task_tools = tools.clone();
         let task = tokio::spawn(async move {
             info!(socket_path = %task_socket_path.display(), "diagnostics socket listening");
@@ -68,9 +70,10 @@ impl DiagnosticsServer {
                                 let pool = pool.clone();
                                 let compaction_service = compaction_service.clone();
                                 let config = task_config.clone();
+                                let personality = task_personality.clone();
                                 let tools = task_tools.clone();
                                 tokio::spawn(async move {
-                                    if let Err(e) = handle_connection(stream, &pool, &compaction_service, &config, &tools).await {
+                                    if let Err(e) = handle_connection(stream, &pool, &compaction_service, &config, &personality, &tools).await {
                                         warn!(error = %e, "diagnostics request failed");
                                     }
                                 });
@@ -149,6 +152,7 @@ async fn handle_connection(
     pool: &SqlitePool,
     compaction_service: &CompactionService,
     config: &crate::config::AppConfig,
+    personality: &crate::agent::personality::Personality,
     tools: &crate::tools::registry::ToolRegistry,
 ) -> Result<(), AgentError> {
     let (reader, mut writer) = stream.into_split();
@@ -169,7 +173,17 @@ async fn handle_connection(
         }
     } else {
         match serde_json::from_str::<DiagnosticsRequest>(line.trim_end()) {
-            Ok(request) => handle_request(request, pool, compaction_service, config, tools).await,
+            Ok(request) => {
+                handle_request(
+                    request,
+                    pool,
+                    compaction_service,
+                    config,
+                    personality,
+                    tools,
+                )
+                .await
+            }
             Err(e) => DiagnosticsResponse::Error {
                 message: format!("Invalid diagnostics request: {e}"),
             },
@@ -193,6 +207,7 @@ async fn handle_request(
     pool: &SqlitePool,
     compaction_service: &CompactionService,
     config: &crate::config::AppConfig,
+    personality: &crate::agent::personality::Personality,
     tools: &crate::tools::registry::ToolRegistry,
 ) -> DiagnosticsResponse {
     match request {
@@ -212,46 +227,44 @@ async fn handle_request(
             chat_id,
             include_prompts,
         } => {
-            show_session(
+            let input = ShowSessionInput {
                 pool,
                 compaction_service,
                 config,
+                personality,
                 tools,
                 session_id,
                 chat_id,
                 include_prompts,
-            )
-            .await
+            };
+            show_session(input).await
         }
     }
 }
 
-async fn load_personality(config: &crate::config::AppConfig) -> Result<String, AgentError> {
-    let path = &config.agent.personality_file;
-
-    if !path.exists() {
-        // No personality file — use a reasonable default
-        return Ok("You are NerdBot, a helpful and concise AI assistant. \
-            You respond in plain text. You use tools when they would help \
-            answer the user's question more accurately. \
-            When you don't know something, you say so honestly."
-            .to_string());
-    }
-
-    tokio::fs::read_to_string(path)
-        .await
-        .map_err(|e| AgentError::Config(format!("Failed to read personality file: {e}")))
-}
-
-async fn show_session(
-    pool: &SqlitePool,
-    compaction_service: &CompactionService,
-    config: &crate::config::AppConfig,
-    tools: &crate::tools::registry::ToolRegistry,
+struct ShowSessionInput<'a> {
+    pool: &'a SqlitePool,
+    compaction_service: &'a CompactionService,
+    config: &'a crate::config::AppConfig,
+    personality: &'a crate::agent::personality::Personality,
+    tools: &'a crate::tools::registry::ToolRegistry,
     session_id: Option<String>,
     chat_id: Option<i64>,
     include_prompts: bool,
-) -> DiagnosticsResponse {
+}
+
+async fn show_session(input: ShowSessionInput<'_>) -> DiagnosticsResponse {
+    let ShowSessionInput {
+        pool,
+        compaction_service,
+        config,
+        personality,
+        tools,
+        session_id,
+        chat_id,
+        include_prompts,
+    } = input;
+
     let session = match (session_id, chat_id) {
         (Some(session_id), None) => crate::storage::sessions::get_session(pool, &session_id).await,
         (None, Some(chat_id)) => {
@@ -287,18 +300,7 @@ async fn show_session(
     };
     let compaction_state = compaction_service.get_state(&session.id).await;
 
-    let raw_personality = match load_personality(config).await {
-        Ok(p) => p,
-        Err(e) => {
-            return DiagnosticsResponse::Error {
-                message: format!("Failed to load personality: {e}"),
-            };
-        }
-    };
-    let effective_personality_body = crate::agent::system_prompt::append_timezone_context(
-        &raw_personality,
-        &config.agent.default_timezone,
-    );
+    let effective_personality_body = personality.effective_prompt(&config.agent.default_timezone);
     let personality_char_count = effective_personality_body.len();
     let personality_token_estimate = (personality_char_count / 4).max(1);
 

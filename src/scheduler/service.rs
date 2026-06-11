@@ -15,6 +15,7 @@ pub struct SchedulerService {
     llm: Arc<dyn LlmExecutor>,
     registry: Arc<crate::tools::registry::ToolRegistry>,
     config: crate::config::AppConfig,
+    personality: crate::agent::personality::Personality,
     telegram_service: crate::telegram::service::TelegramService,
     notifier: Arc<Notify>,
     shutdown_tx: broadcast::Sender<()>,
@@ -30,6 +31,7 @@ impl SchedulerService {
         llm: Arc<dyn LlmExecutor>,
         registry: Arc<crate::tools::registry::ToolRegistry>,
         config: crate::config::AppConfig,
+        personality: crate::agent::personality::Personality,
         telegram_service: crate::telegram::service::TelegramService,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
@@ -40,6 +42,7 @@ impl SchedulerService {
             llm,
             registry,
             config,
+            personality,
             telegram_service,
             notifier: Arc::new(Notify::new()),
             shutdown_tx,
@@ -117,6 +120,7 @@ impl SchedulerService {
         let llm = self.llm.clone();
         let registry = self.registry.clone();
         let config = self.config.clone();
+        let personality = self.personality.clone();
         let telegram_service = self.telegram_service.clone();
         let notifier = self.notifier.clone();
         let telegram_token = self.telegram_token.clone();
@@ -189,6 +193,7 @@ impl SchedulerService {
                             let llm_clone = llm.clone();
                             let registry_clone = registry.clone();
                             let config_clone = config.clone();
+                            let personality_clone = personality.clone();
                             let telegram_service_clone = telegram_service.clone();
                             let notifier_clone = notifier.clone();
                             let telegram_token_clone = telegram_token.clone();
@@ -203,19 +208,8 @@ impl SchedulerService {
                                     llm_max_output_tokens: config_clone.llm.max_output_tokens,
                                 };
 
-                                let personality = match tokio::fs::read_to_string(
-                                    &config_clone.agent.personality_file,
-                                )
-                                .await
-                                {
-                                    Ok(content) => content,
-                                    Err(_) => "You are a helpful assistant.".to_string(),
-                                };
-                                let personality =
-                                    crate::agent::system_prompt::append_timezone_context(
-                                        &personality,
-                                        &config_clone.agent.default_timezone,
-                                    );
+                                let personality = personality_clone
+                                    .effective_prompt(&config_clone.agent.default_timezone);
 
                                 let run_result = crate::scheduler::runner::run_scheduled_job(
                                     crate::scheduler::runner::RunScheduledJobInput {

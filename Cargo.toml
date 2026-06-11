@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 cron = "0.16"
 chrono-tz = "0.9"
 humantime = "2"
+notify = "8"
 
 [dev-dependencies]
 mockall = "0.13"

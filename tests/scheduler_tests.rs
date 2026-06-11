@@ -14,6 +14,7 @@ use genai::chat::{
     ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatRole, MessageContent, StopReason,
     ToolResponse, Usage,
 };
+use nerdbot::agent::personality::Personality;
 use nerdbot::agent::run_mode::AgentRunMode;
 use nerdbot::config::AppConfig;
 use nerdbot::llm::LlmExecutor;
@@ -141,8 +142,14 @@ async fn test_startup_overdue_run_overdue_true() {
     ));
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
 
-    let scheduler =
-        SchedulerService::new(pool.clone(), provider, registry, config, telegram_service);
+    let scheduler = SchedulerService::new(
+        pool.clone(),
+        provider,
+        registry,
+        config.clone(),
+        Personality::from_config(&config),
+        telegram_service,
+    );
 
     // Call start (this will run the startup overdue logic)
     scheduler.start().await.unwrap();
@@ -194,8 +201,14 @@ async fn test_startup_overdue_run_overdue_false() {
     ));
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
 
-    let scheduler =
-        SchedulerService::new(pool.clone(), provider, registry, config, telegram_service);
+    let scheduler = SchedulerService::new(
+        pool.clone(),
+        provider,
+        registry,
+        config.clone(),
+        Personality::from_config(&config),
+        telegram_service,
+    );
 
     // Call start
     scheduler.start().await.unwrap();
@@ -724,8 +737,14 @@ async fn test_scheduler_graceful_shutdown() {
     // to run immediately rather than being discarded as Missed.
     config.scheduler.run_overdue_one_shots_on_startup = true;
 
-    let scheduler =
-        SchedulerService::new(pool.clone(), provider, registry, config, telegram_service);
+    let scheduler = SchedulerService::new(
+        pool.clone(),
+        provider,
+        registry,
+        config.clone(),
+        Personality::from_config(&config),
+        telegram_service,
+    );
 
     // 5. Start the scheduler service
     scheduler.start().await.unwrap();

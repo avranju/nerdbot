@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+use nerdbot::agent::personality::Personality;
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
@@ -43,6 +44,25 @@ fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
     ))
 }
 
+async fn start_diagnostics_server(
+    socket_path: std::path::PathBuf,
+    pool: sqlx::SqlitePool,
+    compaction_service: Arc<CompactionService>,
+    config: AppConfig,
+    tools: Arc<ToolRegistry>,
+) -> Result<DiagnosticsServer, nerdbot::error::AgentError> {
+    let personality = Personality::from_config(&config);
+    DiagnosticsServer::start(
+        socket_path,
+        pool,
+        compaction_service,
+        config,
+        personality,
+        tools,
+    )
+    .await
+}
+
 async fn send_request(socket_path: &Path, request: DiagnosticsRequest) -> DiagnosticsResponse {
     let mut stream = UnixStream::connect(socket_path)
         .await
@@ -64,7 +84,7 @@ async fn test_diagnostics_server_ping_permissions_and_cleanup() {
     let temp = tempfile::tempdir().unwrap();
     let socket_path = temp.path().join("diagnostics.sock");
     let pool = setup_test_db().await;
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -103,7 +123,7 @@ async fn test_diagnostics_server_lists_and_shows_session_by_chat_id() {
     )
     .await
     .unwrap();
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -171,7 +191,7 @@ async fn test_diagnostics_server_replaces_stale_socket() {
     drop(listener);
 
     let pool = setup_test_db().await;
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -193,7 +213,7 @@ async fn test_diagnostics_server_refuses_active_socket() {
     let socket_path = temp.path().join("diagnostics.sock");
     let pool = setup_test_db().await;
     let service = make_compaction_service(pool.clone());
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         service.clone(),
@@ -203,7 +223,7 @@ async fn test_diagnostics_server_refuses_active_socket() {
     .await
     .unwrap();
 
-    let err = DiagnosticsServer::start(
+    let err = start_diagnostics_server(
         socket_path.clone(),
         pool,
         service,
@@ -225,7 +245,7 @@ async fn test_diagnostics_server_refuses_to_replace_regular_file() {
     std::fs::write(&socket_path, "keep me").unwrap();
     let pool = setup_test_db().await;
 
-    let err = DiagnosticsServer::start(
+    let err = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -244,7 +264,7 @@ async fn test_diagnostics_server_rejects_ambiguous_session_selector() {
     let temp = tempfile::tempdir().unwrap();
     let socket_path = temp.path().join("diagnostics.sock");
     let pool = setup_test_db().await;
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -278,7 +298,7 @@ async fn test_diagnostics_client_sends_requests_and_propagates_server_errors() {
     let temp = tempfile::tempdir().unwrap();
     let socket_path = temp.path().join("diagnostics.sock");
     let pool = setup_test_db().await;
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -373,7 +393,7 @@ async fn test_diagnostics_cli_ping_json() {
     let temp = tempfile::tempdir().unwrap();
     let socket_path = temp.path().join("diagnostics.sock");
     let pool = setup_test_db().await;
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -425,7 +445,7 @@ async fn test_diagnostics_server_exposes_personality_summary_and_tools_when_requ
     registry.register(nerdbot::tools::echo::EchoTool);
     let registry = Arc::new(registry);
 
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -487,7 +507,7 @@ async fn test_diagnostics_prompt_redaction_by_default() {
     let mut config = AppConfig::default();
     config.agent.default_timezone = "UTC".to_string();
 
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),
@@ -550,7 +570,7 @@ async fn test_diagnostics_docker_bind_mount_socket_lifecycle() {
 
     let pool = setup_test_db().await;
 
-    let mut server = DiagnosticsServer::start(
+    let mut server = start_diagnostics_server(
         socket_path.clone(),
         pool.clone(),
         make_compaction_service(pool),

@@ -14,6 +14,7 @@ executes them → results fed back → repeat) → Telegram reply.
 - **Web search:** Exa API
 - **Config:** TOML files + environment variables
 - **Logging:** `tracing` + `tracing-subscriber` with `env-filter`
+- **File watching:** `notify` crate for hot-reloading the personality prompt
 - **Cron parsing:** `cron` crate
 - **Serialization:** `serde` + `serde_json`
 - **CLI:** `clap` with derive + `cliclack` interactive prompts
@@ -31,6 +32,7 @@ src/
     mod.rs
     agent_loop.rs  — Core iterative tool-loop (run_agent) via genai
     outcome.rs     — AgentOutcome enum (FinalText, Silent, Cancelled)
+    personality.rs — Personality prompt cache: loads `[agent].personality_file`, watches its directory, and hot-reloads in memory
     run_mode.rs    — AgentRunMode (InteractiveReply, ScheduledJob, Internal)
 
   llm/
@@ -131,7 +133,7 @@ README.md          — Project documentation
 5. Routes: if `/command` → CommandHandler, else → agent loop
 6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, excludes binary payloads from token estimation, and appends the current date/time as a trailing text part on the current user message without flattening rich attachment parts. The datetime is formatted in 24-hour local time with timezone abbreviation and UTC offset.
 7. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
-8. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
+8. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 9. Persists current user message and assistant reply → sends to Telegram
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
@@ -153,16 +155,21 @@ README.md          — Project documentation
 4. Routes: if `/command` → CommandHandler, else → agent loop
 5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once, and adds the current date/time as trailing 24-hour timezone-qualified text in that user message to preserve cacheable prompt prefixes
 6. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
-7. Agent loop: personality + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
+7. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 8. Persists current user message and assistant reply → sends to Telegram
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job
 2. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode)
-3. Agent loop executes with personality, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
+3. Agent loop executes with cached `Personality` contents, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
 4. Job status updated to Success/Failed
 5. If notify_on_completion and model didn't send a message, harness sends final text
+
+**Personality prompt cache:**
+- Startup creates one `agent::personality::Personality` from `[agent].personality_file`, loads the file contents once, and hands clones to `MessageHandler`, `SchedulerService`, and the diagnostics server.
+- `Personality` keeps the prompt in memory behind shared ownership, watches the configured file's parent directory with `notify`, and reloads the cache when the file changes.
+- If the file is missing or cannot be read, NerdBot uses the built-in default prompt and logs watcher/read failures instead of failing startup.
 
 **Context compaction (background):**
 - After each successful agent run, handler checks if total_tokens > soft_threshold
@@ -177,7 +184,7 @@ README.md          — Project documentation
 2. The socket uses owner-only (`0600`) permissions, refuses to replace regular files or active sockets, removes stale socket nodes, and is cleaned up during graceful shutdown
 3. The newline-delimited JSON protocol supports `ping`, `list_sessions`, and `show_session` by database session ID or Telegram chat ID
 4. Query the running instance with `nerdbot --diagnostics-socket <path> diagnostics ping`, `list-sessions`, or `show (--chat-id <id> | --session-id <uuid>)`; add `--json` for scripting
-5. `show_session` returns the shared context snapshot, live in-memory `CompactionState`, the effective personality prompt (with timezone context), the summary prompt metadata, and tool-spec count/cost. The full prompt and spec bodies are hidden by default and returned only when requested (e.g. `--show-prompts`).
+5. `show_session` returns the shared context snapshot, live in-memory `CompactionState`, the effective cached personality prompt (with timezone context), the summary prompt metadata, and tool-spec count/cost. The full prompt and spec bodies are hidden by default and returned only when requested (e.g. `--show-prompts`).
 
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo

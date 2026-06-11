@@ -19,7 +19,9 @@ use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
 use nerdbot::telegram::bot::{TelegramBot, Update};
 use nerdbot::telegram::commands::TelegramCommand;
-use nerdbot::telegram::handler::{AttachmentInfo, InboundMessage, MessageHandler};
+use nerdbot::telegram::handler::{
+    AttachmentInfo, InboundMessage, MessageHandler, MessageHandlerInput,
+};
 use nerdbot::telegram::service::TelegramService;
 use nerdbot::telegram::{TelegramHook, TelegramPoll, TelegramUpdate};
 use nerdbot::tools::calculator::CalculatorTool;
@@ -274,6 +276,7 @@ async fn main() {
         compaction_budget,
         config.context.recent_turns_to_preserve,
     ));
+    let personality = nerdbot::agent::personality::Personality::from_config(&config);
     let mut diagnostics_server = match cli.diagnostics_socket {
         Some(socket_path) => {
             match nerdbot::diagnostics::server::DiagnosticsServer::start(
@@ -281,6 +284,7 @@ async fn main() {
                 db.pool().clone(),
                 compaction_service.clone(),
                 config.clone(),
+                personality.clone(),
                 registry.clone(),
             )
             .await
@@ -304,6 +308,7 @@ async fn main() {
         llm.clone(),
         registry.clone(),
         config.clone(),
+        personality.clone(),
         service.clone(),
     ));
 
@@ -313,15 +318,16 @@ async fn main() {
     };
 
     // Create the message handler
-    let handler = Arc::new(MessageHandler::new(
-        db.pool().clone(),
-        llm.clone(),
+    let handler = Arc::new(MessageHandler::new(MessageHandlerInput {
+        pool: db.pool().clone(),
+        llm: llm.clone(),
         registry,
-        config.clone(),
-        Some(scheduler.notifier()),
-        Some(service.clone()),
+        config: config.clone(),
+        personality,
+        scheduler_notifier: Some(scheduler.notifier()),
+        telegram_service: Some(service.clone()),
         compaction_service,
-    ));
+    }));
 
     // Start scheduler
     if let Err(e) = scheduler.start().await {

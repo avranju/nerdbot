@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 
+use nerdbot::agent::personality::Personality;
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
@@ -35,7 +36,7 @@ use nerdbot::storage;
 use nerdbot::telegram::attachment;
 use nerdbot::telegram::bot::{Document, Message, PhotoSize, TelegramBot};
 use nerdbot::telegram::handler::{
-    AttachmentInfo, InboundMessage, MessageHandler, build_persist_text,
+    AttachmentInfo, InboundMessage, MessageHandler, MessageHandlerInput, build_persist_text,
 };
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
@@ -76,15 +77,17 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
         )]));
     let compaction_service = make_compaction_service(pool.clone());
 
-    MessageHandler::new(
+    let config = AppConfig::default();
+    MessageHandler::new(MessageHandlerInput {
         pool,
-        provider,
-        Arc::new(registry),
-        AppConfig::default(),
-        None,
-        None,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
         compaction_service,
-    )
+    })
 }
 
 /// Create a TelegramBot pointing at the given mock server.
@@ -602,15 +605,16 @@ async fn test_handler_blocks_unauthorized_chat() {
         )]));
     let compaction_service = make_compaction_service(pool.clone());
 
-    let handler = MessageHandler::new(
+    let handler = MessageHandler::new(MessageHandlerInput {
         pool,
-        provider,
-        Arc::new(registry),
-        config,
-        None,
-        None,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
         compaction_service,
-    );
+    });
 
     let inbound = InboundMessage {
         text: "blocked".to_string(),

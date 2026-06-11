@@ -20,6 +20,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use nerdbot::agent::personality::Personality;
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
@@ -31,7 +32,7 @@ use nerdbot::storage;
 use nerdbot::telegram::TelegramBot;
 use nerdbot::telegram::bot::BotCommand;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
-use nerdbot::telegram::handler::MessageHandler;
+use nerdbot::telegram::handler::{MessageHandler, MessageHandlerInput};
 use nerdbot::telegram::service::TelegramService;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
@@ -316,15 +317,17 @@ fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
         )]));
     let compaction_service = make_compaction_service(pool.clone());
 
-    MessageHandler::new(
+    let config = make_test_config();
+    MessageHandler::new(MessageHandlerInput {
         pool,
-        provider,
-        Arc::new(registry),
-        make_test_config(),
-        None,
-        None,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
         compaction_service,
-    )
+    })
 }
 
 #[tokio::test]
@@ -467,15 +470,16 @@ async fn test_message_handler_allowlist_blocks_chat() {
         )]));
 
     let compaction_service = make_compaction_service(pool.clone());
-    let handler = MessageHandler::new(
+    let handler = MessageHandler::new(MessageHandlerInput {
         pool,
-        provider,
-        Arc::new(registry),
-        config,
-        None,
-        None,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
         compaction_service,
-    );
+    });
 
     // Chat 200 is not in the allowlist
     let result = handler.handle_message(200, 200, "blocked").await;
@@ -499,15 +503,16 @@ async fn test_message_handler_allowlist_blocks_user() {
         )]));
 
     let compaction_service = make_compaction_service(pool.clone());
-    let handler = MessageHandler::new(
+    let handler = MessageHandler::new(MessageHandlerInput {
         pool,
-        provider,
-        Arc::new(registry),
-        config,
-        None,
-        None,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
         compaction_service,
-    );
+    });
 
     // User 200 is not in the allowlist
     let result = handler.handle_message(1, 200, "blocked").await;

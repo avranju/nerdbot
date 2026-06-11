@@ -15,8 +15,8 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use crate::agent::outcome::AgentOutcome;
+use crate::agent::personality::Personality;
 use crate::agent::run_mode::AgentRunMode;
-use crate::agent::system_prompt::append_timezone_context;
 use crate::config::AppConfig;
 use crate::context::budget::ContextBudget;
 use crate::context::compaction_service::CompactionService;
@@ -76,6 +76,8 @@ pub struct MessageHandler {
     compaction_service: Arc<CompactionService>,
     /// Application configuration.
     config: AppConfig,
+    /// Cached personality prompt.
+    personality: Personality,
     /// Cached Telegram bot token from the environment.
     bot_token: String,
     /// Notifier to wake up the scheduler loop immediately on job updates.
@@ -84,16 +86,31 @@ pub struct MessageHandler {
     telegram_service: Option<TelegramService>,
 }
 
+/// Construction input for [`MessageHandler`].
+pub struct MessageHandlerInput {
+    pub pool: SqlitePool,
+    pub llm: Arc<dyn LlmExecutor>,
+    pub registry: Arc<ToolRegistry>,
+    pub config: AppConfig,
+    pub personality: Personality,
+    pub scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
+    pub telegram_service: Option<TelegramService>,
+    pub compaction_service: Arc<CompactionService>,
+}
+
 impl MessageHandler {
-    pub fn new(
-        pool: SqlitePool,
-        llm: Arc<dyn LlmExecutor>,
-        registry: Arc<ToolRegistry>,
-        config: AppConfig,
-        scheduler_notifier: Option<Arc<tokio::sync::Notify>>,
-        telegram_service: Option<TelegramService>,
-        compaction_service: Arc<CompactionService>,
-    ) -> Self {
+    pub fn new(input: MessageHandlerInput) -> Self {
+        let MessageHandlerInput {
+            pool,
+            llm,
+            registry,
+            config,
+            personality,
+            scheduler_notifier,
+            telegram_service,
+            compaction_service,
+        } = input;
+
         let loop_config = AgentLoopConfig {
             max_tool_iterations: config.agent.max_tool_iterations,
             llm_model: config.llm.model.clone(),
@@ -116,6 +133,7 @@ impl MessageHandler {
             context_manager,
             compaction_service,
             config,
+            personality,
             bot_token,
             scheduler_notifier,
             telegram_service,
@@ -301,11 +319,9 @@ impl MessageHandler {
             .as_ref()
             .map(|service| service.start_typing(chat_id));
 
-        // Load personality file if configured
-        let personality = append_timezone_context(
-            &self.load_personality().await?,
-            &self.config.agent.default_timezone,
-        );
+        let personality = self
+            .personality
+            .effective_prompt(&self.config.agent.default_timezone);
 
         // Build bounded context using ContextManager (summary + recent messages)
         let current_user_message = ChatMessage::user(MessageContent::from_text(text));
@@ -414,11 +430,9 @@ impl MessageHandler {
             .as_ref()
             .map(|service| service.start_typing(chat_id));
 
-        // Load personality file if configured
-        let personality = append_timezone_context(
-            &self.load_personality().await?,
-            &self.config.agent.default_timezone,
-        );
+        let personality = self
+            .personality
+            .effective_prompt(&self.config.agent.default_timezone);
 
         // Build the user message with attachment content parts via assemble_rich_user_message.
         let current_user_message = self.assemble_rich_user_message(inbound).await?;
@@ -531,24 +545,6 @@ impl MessageHandler {
         }
 
         Ok(ChatMessage::user(MessageContent::from_parts(parts)))
-    }
-
-    /// Load personality from the configured Markdown file.
-    async fn load_personality(&self) -> Result<String, AgentError> {
-        let path = &self.config.agent.personality_file;
-
-        if !path.exists() {
-            // No personality file — use a reasonable default
-            return Ok("You are NerdBot, a helpful and concise AI assistant. \
-                You respond in plain text. You use tools when they would help \
-                answer the user's question more accurately. \
-                When you don't know something, you say so honestly."
-                .to_string());
-        }
-
-        tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| AgentError::Config(format!("Failed to read personality file: {e}")))
     }
 
     /// Get the cached Telegram bot token.
