@@ -1,11 +1,13 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::routing::{get, post};
+use humantime::format_duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
@@ -80,6 +82,7 @@ impl TelegramUpdate for TelegramHook {
 struct WebhookState {
     secret_token: String,
     sender: mpsc::Sender<Update>,
+    start_time: Instant,
 }
 
 struct WebhookServer {
@@ -107,12 +110,15 @@ impl WebhookServer {
             })
             .ok_or_else(|| AgentError::Config("telegram.web_hook_url is not a valid URL".into()))?;
 
+        let start_time = Instant::now();
         let state = WebhookState {
             secret_token,
             sender,
+            start_time,
         };
         let app = Router::new()
             .route(&route_path, post(handle_telegram_webhook))
+            .route("/health", get(handle_health))
             .with_state(state);
 
         let bind_target = format!("{}:{}", config.host, config.port);
@@ -167,6 +173,17 @@ impl Drop for WebhookServer {
             debug!("sent Telegram webhook server shutdown signal");
         }
     }
+}
+
+async fn handle_health(State(state): State<WebhookState>) -> (StatusCode, String) {
+    let uptime = state.start_time.elapsed();
+    (
+        StatusCode::OK,
+        format!(
+            "NerdBot is healthy and running for {}\n",
+            format_duration(uptime)
+        ),
+    )
 }
 
 async fn handle_telegram_webhook(
