@@ -9,8 +9,8 @@ use toml::Value;
 use url::Url;
 
 use crate::config::{
-    AppConfig, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE,
-    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramMode,
+    AppConfig, DEFAULT_TELEGRAM_POLL_INTERVAL_SECS, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT,
+    SANDBOX_MODE_NONE, SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramMode,
 };
 
 const DEFAULT_PERSONALITY_FILE: &str = "/config/personality.md";
@@ -270,6 +270,9 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
         "port".into(),
         Value::Integer(i64::from(answers.telegram_port)),
     );
+    telegram
+        .entry("poll_interval_secs")
+        .or_insert_with(|| Value::Integer(DEFAULT_TELEGRAM_POLL_INTERVAL_SECS as i64));
     telegram.insert(
         "allowed_chat_ids".into(),
         id_array(&answers.allowed_chat_ids),
@@ -463,6 +466,10 @@ mod tests {
         );
         assert_eq!(config.telegram.host, "0.0.0.0");
         assert_eq!(config.telegram.port, 24_683);
+        assert_eq!(
+            config.telegram.poll_interval_secs,
+            DEFAULT_TELEGRAM_POLL_INTERVAL_SECS
+        );
         assert_eq!(config.telegram.allowed_chat_ids, vec![123]);
         assert_eq!(config.telegram.allowed_user_ids, vec![456]);
         assert_eq!(config.llm.model, "custom-model");
@@ -494,6 +501,9 @@ name = "custom-name"
 [llm]
 model = "old-model"
 temperature = 0.7
+
+[telegram]
+poll_interval_secs = 11
 "#,
         )
         .unwrap();
@@ -523,6 +533,7 @@ temperature = 0.7
         assert_eq!(config.telegram.web_hook_url, None);
         assert_eq!(config.telegram.host, "127.0.0.1");
         assert_eq!(config.telegram.port, 24_682);
+        assert_eq!(config.telegram.poll_interval_secs, 11);
         assert_eq!(config.llm.model, "new-model");
         assert_eq!(config.llm.temperature, 0.7);
     }

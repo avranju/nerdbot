@@ -120,6 +120,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `default_timezone` | Default IANA timezone for agent behavior |
 | `[telegram]` | `mode` | Telegram ingress mode: `poll` or `push` (default: `poll`) |
 | | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
+| | `poll_interval_secs` | Seconds to sleep after an empty Telegram `getUpdates` response in poll mode (default: `5`) |
 | | `web_hook_url` | Public HTTPS webhook URL required when `mode = "push"` |
 | | `host` | Local plain-HTTP webhook bind host for push mode (default: `127.0.0.1`) |
 | | `port` | Local plain-HTTP webhook bind port for push mode (default: `24682`) |

@@ -115,7 +115,7 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Telegram message with attachments (rich ingress):**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. `[telegram].mode = "poll"` clears any existing webhook and uses `getUpdates`; `[telegram].mode = "push"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. `[telegram].mode = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[telegram].mode = "push"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
 1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
@@ -191,7 +191,7 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
-- `[telegram]` — mode (`"poll"` default or `"push"`), bot_token_env, HTTPS web_hook_url (required for push), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[telegram]` — mode (`"poll"` default or `"push"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for push), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes

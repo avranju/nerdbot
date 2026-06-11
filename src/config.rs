@@ -7,6 +7,8 @@ use url::Url;
 
 use crate::error::AgentError;
 
+pub const DEFAULT_TELEGRAM_POLL_INTERVAL_SECS: u64 = 5;
+
 /// Top-level configuration.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
@@ -74,6 +76,9 @@ pub struct TelegramConfig {
     /// Local port used by the webhook HTTP server in push mode.
     #[serde(default = "default_telegram_port")]
     pub port: u16,
+    /// Sleep duration after an empty getUpdates response in poll mode.
+    #[serde(default = "default_telegram_poll_interval_secs")]
+    pub poll_interval_secs: u64,
     /// Allowed Telegram **conversation** IDs (private chats, groups, channels).
     /// Messages from chats not in this list are ignored. If empty, all chats
     /// are allowed (useful for local development).
@@ -102,6 +107,7 @@ impl Default for TelegramConfig {
             web_hook_url: None,
             host: default_telegram_host(),
             port: default_telegram_port(),
+            poll_interval_secs: default_telegram_poll_interval_secs(),
             allowed_chat_ids: Vec::new(),
             allowed_user_ids: Vec::new(),
             max_attachment_bytes: default_max_attachment_bytes(),
@@ -369,6 +375,9 @@ fn default_telegram_host() -> String {
 }
 fn default_telegram_port() -> u16 {
     24_682
+}
+fn default_telegram_poll_interval_secs() -> u64 {
+    DEFAULT_TELEGRAM_POLL_INTERVAL_SECS
 }
 fn default_sqlite_path() -> PathBuf {
     PathBuf::from("/data/agent.db")

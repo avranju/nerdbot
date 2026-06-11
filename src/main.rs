@@ -331,7 +331,7 @@ async fn main() {
 
     match config.telegram.mode {
         TelegramMode::Poll => {
-            let updates = TelegramPoll::new(bot.clone());
+            let updates = TelegramPoll::new(bot.clone(), config.telegram.poll_interval_secs);
             if let Err(e) = run_telegram_update_loop(
                 updates,
                 bot.clone(),

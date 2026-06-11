@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tracing::{error, info};
@@ -15,15 +16,17 @@ pub struct TelegramPoll {
     offset: Option<i64>,
     pending: VecDeque<Update>,
     timeout_secs: u32,
+    poll_interval_secs: u64,
 }
 
 impl TelegramPoll {
-    pub fn new(bot: Arc<TelegramBot>) -> Self {
+    pub fn new(bot: Arc<TelegramBot>, poll_interval_secs: u64) -> Self {
         Self {
             bot,
             offset: None,
             pending: VecDeque::new(),
             timeout_secs: 30,
+            poll_interval_secs,
         }
     }
 }
@@ -44,6 +47,11 @@ impl TelegramUpdate for TelegramPoll {
         }
 
         let updates = self.bot.get_updates(self.offset, self.timeout_secs).await?;
+
+        if updates.is_empty() {
+            tokio::time::sleep(Duration::from_secs(self.poll_interval_secs)).await;
+            return Ok(None);
+        }
 
         for update in updates {
             let new_offset = update.update_id + 1;

@@ -53,6 +53,7 @@ fn test_default_config_telegram_ingress() {
     assert_eq!(config.telegram.web_hook_url, None);
     assert_eq!(config.telegram.host, "127.0.0.1");
     assert_eq!(config.telegram.port, 24_682);
+    assert_eq!(config.telegram.poll_interval_secs, 5);
 }
 
 #[test]
@@ -178,6 +179,7 @@ bot_token_env = "MY_TELEGRAM_TOKEN"
 web_hook_url = "https://example.test/telegram/webhook"
 host = "0.0.0.0"
 port = 24683
+poll_interval_secs = 7
 allowed_chat_ids = [111111111, 222222222]
 allowed_user_ids = [333333333]
 
@@ -236,6 +238,7 @@ fn test_parse_full_config() {
     );
     assert_eq!(config.telegram.host, "0.0.0.0");
     assert_eq!(config.telegram.port, 24_683);
+    assert_eq!(config.telegram.poll_interval_secs, 7);
     assert_eq!(
         config.telegram.allowed_chat_ids,
         vec![111_111_111i64, 222_222_222]
