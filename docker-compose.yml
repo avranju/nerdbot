@@ -9,6 +9,10 @@ services:
       - ./config:/config:ro
       - nerdbot-data:/data
       - ./workspace:/workspace
+    # Uncomment the ports mapping below if [telegram].mode is set to "push".
+    # The default webhook server listens on 127.0.0.1:24682.
+    # ports:
+    #   - "24682:24682"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}  # needed for default gpt-4o model

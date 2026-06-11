@@ -23,23 +23,14 @@ FROM debian:bookworm-slim
 # No SQLite dev dependency at runtime — runtime libsqlite3-0 is installed below
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    libsqlite3-0 ca-certificates && \
+    libsqlite3-0 ca-certificates openssh-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN groupadd -r nerdbot && useradd -r -g nerdbot -d /home/nerdbot -s /sbin/nologin nerdbot
 
 WORKDIR /app
 
 # Copy the release binary
 COPY --from=builder /app/target/release/nerdbot /usr/local/bin/nerdbot
-
-# Create mount-point directories
-RUN mkdir -p /config /data /workspace && \
-    chown -R nerdbot:nerdbot /config /data /workspace
-
-USER nerdbot
 
 ENTRYPOINT ["nerdbot"]
 CMD ["--config", "/config/config.toml"]
