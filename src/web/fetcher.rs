@@ -109,6 +109,7 @@ pub struct ExaFetcher {
     client: reqwest::Client,
     pub(crate) api_key: String,
     pub(crate) max_text_chars: usize,
+    endpoint_url: String,
 }
 
 impl ExaFetcher {
@@ -124,7 +125,15 @@ impl ExaFetcher {
             client,
             api_key,
             max_text_chars,
+            endpoint_url: "https://api.exa.ai/contents".to_string(),
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_endpoint(api_key: String, max_text_chars: usize, endpoint_url: String) -> Self {
+        let mut fetcher = Self::new(api_key, max_text_chars);
+        fetcher.endpoint_url = endpoint_url;
+        fetcher
     }
 
     /// Validate that a URL is safe to fetch (SSRF protection).
@@ -154,21 +163,33 @@ impl ExaFetcher {
 impl ExaFetcher {
     /// Fetch a single URL and return its content.
     pub async fn fetch(&self, url: &str) -> Result<FetchedPage, WebFetchError> {
+        self.fetch_with_max_age_hours(url, None).await
+    }
+
+    /// Fetch a single URL with optional Exa cache freshness control.
+    pub async fn fetch_with_max_age_hours(
+        &self,
+        url: &str,
+        max_age_hours: Option<u64>,
+    ) -> Result<FetchedPage, WebFetchError> {
         let parsed = self.validate_url(url)?;
         let url_str = parsed.to_string();
 
         debug!(url = url_str, "fetching page via Exa contents API");
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "urls": [url_str.clone()],
             "text": {
                 "maxCharacters": self.max_text_chars
             }
         });
+        if let Some(max_age_hours) = max_age_hours {
+            body["maxAgeHours"] = serde_json::json!(max_age_hours);
+        }
 
         let resp = self
             .client
-            .post("https://api.exa.ai/contents")
+            .post(&self.endpoint_url)
             .header("x-api-key", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -268,5 +289,80 @@ mod tests {
 
         let url = url::Url::parse("ftp://example.com/file").unwrap();
         assert!(is_private_url(&url));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_includes_max_age_hours_when_set() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/contents"))
+            .and(header("x-api-key", "test-key"))
+            .and(body_json(serde_json::json!({
+                "urls": ["https://example.com/article"],
+                "text": {
+                    "maxCharacters": 8000
+                },
+                "maxAgeHours": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{
+                    "title": "Example",
+                    "text": "Fresh content"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let fetcher = ExaFetcher::new_with_endpoint(
+            "test-key".into(),
+            8000,
+            format!("{}/contents", server.uri()),
+        );
+
+        let page = fetcher
+            .fetch_with_max_age_hours("https://example.com/article", Some(0))
+            .await
+            .unwrap();
+
+        assert_eq!(page.title.as_deref(), Some("Example"));
+        assert_eq!(page.text, "Fresh content");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_omits_max_age_hours_when_unset() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/contents"))
+            .and(body_json(serde_json::json!({
+                "urls": ["https://example.com/article"],
+                "text": {
+                    "maxCharacters": 8000
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{
+                    "title": "Example",
+                    "text": "Cached content"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let fetcher = ExaFetcher::new_with_endpoint(
+            "test-key".into(),
+            8000,
+            format!("{}/contents", server.uri()),
+        );
+
+        let page = fetcher.fetch("https://example.com/article").await.unwrap();
+
+        assert_eq!(page.title.as_deref(), Some("Example"));
+        assert_eq!(page.text, "Cached content");
     }
 }

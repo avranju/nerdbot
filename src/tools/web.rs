@@ -183,6 +183,11 @@ impl Tool for WebFetch {
                 "url": {
                     "type": "string",
                     "description": "The full URL to fetch (must start with http:// or https://)."
+                },
+                "max_age_hours": {
+                    "type": "integer",
+                    "description": "Optional Exa cache freshness window in hours. Omit to allow Exa's default cached response; set to 0 to disable Exa's cache and fetch fresh upstream content.",
+                    "minimum": 0
                 }
             },
             "required": ["url"]
@@ -199,13 +204,28 @@ impl Tool for WebFetch {
             .and_then(|v| v.as_str())
             .ok_or_else(|| AgentError::InvalidToolArgs("missing or invalid 'url' field".into()))?;
 
+        let max_age_hours = match args.get("max_age_hours") {
+            Some(v) => {
+                let n = v.as_i64().ok_or_else(|| {
+                    AgentError::InvalidToolArgs("'max_age_hours' must be an integer".into())
+                })?;
+                if n < 0 {
+                    return Err(AgentError::InvalidToolArgs(
+                        "'max_age_hours' must be greater than or equal to 0".into(),
+                    ));
+                }
+                Some(n as u64)
+            }
+            None => None,
+        };
+
         let fetcher = self
             .fetcher
             .as_ref()
             .ok_or_else(|| AgentError::WebFetch("Web fetcher not configured".into()))?;
 
         let page = fetcher
-            .fetch(url)
+            .fetch_with_max_age_hours(url, max_age_hours)
             .await
             .map_err(|e| AgentError::WebFetch(e.to_string()))?;
 
@@ -292,6 +312,18 @@ mod tests {
                 .contains(&json!("url"))
         );
         assert!(schema["properties"]["url"]["type"].as_str().unwrap() == "string");
+        assert!(
+            schema["properties"]["max_age_hours"]["type"]
+                .as_str()
+                .unwrap()
+                == "integer"
+        );
+        assert_eq!(
+            schema["properties"]["max_age_hours"]["minimum"]
+                .as_i64()
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -353,6 +385,46 @@ mod tests {
             assert!(msg.contains("credentials"));
         } else {
             panic!("expected WebFetch, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_rejects_negative_max_age_hours() {
+        let tool = WebFetch::new("test-key".into(), 8000);
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "url": "https://example.com",
+                    "max_age_hours": -1
+                }),
+                ToolContext::default_for_test(),
+            )
+            .await;
+        assert!(result.is_err());
+        if let Err(AgentError::InvalidToolArgs(msg)) = result {
+            assert!(msg.contains("max_age_hours"));
+        } else {
+            panic!("expected InvalidToolArgs, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_rejects_non_integer_max_age_hours() {
+        let tool = WebFetch::new("test-key".into(), 8000);
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "url": "https://example.com",
+                    "max_age_hours": "0"
+                }),
+                ToolContext::default_for_test(),
+            )
+            .await;
+        assert!(result.is_err());
+        if let Err(AgentError::InvalidToolArgs(msg)) = result {
+            assert!(msg.contains("max_age_hours"));
+        } else {
+            panic!("expected InvalidToolArgs, got {:?}", result);
         }
     }
 

@@ -94,7 +94,7 @@ src/
 
   web/
     mod.rs
-    fetcher.rs     — URL fetcher with SSRF protection, redirect limits, size limits
+    fetcher.rs     — URL fetcher with SSRF protection, redirect limits, size limits, and Exa contents cache freshness control
     search_backend.rs — Web search abstraction
 
   workspace/
@@ -186,7 +186,7 @@ README.md          — Project documentation
 - `send_telegram_message` — Send messages to Telegram chats
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search
-- `web_fetch` — Fetch URL content with SSRF protection
+- `web_fetch` — Fetch URL content with SSRF protection. Accepts optional `max_age_hours`; omit it for Exa's default cached contents behavior or set `0` to disable Exa's cache for fresh upstream content.
 - `shell_execute` — Sandboxed command execution with optional Bubblewrap namespace isolation (filesystem, PID, network, IPC, UTS). Configurable via `sandbox_mode`: `none` (direct exec), `bwrap` (namespace isolation), `bwrap-strict` (reserved for future resource limits), plus `network_access`: `disabled` (default, passes `--unshare-net`) or `host` (omits `--unshare-net` so bwrap shares host networking).
 
 ### Key Config Sections (TOML)
