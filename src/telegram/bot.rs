@@ -1,7 +1,7 @@
 //! Telegram bot client — long polling implementation.
 //!
 //! Communicates with the Telegram Bot API via HTTP (reqwest).
-//! Uses getUpdates with long polling for inbound messages and
+//! Uses getUpdates or webhooks for inbound messages and
 //! sendMessage for outbound delivery.
 //!
 //! API reference: https://core.telegram.org/bots/api
@@ -177,6 +177,15 @@ struct SetMyCommandsRequest {
     commands: Vec<BotCommand>,
 }
 
+/// Payload for the setWebhook call.
+#[derive(Debug, Serialize)]
+struct SetWebhookRequest<'a> {
+    url: &'a str,
+    secret_token: &'a str,
+    allowed_updates: Vec<&'static str>,
+    drop_pending_updates: bool,
+}
+
 /// Response from sendMessage (we only need ok/description but destructure the result).
 #[derive(Debug, Deserialize, Default)]
 pub struct SentMessage {
@@ -190,7 +199,7 @@ pub struct SentMessage {
 /// Low-level Telegram Bot API client.
 ///
 /// Handles HTTP communication with the Telegram Bot API including
-/// long polling for updates and sending messages.
+/// polling/webhook configuration and sending messages.
 #[derive(Debug)]
 pub struct TelegramBot {
     token: String,
@@ -421,6 +430,60 @@ impl TelegramBot {
             command_count = payload.commands.len(),
             "Telegram bot command menu configured"
         );
+        Ok(())
+    }
+
+    /// Register a Telegram webhook for receiving pushed updates.
+    pub async fn set_webhook(
+        &self,
+        webhook_url: &str,
+        secret_token: &str,
+    ) -> Result<(), AgentError> {
+        let url = format!("{}/setWebhook", self.base_url);
+        let payload = SetWebhookRequest {
+            url: webhook_url,
+            secret_token,
+            allowed_updates: vec!["message", "edited_message"],
+            drop_pending_updates: false,
+        };
+
+        debug!(webhook_url, "setting Telegram webhook");
+
+        let response = self
+            .http
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("HTTP error during setWebhook: {e}")))?;
+
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|e| AgentError::Telegram(format!("Failed to read setWebhook body: {e}")))?;
+
+        if !status.is_success() {
+            return Err(AgentError::Telegram(format!(
+                "setWebhook returned HTTP {status}: {body_text}"
+            )));
+        }
+
+        let api_response: TelegramApiResponse<bool> =
+            serde_json::from_str(&body_text).map_err(|e| {
+                AgentError::Telegram(format!(
+                    "Failed to parse setWebhook response: {e}. Body: {body_text}"
+                ))
+            })?;
+
+        if !api_response.ok {
+            return Err(AgentError::Telegram(format!(
+                "Telegram setWebhook failed: {}",
+                api_response.description.as_deref().unwrap_or("unknown")
+            )));
+        }
+
+        info!(webhook_url, "Telegram webhook configured");
         Ok(())
     }
 

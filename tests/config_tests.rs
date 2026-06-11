@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use nerdbot::config::AppConfig;
+use nerdbot::config::{AppConfig, TelegramMode};
 
 // ── Default values ───────────────────────────────────────────────────────
 
@@ -44,6 +44,15 @@ fn test_default_config_timezone() {
 fn test_default_config_telegram_token_env() {
     let config = AppConfig::default();
     assert_eq!(config.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
+}
+
+#[test]
+fn test_default_config_telegram_ingress() {
+    let config = AppConfig::default();
+    assert_eq!(config.telegram.mode, TelegramMode::Poll);
+    assert_eq!(config.telegram.web_hook_url, None);
+    assert_eq!(config.telegram.host, "127.0.0.1");
+    assert_eq!(config.telegram.port, 24_682);
 }
 
 #[test]
@@ -164,7 +173,11 @@ max_tool_iterations = 5
 default_timezone = "America/New_York"
 
 [telegram]
+mode = "push"
 bot_token_env = "MY_TELEGRAM_TOKEN"
+web_hook_url = "https://example.test/telegram/webhook"
+host = "0.0.0.0"
+port = 24683
 allowed_chat_ids = [111111111, 222222222]
 allowed_user_ids = [333333333]
 
@@ -215,7 +228,14 @@ fn test_parse_full_config() {
     assert_eq!(config.agent.default_timezone, "America/New_York");
 
     // Telegram
+    assert_eq!(config.telegram.mode, TelegramMode::Push);
     assert_eq!(config.telegram.bot_token_env, "MY_TELEGRAM_TOKEN");
+    assert_eq!(
+        config.telegram.web_hook_url.as_deref(),
+        Some("https://example.test/telegram/webhook")
+    );
+    assert_eq!(config.telegram.host, "0.0.0.0");
+    assert_eq!(config.telegram.port, 24_683);
     assert_eq!(
         config.telegram.allowed_chat_ids,
         vec![111_111_111i64, 222_222_222]
@@ -295,6 +315,95 @@ fn test_parse_invalid_toml() {
         result.unwrap_err(),
         nerdbot::error::AgentError::Config(_)
     ));
+}
+
+#[test]
+fn test_push_mode_requires_webhook_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+mode = "push"
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("telegram.web_hook_url is required"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_invalid_telegram_mode_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+mode = "webhook"
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        nerdbot::error::AgentError::Config(_)
+    ));
+}
+
+#[test]
+fn test_push_mode_requires_valid_webhook_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+mode = "push"
+web_hook_url = "not a url"
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("telegram.web_hook_url is not a valid URL"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_push_mode_requires_https_webhook_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+mode = "push"
+web_hook_url = "http://example.test/telegram/webhook"
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("telegram.web_hook_url must use https"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

@@ -118,7 +118,11 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `personality_file` | Path to the personality Markdown file (default: `/config/personality.md`) |
 | | `max_tool_iterations` | Maximum tool-call loop iterations per request (default: `10`) |
 | | `default_timezone` | Default IANA timezone for agent behavior |
-| `[telegram]` | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
+| `[telegram]` | `mode` | Telegram ingress mode: `poll` or `push` (default: `poll`) |
+| | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
+| | `web_hook_url` | Public HTTPS webhook URL required when `mode = "push"` |
+| | `host` | Local plain-HTTP webhook bind host for push mode (default: `127.0.0.1`) |
+| | `port` | Local plain-HTTP webhook bind port for push mode (default: `24682`) |
 | | `allowed_chat_ids` | List of allowed Telegram chat IDs (empty = all) |
 | | `allowed_user_ids` | List of allowed Telegram user IDs (empty = all) |
 | | `max_attachment_bytes` | Maximum download size for Telegram attachments in bytes (default: `5242880`, 5 MB) |
@@ -166,7 +170,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 ## Architecture
 
 ```
-Telegram (long polling)
+Telegram (polling or webhook push)
     │
     ▼
 MessageHandler ──► Allowlist check ──► Session lookup

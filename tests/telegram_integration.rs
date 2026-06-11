@@ -830,6 +830,56 @@ async fn test_set_my_commands_returns_error_on_not_ok() {
 }
 
 #[tokio::test]
+async fn test_set_webhook_succeeds_on_200() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/setWebhook")))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "url": "https://example.test/telegram/webhook",
+            "secret_token": "test-secret",
+            "allowed_updates": ["message", "edited_message"],
+            "drop_pending_updates": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true,"result":true}"#))
+        .mount(&server)
+        .await;
+
+    let result = bot
+        .set_webhook("https://example.test/telegram/webhook", "test-secret")
+        .await;
+
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_set_webhook_returns_error_on_not_ok() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/setWebhook")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"ok":false,"description":"Bad Request"}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let result = bot
+        .set_webhook("https://example.test/telegram/webhook", "test-secret")
+        .await;
+
+    assert!(result.is_err());
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("Telegram setWebhook failed: Bad Request"),
+        "unexpected error: {err_str}"
+    );
+}
+
+#[tokio::test]
 async fn test_get_updates_returns_error_on_503() {
     let server = MockServer::start().await;
     let bot = make_mock_bot(&server).await;

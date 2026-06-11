@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use nerdbot::config::AppConfig;
+use nerdbot::config::{AppConfig, TelegramConfig, TelegramMode};
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
 use nerdbot::context::compaction_worker::CompactionWorker;
@@ -17,10 +17,11 @@ use nerdbot::llm::LlmClient;
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
-use nerdbot::telegram::bot::TelegramBot;
+use nerdbot::telegram::bot::{TelegramBot, Update};
 use nerdbot::telegram::commands::TelegramCommand;
 use nerdbot::telegram::handler::{AttachmentInfo, InboundMessage, MessageHandler};
 use nerdbot::telegram::service::TelegramService;
+use nerdbot::telegram::{TelegramHook, TelegramPoll, TelegramUpdate};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::files::{AppendFile, FileConfig, ListDirectory, ReadFile, WriteFile};
@@ -126,9 +127,13 @@ async fn main() {
             info!("configuration loaded");
             c
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "no config file found or invalid, using defaults");
+        Err(e) if !cli.config.exists() => {
+            tracing::warn!(error = %e, "no config file found, using defaults");
             AppConfig::default()
+        }
+        Err(e) => {
+            error!(error = %e, "invalid configuration");
+            return;
         }
     };
 
@@ -194,11 +199,6 @@ async fn main() {
             error = %e,
             "failed to configure Telegram command menu; slash commands still work when typed manually"
         );
-    }
-
-    // Clear any existing webhook so long polling works
-    if let Err(e) = bot.delete_webhook().await {
-        error!(error = %e, "failed to delete webhook, long polling may not work");
     }
 
     // Set up tool registry
@@ -329,100 +329,33 @@ async fn main() {
         return;
     }
 
-    info!("starting Telegram long polling...");
-
-    // ── Long polling loop ──────────────────────────────────────────
-    let mut offset: Option<i64> = None;
-    let timeout_secs: u32 = 30;
-
-    loop {
-        tokio::select! {
-            res = bot.get_updates(offset, timeout_secs) => {
-                match res {
-                    Ok(updates) => {
-                        for update in updates {
-                            let new_offset = update.update_id + 1;
-                            if offset.is_none_or(|o| new_offset > o) {
-                                offset = Some(new_offset);
-                            }
-
-                            let msg = match update.message {
-                                Some(ref m) => m,
-                                None => continue,
-                            };
-
-                            let chat_id = msg.chat.id;
-                            let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
-                            let msg = msg.clone();
-
-                            // Allowlist check BEFORE building/downloading attachments.
-                            // This prevents untrusted users from triggering expensive downloads.
-                            let allowed_chat_ids = config.telegram.allowed_chat_ids.clone();
-                            let allowed_user_ids = config.telegram.allowed_user_ids.clone();
-                            let allowed = (allowed_chat_ids.is_empty() || allowed_chat_ids.contains(&chat_id))
-                                && (allowed_user_ids.is_empty() || allowed_user_ids.contains(&user_id));
-                            if !allowed {
-                                warn!(chat_id, user_id, "skipping message: not in allowlist");
-                                continue;
-                            }
-
-                            // Build a structured inbound message from the Telegram update.
-                            // Extract the user prompt from text or caption (captions take priority
-                            // for attachment-only messages). Use a default prompt when neither exists.
-                            let handler = handler.clone();
-                            let service = service.clone();
-                            let bot = bot.clone();
-                            let max_attachment_bytes = config.telegram.max_attachment_bytes;
-                            let max_text_chars = config.telegram.max_text_document_chars;
-
-                            tokio::spawn(async move {
-                                // Build the inbound message
-                                let (text, attachment_parts, attachment_infos) =
-                                    build_inbound_message(&msg, bot.as_ref(), max_attachment_bytes, max_text_chars).await;
-
-                                let inbound = InboundMessage {
-                                    text,
-                                    attachment_parts,
-                                    attachments: attachment_infos,
-                                };
-
-                                match handler.handle_rich_message(chat_id, user_id, &inbound).await {
-                                    Ok(Some(response)) => {
-                                        if let Err(e) = service
-                                            .send_message_with_options(chat_id, &response, Some("MarkdownV2"), None)
-                                            .await
-                                        {
-                                            error!(chat_id, error = %e, "failed to send reply");
-                                        }
-                                    }
-                                    Ok(None) => {}
-                                    Err(AgentError::PermissionDenied) => {
-                                        error!(chat_id, user_id, "permission denied");
-                                    }
-                                    Err(e) => {
-                                        error!(chat_id, error = %e, "message handler error");
-                                        let err_msg = format!("❌ Internal error: {e}");
-                                        let _ = service.send_message(chat_id, &err_msg).await;
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "getUpdates failed, retrying in 5s");
-                        tokio::select! {
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("received Ctrl-C during retry sleep, shutting down...");
-                                break;
-                            }
-                        }
-                    }
-                }
+    match config.telegram.mode {
+        TelegramMode::Poll => {
+            let updates = TelegramPoll::new(bot.clone());
+            if let Err(e) = run_telegram_update_loop(
+                updates,
+                bot.clone(),
+                handler.clone(),
+                service.clone(),
+                config.telegram.clone(),
+            )
+            .await
+            {
+                error!(error = %e, "Telegram polling ingress failed");
             }
-            _ = tokio::signal::ctrl_c() => {
-                info!("received Ctrl-C, shutting down...");
-                break;
+        }
+        TelegramMode::Push => {
+            let updates = TelegramHook::new(bot.clone(), config.telegram.clone());
+            if let Err(e) = run_telegram_update_loop(
+                updates,
+                bot.clone(),
+                handler.clone(),
+                service.clone(),
+                config.telegram.clone(),
+            )
+            .await
+            {
+                error!(error = %e, "Telegram webhook ingress failed");
             }
         }
     }
@@ -465,6 +398,127 @@ async fn run_diagnostics_command(
     };
     println!("{output}");
     Ok(())
+}
+
+async fn run_telegram_update_loop<T>(
+    mut updates: T,
+    bot: Arc<TelegramBot>,
+    handler: Arc<MessageHandler>,
+    service: TelegramService,
+    telegram_config: TelegramConfig,
+) -> Result<(), AgentError>
+where
+    T: TelegramUpdate,
+{
+    updates.init().await?;
+
+    loop {
+        tokio::select! {
+            res = updates.poll() => {
+                match res {
+                    Ok(Some(update)) => {
+                        let bot = bot.clone();
+                        let handler = handler.clone();
+                        let service = service.clone();
+                        let telegram_config = telegram_config.clone();
+                        tokio::spawn(async move {
+                            dispatch_telegram_update(
+                                update,
+                                bot,
+                                handler,
+                                service,
+                                telegram_config,
+                            )
+                            .await;
+                        });
+                    }
+                    Ok(None) => {
+                        continue;
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Telegram update polling failed, retrying in 5s");
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = tokio::signal::ctrl_c() => {
+                                info!("received Ctrl-C during retry sleep, shutting down...");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("received Ctrl-C, shutting down...");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn dispatch_telegram_update(
+    update: Update,
+    bot: Arc<TelegramBot>,
+    handler: Arc<MessageHandler>,
+    service: TelegramService,
+    telegram_config: TelegramConfig,
+) {
+    let msg = match update.message {
+        Some(m) => m,
+        None => return,
+    };
+
+    let chat_id = msg.chat.id;
+    let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
+
+    // Allowlist check BEFORE building/downloading attachments.
+    // This prevents untrusted users from triggering expensive downloads.
+    let allowed = (telegram_config.allowed_chat_ids.is_empty()
+        || telegram_config.allowed_chat_ids.contains(&chat_id))
+        && (telegram_config.allowed_user_ids.is_empty()
+            || telegram_config.allowed_user_ids.contains(&user_id));
+    if !allowed {
+        warn!(chat_id, user_id, "skipping message: not in allowlist");
+        return;
+    }
+
+    let (text, attachment_parts, attachment_infos) = build_inbound_message(
+        &msg,
+        bot.as_ref(),
+        telegram_config.max_attachment_bytes,
+        telegram_config.max_text_document_chars,
+    )
+    .await;
+
+    let inbound = InboundMessage {
+        text,
+        attachment_parts,
+        attachments: attachment_infos,
+    };
+
+    match handler
+        .handle_rich_message(chat_id, user_id, &inbound)
+        .await
+    {
+        Ok(Some(response)) => {
+            if let Err(e) = service
+                .send_message_with_options(chat_id, &response, Some("MarkdownV2"), None)
+                .await
+            {
+                error!(chat_id, error = %e, "failed to send reply");
+            }
+        }
+        Ok(None) => {}
+        Err(AgentError::PermissionDenied) => {
+            error!(chat_id, user_id, "permission denied");
+        }
+        Err(e) => {
+            error!(chat_id, error = %e, "message handler error");
+            let err_msg = format!("❌ Internal error: {e}");
+            let _ = service.send_message(chat_id, &err_msg).await;
+        }
+    }
 }
 
 /// Build an `InboundMessage` from a Telegram update.

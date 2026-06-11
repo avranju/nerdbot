@@ -13,7 +13,14 @@ default_timezone = "UTC"
 
 # ── Telegram ──────────────────────────────────────────────────────
 [telegram]
+mode = "poll" # "poll" for getUpdates long polling, "push" for Telegram webhooks
 bot_token_env = "TELEGRAM_BOT_TOKEN"
+# Required when mode = "push"; register this public URL with Telegram.
+# TLS, DNS, and reverse proxy/tunnel termination are expected outside NerdBot.
+# web_hook_url = "https://example.com/telegram/webhook"
+# Local plain-HTTP webhook bind address used only when mode = "push".
+host = "127.0.0.1"
+port = 24682
 # Allowed Telegram chat IDs (private chats, groups).
 # Leave empty to allow all chats (development mode).
 allowed_chat_ids = []

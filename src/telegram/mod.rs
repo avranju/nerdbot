@@ -6,7 +6,9 @@ pub mod commands;
 pub mod handler;
 pub mod markdown;
 pub mod service;
+pub mod update;
 
 pub use bot::TelegramBot;
 pub use handler::MessageHandler;
 pub use service::TelegramService;
+pub use update::{TelegramHook, TelegramPoll, TelegramUpdate};

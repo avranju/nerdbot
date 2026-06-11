@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use url::Url;
 
 use crate::error::AgentError;
 
@@ -58,9 +59,21 @@ impl Default for AgentConfig {
 /// Telegram-specific configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct TelegramConfig {
+    /// Telegram ingress mode: long polling or webhook push.
+    #[serde(default)]
+    pub mode: TelegramMode,
     /// Environment variable name holding the bot token.
     #[serde(default = "default_telegram_token_env")]
     pub bot_token_env: String,
+    /// Public HTTPS webhook URL registered with Telegram in push mode.
+    #[serde(default)]
+    pub web_hook_url: Option<String>,
+    /// Local interface used by the webhook HTTP server in push mode.
+    #[serde(default = "default_telegram_host")]
+    pub host: String,
+    /// Local port used by the webhook HTTP server in push mode.
+    #[serde(default = "default_telegram_port")]
+    pub port: u16,
     /// Allowed Telegram **conversation** IDs (private chats, groups, channels).
     /// Messages from chats not in this list are ignored. If empty, all chats
     /// are allowed (useful for local development).
@@ -84,13 +97,28 @@ pub struct TelegramConfig {
 impl Default for TelegramConfig {
     fn default() -> Self {
         Self {
+            mode: TelegramMode::Poll,
             bot_token_env: default_telegram_token_env(),
+            web_hook_url: None,
+            host: default_telegram_host(),
+            port: default_telegram_port(),
             allowed_chat_ids: Vec::new(),
             allowed_user_ids: Vec::new(),
             max_attachment_bytes: default_max_attachment_bytes(),
             max_text_document_chars: default_max_text_document_chars(),
         }
     }
+}
+
+/// Telegram update ingress mode.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TelegramMode {
+    /// Receive updates through Telegram's getUpdates long-polling API.
+    #[default]
+    Poll,
+    /// Receive updates through Telegram webhooks.
+    Push,
 }
 
 /// Storage configuration.
@@ -336,6 +364,12 @@ fn default_timezone() -> String {
 fn default_telegram_token_env() -> String {
     "TELEGRAM_BOT_TOKEN".to_string()
 }
+fn default_telegram_host() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_telegram_port() -> u16 {
+    24_682
+}
 fn default_sqlite_path() -> PathBuf {
     PathBuf::from("/data/agent.db")
 }
@@ -430,8 +464,43 @@ impl AppConfig {
 
         let config: AppConfig = toml::from_str(&content)
             .map_err(|e| AgentError::Config(format!("Failed to parse config: {}", e)))?;
+        config.validate()?;
 
         tracing::info!(config_path = %path.display(), "loaded configuration");
         Ok(config)
+    }
+
+    /// Validate cross-field configuration constraints after TOML defaults are applied.
+    pub fn validate(&self) -> Result<(), AgentError> {
+        if self.telegram.mode == TelegramMode::Push {
+            let Some(web_hook_url) = self
+                .telegram
+                .web_hook_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+            else {
+                return Err(AgentError::Config(
+                    "telegram.web_hook_url is required when telegram.mode is \"push\"".into(),
+                ));
+            };
+
+            let parsed = Url::parse(web_hook_url).map_err(|e| {
+                AgentError::Config(format!("telegram.web_hook_url is not a valid URL: {e}"))
+            })?;
+            if parsed.scheme() != "https" {
+                return Err(AgentError::Config(format!(
+                    "telegram.web_hook_url must use https, got {:?}",
+                    parsed.scheme()
+                )));
+            }
+            if parsed.host_str().is_none() {
+                return Err(AgentError::Config(
+                    "telegram.web_hook_url must include a host".into(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 }

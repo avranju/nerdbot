@@ -10,7 +10,7 @@ executes them → results fed back → repeat) → Telegram reply.
 - **Async runtime:** Tokio (multi-thread, macros, signal, process, time)
 - **Database:** SQLite via `sqlx` with `migrate` feature
 - **LLM abstraction:** `genai` crate (supports OpenAI, Anthropic, Gemini, OpenRouter, custom OpenAI-compatible endpoints)
-- **Telegram:** Long polling (no webhooks)
+- **Telegram:** Long polling or webhook push via axum
 - **Web search:** Exa API
 - **Config:** TOML files + environment variables
 - **Logging:** `tracing` + `tracing-subscriber` with `env-filter`
@@ -21,7 +21,7 @@ executes them → results fed back → repeat) → Telegram reply.
 ### Source Layout
 ```
 src/
-  main.rs          — CLI entry, long polling loop, service wiring (imports from lib crate)
+  main.rs          — CLI entry, Telegram poll/push ingress dispatch, webhook server, service wiring (imports from lib crate)
   lib.rs           — Crate root, re-exports all modules for tests and binary crate
   config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   onboarding.rs    — Interactive `config.toml` generator for first-run setup
@@ -39,12 +39,16 @@ src/
 
   telegram/
     mod.rs
-    bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, get_file, download_file)
+    bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, webhook registration, get_file, download_file)
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic)
     handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
     service.rs     — TelegramService: send_message, etc.
+    update/
+      mod.rs       — TelegramUpdate trait and ingress implementation exports
+      poll.rs      — TelegramPoll getUpdates implementation
+      hook.rs      — TelegramHook axum webhook + mpsc channel implementation
 
   scheduler/
     mod.rs
@@ -111,8 +115,8 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Telegram message with attachments (rich ingress):**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup
-1. Long polling receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. `[telegram].mode = "poll"` clears any existing webhook and uses `getUpdates`; `[telegram].mode = "push"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
+1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
    b. Downloads supported attachments via `TelegramBot::process_attachment` (which calls `get_file` plus the bounded CDN download helper; API and file base URLs are independently injectable for testing)
@@ -143,7 +147,7 @@ README.md          — Project documentation
 
 **Interactive Telegram message:**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. Reset commands use Telegram-safe underscore names (`/reset_context`, `/new_topic`) because Telegram command menus only allow lowercase letters, digits, and underscores.
-1. Long polling receives update
+1. Polling or webhook push receives update
 2. MessageHandler checks allowlist (chat_id + user_id)
 3. Ensures chat session exists (creates if new)
 4. Routes: if `/command` → CommandHandler, else → agent loop
@@ -187,7 +191,7 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
-- `[telegram]` — bot_token_env, allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[telegram]` — mode (`"poll"` default or `"push"`), bot_token_env, HTTPS web_hook_url (required for push), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
@@ -212,6 +216,7 @@ README.md          — Project documentation
 - **Phase 12** (Telegram Attachments) — ✅ Complete — `telegram/attachment.rs` module with MIME validation, magic-byte signature inspection, bounded file download with injectable Bot API/CDN bases for tests, multimodal LLM content conversion (photos, PDFs, text documents), persisted attachment outcome markers, `recent_turns_to_preserve` enforcement in context assembly and compaction, and binary payload exclusion from token estimation
 - **Phase 13** (Markdown Formatting for Replies) — ✅ Complete — Added Telegram-compatible `MarkdownV2` formatting for interactive agent replies and scheduled job notifications. Includes a custom Markdown AST parser to escape reserved characters safely, an explicit raw Telegram MarkdownV2 mode for tool calls, plain-text degradation for oversized formatted replies, and plain-text retry when Telegram rejects formatted entities.
 - **Phase 14** (Telegram Command Menu) — ✅ Complete — `TelegramCommand::menu_commands` defines Telegram-safe slash-menu entries, `TelegramBot::set_my_commands` publishes them with the Bot API during startup, and reset-context commands use underscore names (`/reset_context`, `/new_topic`).
+- **Phase 15** (Telegram Webhook Push) — ✅ Complete — `[telegram].mode` selects `poll` or `push`; push mode validates `web_hook_url`, registers `setWebhook` with a generated secret token, validates Telegram's secret-token header on an axum HTTP endpoint, and reuses the same update dispatch, attachment processing, allowlist, handler, persistence, reply, and compaction flow as polling.
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
