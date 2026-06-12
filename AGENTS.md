@@ -208,27 +208,6 @@ README.md          — Project documentation
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`), network_access (`"disabled"` | `"host"`)
 - `[exa]` — api_key_env, max_results, max_text_chars
 
-### Phase Implementation Status
-- **Phase 1** (Architecture Skeleton) — ✅ Complete
-- **Phase 2** (Minimal Agent Loop with Fake Provider) — ✅ Complete
-- **Phase 3** (Configuration and Storage) — ✅ Complete
-- **Phase 4** (Telegram Integration) — ✅ Complete
-- **Phase 5** (Scheduler) — ✅ Complete
-- **Phase 6** (Messaging Tool) — ✅ Complete
-- **Phase 7** (Real Providers) — ✅ Complete (via genai crate)
-- **Phase 8** (File and Web Tools) — ✅ Complete
-- **Phase 9** (Context Management and Compaction) — ✅ Complete
-- **Phase 10** (Docker and Documentation) — ✅ Complete
-- **Phase 11** (Bubblewrap Shell Sandbox) — ✅ Complete (namespace isolation for shell_execute)
-- **Phase 12** (Telegram Attachments) — ✅ Complete — `telegram/attachment.rs` module with MIME validation, magic-byte signature inspection, bounded file download with injectable Bot API/CDN bases for tests, multimodal LLM content conversion (photos, PDFs, text documents), persisted attachment outcome markers, `recent_turns_to_preserve` enforcement in context assembly and compaction, and binary payload exclusion from token estimation
-- **Phase 13** (Markdown Formatting for Replies) — ✅ Complete — Added Telegram-compatible `MarkdownV2` formatting for interactive agent replies and scheduled job notifications. Includes a custom Markdown AST parser to escape reserved characters safely, an explicit raw Telegram MarkdownV2 mode for tool calls, plain-text degradation for oversized formatted replies, and plain-text retry when Telegram rejects formatted entities.
-- **Phase 14** (Telegram Command Menu) — ✅ Complete — `TelegramCommand::menu_commands` defines Telegram-safe slash-menu entries, `TelegramBot::set_my_commands` publishes them with the Bot API during startup, and reset-context commands use underscore names (`/reset_context`, `/new_topic`).
-- **Phase 15** (Telegram Webhook Push) — ✅ Complete — `[telegram].mode` selects `poll` or `push`; push mode validates `web_hook_url`, registers `setWebhook` with a generated secret token, validates Telegram's secret-token header on an axum HTTP endpoint, and reuses the same update dispatch, attachment processing, allowlist, handler, persistence, reply, and compaction flow as polling.
-
-### Recent Code Review Follow-up (2026-06-12)
-- Addressed bounded, low-risk review items from `CODE_REVIEW.md`: webhook push ingress now applies an explicit 1 MiB Axum request body limit; config loading rejects non-positive `telegram.allowed_chat_ids` and `telegram.allowed_user_ids`; diagnostics socket handling limits concurrent request tasks with a semaphore; `SchedulerGuard` documents its best-effort shutdown behavior; README/config comments now clarify that push mode expects external TLS termination and that `shell.sandbox_mode = "none"` is direct host execution, not a security sandbox.
-- Deferred larger feature work from the review: `/cancel`, binary file tools, and focused compaction-module test expansion are tracked in `TASKS.md`.
-
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets
@@ -238,7 +217,7 @@ README.md          — Project documentation
 - **README.md** — comprehensive project documentation (features, quick start, config reference, architecture, deployment)
 
 ### Systemd User Service
-- **docs/nerdbot-user.service.example** — sample `systemd --user` unit. It runs `%h/.local/bin/nerdbot --config %h/.config/nerdbot/config.toml`, loads optional secrets from `%h/.config/nerdbot/nerdbot.env`, uses `%h/.local/share/nerdbot` as the working directory, restarts on failure, and sets conservative user-service hardening (`UMask=0077`, `NoNewPrivileges=true`, `PrivateTmp=true`). README includes install commands and the `loginctl enable-linger "$USER"` note for running after logout.
+- **nerdbot-user.service.example** — sample `systemd --user` unit. It runs `%h/.local/bin/nerdbot --config %h/.config/nerdbot/config.toml`, loads optional secrets from `%h/.config/nerdbot/nerdbot.env`, uses `%h/.local/share/nerdbot` as the working directory, restarts on failure, and sets conservative user-service hardening (`UMask=0077`, `NoNewPrivileges=true`, `PrivateTmp=true`). README includes install commands and the `loginctl enable-linger "$USER"` note for running after logout.
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,
@@ -275,5 +254,5 @@ Standing instructions and behavior rules that **must** be followed by any AI age
 * Cache long-lived config and secret variables (like `TELEGRAM_BOT_TOKEN`) on service/handler instantiation rather than reading them from the environment repeatedly.
 
 ## Session Continuity
-* After completing a feature, fix, or any significant change, **update this AGENTS.md file** to reflect the new state of the codebase. Add or modify sections in "Project Overview" → "Source Layout" or "Runtime Flows" as needed so the next Pi session can build context by scanning this file without exploring the codebase.
+* After completing a feature, fix, or any significant change, **update this AGENTS.md file** to reflect the new state of the codebase. Add or modify sections in "Project Overview" → "Source Layout" or "Runtime Flows" as needed so the next coding session can build context by scanning this file without exploring the codebase.
 * When in doubt, include: what files changed, why, and how the change affects other modules or flows.

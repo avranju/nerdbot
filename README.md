@@ -255,7 +255,7 @@ cargo build --release
 
 ## Systemd User Service
 
-A sample user service unit is available at [`docs/nerdbot-user.service.example`](docs/nerdbot-user.service.example). It assumes:
+A sample user service unit is available at [`nerdbot-user.service.example`](nerdbot-user.service.example). It assumes:
 
 - binary: `~/.local/bin/nerdbot`
 - config: `~/.config/nerdbot/config.toml`
@@ -267,7 +267,7 @@ Install it with:
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/nerdbot ~/.local/bin ~/.local/share/nerdbot
 cp target/release/nerdbot ~/.local/bin/nerdbot
-cp docs/nerdbot-user.service.example ~/.config/systemd/user/nerdbot.service
+cp nerdbot-user.service.example ~/.config/systemd/user/nerdbot.service
 systemctl --user daemon-reload
 systemctl --user enable --now nerdbot.service
 journalctl --user -u nerdbot.service -f

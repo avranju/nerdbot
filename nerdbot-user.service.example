@@ -1,0 +1,26 @@
+[Unit]
+Description=NerdBot Telegram AI agent
+Documentation=https://github.com/avranju/nerdbot
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/nerdbot
+ExecStart=%h/.local/bin/nerdbot --config %h/.config/nerdbot/config.toml
+
+# Keep secrets out of config.toml. Create this file with mode 0600 and entries like:
+# TELEGRAM_BOT_TOKEN=123456:telegram-token
+# OPENAI_API_KEY=sk-...
+# EXA_API_KEY=...
+EnvironmentFile=-%h/.config/nerdbot/nerdbot.env
+Environment=RUST_LOG=info
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
