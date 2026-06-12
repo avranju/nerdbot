@@ -9,6 +9,8 @@
 //!
 //! Sandbox modes (configured via `[shell].sandbox_mode`):
 //! - `none` — Direct execution (current behaviour, no namespace isolation).
+//!   Allow/deny lists only inspect the initial command word and are not a
+//!   security boundary against shell features or interpreter subcommands.
 //! - `bwrap` — Bubblewrap namespace isolation with read-only system files,
 //!   read-write workspace, clean environment, and configurable network access.
 //! - `bwrap-strict` — Reserved for future resource limit enforcement.

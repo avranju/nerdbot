@@ -294,6 +294,8 @@ pub struct ShellConfig {
     /// Sandbox isolation mode.
     ///
     /// - `none`: Direct execution (current behavior, no namespace isolation).
+    ///   Allow/deny lists only inspect the initial command word and are not a
+    ///   security boundary against shell features or interpreter subcommands.
     /// - `bwrap`: Bubblewrap namespace isolation — filesystem, PID, network,
     ///   IPC, and UTS namespaces. System files are read-only; workspace is
     ///   read-write. Network access is controlled by `network_access`.
@@ -481,6 +483,28 @@ impl AppConfig {
 
     /// Validate cross-field configuration constraints after TOML defaults are applied.
     pub fn validate(&self) -> Result<(), AgentError> {
+        if let Some(chat_id) = self
+            .telegram
+            .allowed_chat_ids
+            .iter()
+            .find(|chat_id| **chat_id <= 0)
+        {
+            return Err(AgentError::Config(format!(
+                "telegram.allowed_chat_ids must contain only positive IDs, got {chat_id}"
+            )));
+        }
+
+        if let Some(user_id) = self
+            .telegram
+            .allowed_user_ids
+            .iter()
+            .find(|user_id| **user_id <= 0)
+        {
+            return Err(AgentError::Config(format!(
+                "telegram.allowed_user_ids must contain only positive IDs, got {user_id}"
+            )));
+        }
+
         if self.telegram.mode == TelegramMode::Push {
             let Some(web_hook_url) = self
                 .telegram

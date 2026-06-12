@@ -8,7 +8,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -17,6 +17,7 @@ use crate::diagnostics::protocol::{DiagnosticsRequest, DiagnosticsResponse, Sess
 use crate::error::AgentError;
 
 const MAX_REQUEST_BYTES: u64 = 16 * 1024;
+const MAX_CONCURRENT_CONNECTIONS: usize = 16;
 
 /// Running diagnostics server. Dropping it requests shutdown and removes the socket path.
 pub struct DiagnosticsServer {
@@ -56,6 +57,7 @@ impl DiagnosticsServer {
         let task_personality = personality.clone();
         let task_tools = tools.clone();
         let task = tokio::spawn(async move {
+            let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
             info!(socket_path = %task_socket_path.display(), "diagnostics socket listening");
             loop {
                 tokio::select! {
@@ -67,12 +69,23 @@ impl DiagnosticsServer {
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, _)) => {
+                                let permit = match connection_limit.clone().try_acquire_owned() {
+                                    Ok(permit) => permit,
+                                    Err(_) => {
+                                        warn!(
+                                            max_connections = MAX_CONCURRENT_CONNECTIONS,
+                                            "rejected diagnostics connection: concurrency limit reached"
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let pool = pool.clone();
                                 let compaction_service = compaction_service.clone();
                                 let config = task_config.clone();
                                 let personality = task_personality.clone();
                                 let tools = task_tools.clone();
                                 tokio::spawn(async move {
+                                    let _permit = permit;
                                     if let Err(e) = handle_connection(stream, &pool, &compaction_service, &config, &personality, &tools).await {
                                         warn!(error = %e, "diagnostics request failed");
                                     }

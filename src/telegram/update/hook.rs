@@ -4,7 +4,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::routing::{get, post};
 use humantime::format_duration;
@@ -18,6 +18,8 @@ use crate::error::AgentError;
 use crate::telegram::bot::{TelegramBot, Update};
 
 use super::TelegramUpdate;
+
+const MAX_WEBHOOK_BODY_BYTES: usize = 1_048_576;
 
 /// Telegram update ingress via webhook push.
 pub struct TelegramHook {
@@ -119,6 +121,7 @@ impl WebhookServer {
         let app = Router::new()
             .route(&route_path, post(handle_telegram_webhook))
             .route("/health", get(handle_health))
+            .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES))
             .with_state(state);
 
         let bind_target = format!("{}:{}", config.host, config.port);

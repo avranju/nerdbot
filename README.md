@@ -122,10 +122,10 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
 | | `poll_interval_secs` | Seconds to sleep after an empty Telegram `getUpdates` response in poll mode (default: `5`) |
 | | `web_hook_url` | Public HTTPS webhook URL required when `mode = "push"` |
-| | `host` | Local plain-HTTP webhook bind host for push mode (default: `127.0.0.1`) |
+| | `host` | Local plain-HTTP webhook bind host for push mode (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
 | | `port` | Local plain-HTTP webhook bind port for push mode (default: `24682`) |
-| | `allowed_chat_ids` | List of allowed Telegram chat IDs (empty = all) |
-| | `allowed_user_ids` | List of allowed Telegram user IDs (empty = all) |
+| | `allowed_chat_ids` | List of positive Telegram chat IDs (empty = all) |
+| | `allowed_user_ids` | List of positive Telegram user IDs (empty = all) |
 | | `max_attachment_bytes` | Maximum download size for Telegram attachments in bytes (default: `5242880`, 5 MB) |
 | | `max_text_document_chars` | Max characters when extracting text from text documents (default: `32768`, 32 KB) |
 | `[storage]` | `sqlite_path` | Path to the SQLite database file |
@@ -151,7 +151,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `denied_commands` | Always-blocked commands |
 | | `max_output_bytes` | Max shell output size (default: `1048576`) |
 | | `timeout_secs` | Shell command timeout (default: `30`) |
-| | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`) |
+| | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`; `none` is direct host execution, not a security sandbox) |
 | | `network_access` | Bubblewrap network policy: `disabled` or `host` (default: `disabled`) |
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
 | | `max_results` | Max web search results (default: `5`) |

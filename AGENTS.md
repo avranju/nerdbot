@@ -225,6 +225,10 @@ README.md          — Project documentation
 - **Phase 14** (Telegram Command Menu) — ✅ Complete — `TelegramCommand::menu_commands` defines Telegram-safe slash-menu entries, `TelegramBot::set_my_commands` publishes them with the Bot API during startup, and reset-context commands use underscore names (`/reset_context`, `/new_topic`).
 - **Phase 15** (Telegram Webhook Push) — ✅ Complete — `[telegram].mode` selects `poll` or `push`; push mode validates `web_hook_url`, registers `setWebhook` with a generated secret token, validates Telegram's secret-token header on an axum HTTP endpoint, and reuses the same update dispatch, attachment processing, allowlist, handler, persistence, reply, and compaction flow as polling.
 
+### Recent Code Review Follow-up (2026-06-12)
+- Addressed bounded, low-risk review items from `CODE_REVIEW.md`: webhook push ingress now applies an explicit 1 MiB Axum request body limit; config loading rejects non-positive `telegram.allowed_chat_ids` and `telegram.allowed_user_ids`; diagnostics socket handling limits concurrent request tasks with a semaphore; `SchedulerGuard` documents its best-effort shutdown behavior; README/config comments now clarify that push mode expects external TLS termination and that `shell.sandbox_mode = "none"` is direct host execution, not a security sandbox.
+- Deferred larger feature work from the review: `/cancel`, binary file tools, and focused compaction-module test expansion are tracked in `TASKS.md`.
+
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets

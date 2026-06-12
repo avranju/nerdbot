@@ -410,6 +410,50 @@ web_hook_url = "http://example.test/telegram/webhook"
 }
 
 #[test]
+fn test_allowed_chat_ids_must_be_positive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+allowed_chat_ids = [123, -456]
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("telegram.allowed_chat_ids must contain only positive IDs"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_allowed_user_ids_must_be_positive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[telegram]
+allowed_user_ids = [123, 0]
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("telegram.allowed_user_ids must contain only positive IDs"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_parse_partial_config() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");

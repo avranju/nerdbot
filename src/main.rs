@@ -713,6 +713,8 @@ struct SchedulerGuard {
 
 impl Drop for SchedulerGuard {
     fn drop(&mut self) {
+        // Best-effort shutdown for abnormal exits and unwinding. Job state is
+        // persisted in SQLite, so recovery does not depend on this task running.
         let scheduler = self.scheduler.clone();
         tokio::spawn(async move {
             info!("SchedulerGuard: stopping scheduler background loop...");
