@@ -164,6 +164,7 @@ fn test_run_metadata_defaults() {
     assert_eq!(metadata.iterations, 0);
     assert_eq!(metadata.token_usage.input_tokens, 0);
     assert_eq!(metadata.token_usage.output_tokens, 0);
+    assert!(!metadata.sent_user_message);
 }
 
 #[test]
@@ -175,11 +176,13 @@ fn test_run_metadata_with_values() {
             output_tokens: 50,
             total_tokens: 150,
         },
+        sent_user_message: true,
     };
     assert_eq!(metadata.iterations, 3);
     assert_eq!(metadata.token_usage.input_tokens, 100);
     assert_eq!(metadata.token_usage.output_tokens, 50);
     assert_eq!(metadata.token_usage.total_tokens, 150);
+    assert!(metadata.sent_user_message);
 }
 
 // ── AgentResult ──────────────────────────────────────────────────────────
@@ -191,6 +194,7 @@ fn test_agent_result_final_text() {
         metadata: RunMetadata {
             iterations: 2,
             token_usage: RunTokenUsage::default(),
+            sent_user_message: false,
         },
     };
     assert!(matches!(result.outcome, AgentOutcome::FinalText(ref t) if t == "done"));

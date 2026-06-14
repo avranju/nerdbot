@@ -432,6 +432,11 @@ async fn test_run_scheduled_job_execution() {
     .await
     .unwrap();
 
+    let session = storage::sessions::create_session(&pool, 123).await.unwrap();
+    insert_send_user_message_result(&pool, &session.id)
+        .await
+        .unwrap();
+
     // 4. Create dependencies
     // Use FakeProvider to return a known final text response
     let provider = Arc::new(FakeProvider::new(vec![
@@ -499,13 +504,16 @@ async fn test_run_scheduled_job_execution() {
     let messages = storage::messages::list_messages(&pool, &session.id, None)
         .await
         .unwrap();
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 3);
     assert!(messages.iter().any(|m| m.content.contains("Say hello")));
     assert!(
         messages
             .iter()
             .any(|m| m.content.contains("Mock scheduled task output"))
     );
+
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
 }
 
 // ── Test 6: Disabled job rejection ────────────────────────────────────────
@@ -792,10 +800,10 @@ async fn test_scheduler_graceful_shutdown() {
     );
 }
 
-// ── Test 9: Agent notification detection (Phase 6) ───────────────────────
+// ── Test 9: Stored send_user_message tool-result structure ───────────────
 
 /// Helper to insert a tool-result message into the session for testing
-/// the agent_already_sent_notification detection logic.
+/// historical send_user_message records in scheduler runner tests.
 async fn insert_send_user_message_result(
     pool: &sqlx::SqlitePool,
     session_id: &str,
@@ -823,7 +831,7 @@ async fn insert_send_user_message_result(
 }
 
 #[tokio::test]
-async fn test_agent_sent_notification_detection() {
+async fn test_stored_send_user_message_result_shape() {
     use nerdbot::storage;
 
     let pool = setup_test_db().await;
@@ -836,9 +844,7 @@ async fn test_agent_sent_notification_detection() {
         .await
         .unwrap();
 
-    // The detection function should find it
-    // (We can't call the private function directly, so we test via the runner)
-    // Instead, verify the message structure is correct
+    // Verify the stored message structure remains compatible with context replay.
     let messages = storage::messages::list_messages(&pool, &session.id, None)
         .await
         .unwrap();

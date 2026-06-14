@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
-use genai::chat::{ChatMessage, ChatRole, ContentPart, MessageContent};
+use genai::chat::{ChatMessage, MessageContent};
 
 use crate::error::AgentError;
 use crate::llm::LlmExecutor;
@@ -127,51 +127,52 @@ pub async fn run_scheduled_job(
 
     match result {
         Ok(agent_result) => {
-            if let crate::agent::outcome::AgentOutcome::FinalText(text) = agent_result.outcome {
-                // Save assistant message to DB history
-                let assistant_msg = ChatMessage::assistant(MessageContent::from_text(&text));
-                let _ = crate::storage::messages::create_message(
-                    &pool,
-                    &session.id,
-                    &assistant_msg,
-                    None,
-                )
-                .await?;
+            let should_send_fallback =
+                job.notify_on_completion && !agent_result.metadata.sent_user_message;
 
-                // Check whether the agent already sent a notification via send_user_message
-                let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
+            match agent_result.outcome {
+                crate::agent::outcome::AgentOutcome::FinalText(text) => {
+                    // Save assistant message to DB history
+                    let assistant_msg = ChatMessage::assistant(MessageContent::from_text(&text));
+                    let _ = crate::storage::messages::create_message(
+                        &pool,
+                        &session.id,
+                        &assistant_msg,
+                        None,
+                    )
+                    .await?;
 
-                if job.notify_on_completion && !agent_notified {
-                    let notification = format!(
-                        "🔔 **Job \"{}\" executed successfully**\n\n{}",
-                        job.name, text
-                    );
-                    if let Err(e) = telegram_service
-                        .send_message_with_options(
-                            job.owner_chat_id,
-                            &notification,
-                            Some("MarkdownV2"),
-                            None,
-                        )
-                        .await
-                    {
-                        tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
+                    if should_send_fallback {
+                        let notification = format!(
+                            "🔔 **Job \"{}\" executed successfully**\n\n{}",
+                            job.name, text
+                        );
+                        if let Err(e) = telegram_service
+                            .send_message_with_options(
+                                job.owner_chat_id,
+                                &notification,
+                                Some("MarkdownV2"),
+                                None,
+                            )
+                            .await
+                        {
+                            tracing::error!(job_id = %job_id, error = %e, "Failed to send success notification");
+                        }
                     }
                 }
-            } else if job.notify_on_completion {
-                // Silent completion — check if agent already notified
-                let agent_notified = agent_already_sent_notification(&pool, &session.id).await;
-                if !agent_notified {
-                    let notification =
-                        format!("🔔 **Job \"{}\" completed with no output**", job.name);
-                    let _ = telegram_service
-                        .send_message_with_options(
-                            job.owner_chat_id,
-                            &notification,
-                            Some("MarkdownV2"),
-                            None,
-                        )
-                        .await;
+                crate::agent::outcome::AgentOutcome::Silent => {
+                    if should_send_fallback {
+                        let notification =
+                            format!("🔔 **Job \"{}\" completed with no output**", job.name);
+                        let _ = telegram_service
+                            .send_message_with_options(
+                                job.owner_chat_id,
+                                &notification,
+                                Some("MarkdownV2"),
+                                None,
+                            )
+                            .await;
+                    }
                 }
             }
             Ok(())
@@ -196,50 +197,4 @@ pub async fn run_scheduled_job(
             Err(e)
         }
     }
-}
-
-/// Check whether the agent already sent a notification via `send_user_message` during this run.
-///
-/// Scans recent tool-result messages in the session for tool responses containing
-/// `"send_user_message"` with `"sent": true` in the JSON content.
-async fn agent_already_sent_notification(pool: &sqlx::SqlitePool, session_id: &str) -> bool {
-    let stored = match crate::storage::messages::list_messages(pool, session_id, Some(50)).await {
-        Ok(msgs) => msgs,
-        Err(e) => {
-            tracing::warn!(
-                session_id = %session_id,
-                error = %e,
-                "failed to list messages for notification dedup, assuming not notified"
-            );
-            return false;
-        }
-    };
-
-    for sm in stored {
-        // We're looking for Tool-role messages
-        if let Ok(role) = sm.role()
-            && matches!(role, ChatRole::Tool)
-        {
-            // Try to parse as genai ContentPart format first
-            if let Some(ref json) = sm.structured_content_json
-                && let Ok(parts) = serde_json::from_value::<Vec<ContentPart>>(json.clone())
-            {
-                for part in parts {
-                    if let ContentPart::ToolResponse(tr) = part
-                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&tr.content)
-                    {
-                        let is_send_user_message = parsed.get("tool_name").and_then(|v| v.as_str())
-                            == Some("send_user_message");
-                        let actually_sent =
-                            parsed.get("sent").and_then(|v| v.as_bool()) == Some(true);
-                        if is_send_user_message && actually_sent {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    false
 }

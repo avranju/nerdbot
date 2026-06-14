@@ -56,7 +56,7 @@ src/
     mod.rs
     cron.rs        — get_next_cron_run helper
     models.rs      — ScheduledJob, JobStatus, ScheduleType, JobContextPolicy
-    runner.rs      — run_scheduled_job: builds AgentContext for scheduled runs
+    runner.rs      — run_scheduled_job: builds AgentContext for scheduled runs; sends fallback Telegram completion notifications unless current run metadata shows send_user_message already succeeded
     service.rs     — SchedulerService: background loop, startup reload, notifier
 
   tools/
@@ -164,7 +164,7 @@ README.md          — Project documentation
 2. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode)
 3. Agent loop executes with cached `Personality` contents, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
 4. Job status updated to Success/Failed
-5. If notify_on_completion and model didn't send a message, harness sends final text
+5. If notify_on_completion and the model didn't call send_user_message successfully during the current job run, harness sends final text as a fallback notification. The decision comes from AgentResult metadata produced inside the active agent loop rather than scanning session history, so unrelated tool calls or prior scheduled jobs in the same chat cannot suppress the fallback.
 
 **Personality prompt cache:**
 - Startup creates one `agent::personality::Personality` from `[agent].personality_file`, loads the file contents once, and hands clones to `MessageHandler`, `SchedulerService`, and the diagnostics server.

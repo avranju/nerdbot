@@ -31,7 +31,7 @@ use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
-use nerdbot::tools::traits::{Tool, ToolContext};
+use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 
 /// Build a standard test agent context.
 fn test_context() -> AgentContext {
@@ -54,6 +54,44 @@ fn toy_registry() -> ToolRegistry {
     registry.register(EchoTool);
     registry.register(CalculatorTool);
     registry
+}
+
+struct TestSendUserMessageTool;
+
+#[async_trait::async_trait]
+impl Tool for TestSendUserMessageTool {
+    fn name(&self) -> &'static str {
+        "send_user_message"
+    }
+
+    fn description(&self) -> &'static str {
+        "Test send_user_message tool"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string" }
+            },
+            "required": ["text"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Ok(ToolOutput {
+            success: true,
+            data: serde_json::json!({
+                "sent": true,
+                "text": args.get("text").and_then(|v| v.as_str()).unwrap_or_default()
+            }),
+            summary: "test message sent".to_string(),
+        })
+    }
 }
 
 // ── Test: Tool Call → Execute → Final Text ─────────────────────────────
@@ -180,6 +218,29 @@ async fn test_tool_error_produced_as_result() {
     assert_eq!(text, "The tool did not exist.");
     assert_eq!(result.metadata.iterations, 2);
     assert_eq!(provider.call_count(), 2);
+}
+
+#[tokio::test]
+async fn test_send_user_message_sets_run_metadata() {
+    let provider = FakeProvider::new(vec![
+        FakeResponse::tool_call(
+            "send_user_message",
+            serde_json::json!({"text": "scheduled notification"}),
+        ),
+        FakeResponse::final_text("Done."),
+    ]);
+
+    let ctx = test_context();
+    let mut registry = toy_registry();
+    registry.register(TestSendUserMessageTool);
+    let config = AgentLoopConfig::default();
+
+    let result = run_agent(&ctx, &provider, &registry, &config)
+        .await
+        .unwrap();
+
+    assert!(matches!(result.outcome, AgentOutcome::FinalText(_)));
+    assert!(result.metadata.sent_user_message);
 }
 
 // ── Test: Echo Tool Actually Works ─────────────────────────────────────

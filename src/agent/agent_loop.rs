@@ -67,6 +67,7 @@ pub async fn run_agent(
 
     let mut total_input_tokens: usize = 0;
     let mut total_output_tokens: usize = 0;
+    let mut sent_user_message = false;
 
     debug!(
         iterations_limit = config.max_tool_iterations,
@@ -136,6 +137,7 @@ pub async fn run_agent(
                                 output_tokens: total_output_tokens,
                                 total_tokens: total_input_tokens + total_output_tokens,
                             },
+                            sent_user_message,
                         },
                     });
                 }
@@ -155,6 +157,7 @@ pub async fn run_agent(
                                 output_tokens: total_output_tokens,
                                 total_tokens: total_input_tokens + total_output_tokens,
                             },
+                            sent_user_message,
                         },
                     });
                 }
@@ -193,6 +196,12 @@ pub async fn run_agent(
         for tool_call in &tool_calls {
             match registry.execute(tool_call, tool_ctx.clone()).await {
                 Ok(output) => {
+                    if tool_call.fn_name == "send_user_message"
+                        && output.data.get("sent").and_then(|v| v.as_bool()) == Some(true)
+                    {
+                        sent_user_message = true;
+                    }
+
                     debug!(
                         tool = tool_call.fn_name,
                         tool_id = tool_call.call_id,

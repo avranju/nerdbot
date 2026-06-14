@@ -27,6 +27,8 @@ pub struct RunMetadata {
     pub iterations: u32,
     /// Token usage across all LLM calls.
     pub token_usage: RunTokenUsage,
+    /// Whether this run successfully sent at least one Telegram message via send_user_message.
+    pub sent_user_message: bool,
 }
 
 /// Full result from the agent loop.
