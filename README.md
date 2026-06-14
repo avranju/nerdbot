@@ -15,15 +15,82 @@ NerdBot communicates with users via **Telegram**, uses an **iterative tool-calli
 - **Single binary, Docker-friendly** — multi-stage build, non-root runtime user, no external services required
 - **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. Supported formats: JPEG, PNG, WebP, GIF, PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
 
-## Quick Start
+## Quickstart
+
+Use this path for a quick local test that gets NerdBot running and replying in Telegram. Docker is better suited for a production-style run; start here first if you just want to see the project work.
+
+1. Create a Telegram bot with [@BotFather](https://t.me/BotFather), then copy the bot token it gives you.
+
+2. Get an LLM API key for the provider you want to use, such as OpenAI, Anthropic, Gemini, OpenRouter, or a custom OpenAI-compatible endpoint. If you want to test web search, also [create an Exa API key](https://exa.ai/docs/reference/getting-started).
+
+```bash
+# 3. Create local runtime folders
+mkdir -p workspace data
+cp personality.md.example personality.md
+
+# 4. Generate config.toml through the guided onboarding flow
+cargo run -- onboard
+```
+
+During onboarding:
+
+- Choose `poll` for Telegram ingress mode.
+- Enter the environment variable name that will hold your Telegram token, usually `TELEGRAM_BOT_TOKEN`.
+- Choose your LLM provider and model.
+- Enter the environment variable name for your LLM API key, such as `OPENAI_API_KEY`, when your provider requires one.
+- Enter `EXA_API_KEY` for Exa if you want web search, or leave it blank if not.
+
+After onboarding, make sure `config.toml` points at the local paths you created:
+
+```toml
+[agent]
+personality_file = "personality.md"
+
+[storage]
+sqlite_path = "data/agent.db"
+
+[workspace]
+root = "workspace"
+```
+
+Then export the secrets named in `config.toml` and start the bot:
+
+```bash
+export TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
+export OPENAI_API_KEY="your-llm-api-key"     # use the env var/provider you configured
+export EXA_API_KEY="your-exa-api-key"        # optional
+
+cargo run
+```
+
+Open Telegram, send a message to your bot, and you should get a reply.
+
+## Running NerdBot
 
 ### Prerequisites
 
-- Docker and Docker Compose (or a Rust toolchain for local development)
+- A Rust toolchain for local development, or Docker and Docker Compose for deployment
 - A Telegram bot token ([@BotFather](https://t.me/BotFather))
 - (Optional) An Exa API key for web search
 
+### Local Development
+
+```bash
+# 1. Generate config.toml through the guided onboarding flow
+cargo run -- onboard
+
+# 2. Set the environment variables named during onboarding
+export TELEGRAM_BOT_TOKEN="your-bot-token-here"
+export OPENAI_API_KEY="your-openai-key-here"  # when using OpenAI
+export EXA_API_KEY="your-exa-key-here"  # optional
+
+# 3. Run
+cargo run
+```
+
 ### Docker Compose
+
+Use Docker Compose when you want a production-style run with mounted config, persistent data, and an isolated workspace.
 
 ```bash
 # 1. Create configuration directories
@@ -39,21 +106,6 @@ export EXA_API_KEY="your-exa-key-here"  # optional
 
 # 4. Start
 docker compose up -d
-```
-
-### Local Development
-
-```bash
-# 1. Generate config.toml through the guided onboarding flow
-cargo run -- onboard
-
-# 2. Set the environment variables named during onboarding
-export TELEGRAM_BOT_TOKEN="your-bot-token-here"
-export OPENAI_API_KEY="your-openai-key-here"  # when using OpenAI
-export EXA_API_KEY="your-exa-key-here"  # optional
-
-# 3. Run
-cargo run
 ```
 
 ### Local Diagnostics Socket
