@@ -19,3 +19,6 @@ config.toml
 
 # Log files
 *.log
+
+docs
+TASKS.md
