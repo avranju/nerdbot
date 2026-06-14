@@ -43,7 +43,7 @@ src/
     mod.rs
     bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, webhook registration, get_file, download_file)
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
-    commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic)
+    commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic); `/jobs` lists active jobs only while `/delete` soft-deletes by disabling rows
     handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
     service.rs     — TelegramService: send_message, etc.
@@ -189,7 +189,7 @@ README.md          — Project documentation
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo
 - `calculator` — Math evaluation
-- `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management
+- `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; list commands return active jobs by default, the `list_jobs` tool accepts `include_disabled = true` for disabled/deleted job history, and delete disables persisted jobs so they stop running but remain available for direct lookup/history
 - `send_telegram_message` — Send messages to Telegram chats
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search

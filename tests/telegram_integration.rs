@@ -226,6 +226,48 @@ async fn test_command_handler_delete_job() {
 }
 
 #[tokio::test]
+async fn test_command_handler_jobs_hides_deleted_jobs() {
+    let pool = setup_test_db().await;
+
+    let deleted_job = storage::jobs::create_job(
+        &pool,
+        1,
+        "Deleted Job".into(),
+        "prompt".into(),
+        nerdbot::scheduler::models::ScheduleType::OneShot,
+        None,
+    )
+    .await
+    .unwrap();
+    storage::jobs::create_job(
+        &pool,
+        1,
+        "Active Job".into(),
+        "prompt".into(),
+        nerdbot::scheduler::models::ScheduleType::OneShot,
+        None,
+    )
+    .await
+    .unwrap();
+
+    CommandHandler::handle(
+        TelegramCommand::Delete(deleted_job.id.clone()),
+        1,
+        1,
+        &pool,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
+        .await
+        .unwrap();
+    assert!(response.contains("Active Job"));
+    assert!(!response.contains("Deleted Job"));
+}
+
+#[tokio::test]
 async fn test_command_handler_delete_nonexistent_job() {
     let pool = setup_test_db().await;
 

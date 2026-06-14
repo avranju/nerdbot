@@ -236,17 +236,27 @@ impl Tool for ListJobs {
     fn input_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
-            "properties": {}
+            "properties": {
+                "include_disabled": {
+                    "type": "boolean",
+                    "description": "Set to true to include disabled/deleted jobs. Defaults to false, which returns active jobs only."
+                }
+            }
         })
     }
     async fn execute(
         &self,
-        _args: serde_json::Value,
+        args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
         let chat_id = ctx.run_mode.chat_id().ok_or_else(|| {
             AgentError::Generic("Can only list jobs from a valid Telegram chat session".into())
         })?;
+
+        let include_disabled = args
+            .get("include_disabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let pool = match ctx.pool {
             Some(p) => p,
@@ -260,11 +270,16 @@ impl Tool for ListJobs {
             }
         };
 
-        let jobs = crate::storage::jobs::list_jobs(&pool, chat_id, false).await?;
+        let jobs = crate::storage::jobs::list_jobs(&pool, chat_id, !include_disabled).await?;
         let summary = if jobs.is_empty() {
             "No scheduled jobs found.".to_string()
         } else {
-            let mut s = format!("Found {} scheduled jobs:\n", jobs.len());
+            let scope = if include_disabled {
+                "scheduled"
+            } else {
+                "active scheduled"
+            };
+            let mut s = format!("Found {} {} jobs:\n", jobs.len(), scope);
             for job in &jobs {
                 let status_str = if job.enabled { "active" } else { "disabled" };
                 let next_str = job

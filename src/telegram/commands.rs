@@ -150,27 +150,22 @@ impl CommandHandler {
     }
 
     async fn jobs(chat_id: i64, pool: &SqlitePool) -> Result<String, AgentError> {
-        let jobs = crate::storage::jobs::list_jobs(pool, chat_id, false).await?;
+        let jobs = crate::storage::jobs::list_jobs(pool, chat_id, true).await?;
 
         if jobs.is_empty() {
             return Ok("📋 You have no scheduled jobs.\n\nCreate a job by asking me to schedule something!".to_string());
         }
 
-        let mut response = String::from("📋 **Your Scheduled Jobs**\n\n");
+        let mut response = String::from("📋 **Your Active Scheduled Jobs**\n\n");
         for job in &jobs {
-            let status = if job.enabled {
-                "✅ active"
-            } else {
-                "❌ disabled"
-            };
             let next_run = job
                 .next_run_at
                 .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
                 .unwrap_or_else(|| "not scheduled".to_string());
 
             response.push_str(&format!(
-                "• **{}** (`{}`)\n  {}\n  Next: {}\n\n",
-                job.name, job.id, status, next_run
+                "• **{}** (`{}`)\n  ✅ active\n  Next: {}\n\n",
+                job.name, job.id, next_run
             ));
         }
         Ok(response)

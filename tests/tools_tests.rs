@@ -404,6 +404,16 @@ fn test_list_jobs_name() {
 }
 
 #[test]
+fn test_list_jobs_schema_supports_include_disabled() {
+    let tool = nerdbot::tools::schedule::ListJobs;
+    let schema = tool.input_schema();
+    assert_eq!(
+        schema["properties"]["include_disabled"]["type"].as_str(),
+        Some("boolean")
+    );
+}
+
+#[test]
 fn test_delete_job_name() {
     let tool = nerdbot::tools::schedule::DeleteJob;
     assert_eq!(tool.name(), "delete_job");

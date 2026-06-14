@@ -307,6 +307,65 @@ async fn test_scheduling_tools_and_wakeup_signaling() {
     assert!(!deleted_job.enabled);
 }
 
+#[tokio::test]
+async fn test_list_jobs_tool_can_include_disabled_jobs() {
+    let pool = setup_test_db().await;
+    let ctx = ToolContext {
+        run_mode: AgentRunMode::InteractiveReply {
+            chat_id: 123,
+            user_id: 456,
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        telegram_token: "test".into(),
+        allowed_chat_ids: vec![],
+        allowed_user_ids: vec![],
+        pool: Some(pool.clone()),
+        scheduler_notifier: None,
+    };
+
+    let disabled_job = storage::jobs::create_job(
+        &pool,
+        123,
+        "Disabled Job".into(),
+        "old prompt".into(),
+        ScheduleType::OneShot,
+        Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+    )
+    .await
+    .unwrap();
+    storage::jobs::disable_job(&pool, &disabled_job.id)
+        .await
+        .unwrap();
+    storage::jobs::create_job(
+        &pool,
+        123,
+        "Active Job".into(),
+        "new prompt".into(),
+        ScheduleType::OneShot,
+        Some(chrono::Utc::now() + chrono::Duration::hours(2)),
+    )
+    .await
+    .unwrap();
+
+    let tool = nerdbot::tools::schedule::ListJobs;
+    let active_only = tool
+        .execute(serde_json::json!({}), ctx.clone())
+        .await
+        .unwrap();
+    assert!(active_only.summary.contains("Active Job"));
+    assert!(!active_only.summary.contains("Disabled Job"));
+    assert_eq!(active_only.data.as_array().unwrap().len(), 1);
+
+    let all_jobs = tool
+        .execute(serde_json::json!({ "include_disabled": true }), ctx)
+        .await
+        .unwrap();
+    assert!(all_jobs.summary.contains("Active Job"));
+    assert!(all_jobs.summary.contains("Disabled Job"));
+    assert!(all_jobs.summary.contains("status: disabled"));
+    assert_eq!(all_jobs.data.as_array().unwrap().len(), 2);
+}
+
 // ── Test 4: Commands wiring and execution triggers ───────────────────────
 
 #[tokio::test]
