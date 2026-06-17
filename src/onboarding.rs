@@ -33,8 +33,15 @@ struct OnboardingAnswers {
     telegram_mode: String,
     telegram_token_env: String,
     web_hook_url: Option<String>,
-    telegram_host: String,
-    telegram_port: u16,
+    webhook_host: String,
+    webhook_port: u16,
+    zulip_enabled: bool,
+    zulip_mode: String,
+    zulip_web_hook_url: Option<String>,
+    zulip_bot_email_env: String,
+    zulip_api_key_env: String,
+    zulip_site_url: String,
+    zulip_webhook_token_env: String,
     allowed_conversations: Vec<String>,
     allowed_senders: Vec<String>,
     model: String,
@@ -92,23 +99,6 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    let telegram_host: String = if telegram_mode == "webhook" {
-        input("Local webhook bind host")
-            .default_input(&telegram_defaults.host)
-            .validate(|value: &String| required(value))
-            .interact()?
-    } else {
-        telegram_defaults.host.clone()
-    };
-    let telegram_port: String = if telegram_mode == "webhook" {
-        input("Local webhook bind port")
-            .default_input(&telegram_defaults.port.to_string())
-            .validate(|value: &String| validate_port(value))
-            .interact()?
-    } else {
-        telegram_defaults.port.to_string()
-    };
-
     note(
         "Finding a Telegram chat ID",
         "Send your bot a message in the target chat, then call the Telegram Bot API getUpdates method and read message.chat.id from the response.",
@@ -123,6 +113,96 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
             .default_input(&default_user_ids)
             .validate(|value: &String| validate_id_list(value))
             .interact()?;
+
+    // Zulip channel configuration
+    let zulip_enabled: bool = select("Enable Zulip channel?")
+        .item("yes", "Yes", "enable Zulip integration")
+        .item("no", "No", "skip Zulip setup")
+        .initial_value("no")
+        .interact()?
+        == "yes";
+
+    let zulip_mode = if zulip_enabled {
+        select("Zulip ingress mode")
+            .item("poll", "poll", "use Zulip event queue long polling")
+            .item("webhook", "webhook", "receive Zulip outgoing webhooks")
+            .initial_value("poll")
+            .interact()?
+            .to_string()
+    } else {
+        "poll".to_string()
+    };
+
+    let zulip_bot_email_env: String = if zulip_enabled {
+        input("Environment variable that holds your Zulip bot email")
+            .default_input("ZULIP_BOT_EMAIL")
+            .validate(|value: &String| required(value))
+            .interact()?
+    } else {
+        "ZULIP_BOT_EMAIL".to_string()
+    };
+
+    let zulip_api_key_env: String = if zulip_enabled {
+        input("Environment variable that holds your Zulip bot API key")
+            .default_input("ZULIP_BOT_API_KEY")
+            .validate(|value: &String| required(value))
+            .interact()?
+    } else {
+        "ZULIP_BOT_API_KEY".to_string()
+    };
+
+    let zulip_site_url: String = if zulip_enabled {
+        input("Zulip organization site URL (e.g., https://your-org.zulipchat.com)")
+            .default_input("")
+            .validate(move |value: &String| {
+                if zulip_enabled && value.trim().is_empty() {
+                    Err("Site URL is required when Zulip is enabled.".to_string())
+                } else {
+                    Ok(())
+                }
+            })
+            .interact()?
+    } else {
+        String::new()
+    };
+
+    let zulip_webhook_token_env: String = if zulip_enabled && zulip_mode == "webhook" {
+        input("Environment variable that holds the Zulip webhook verification token")
+            .default_input("ZULIP_WEBHOOK_TOKEN")
+            .validate(|value: &String| required(value))
+            .interact()?
+    } else {
+        "ZULIP_WEBHOOK_TOKEN".to_string()
+    };
+
+    let zulip_web_hook_url: Option<String> = if zulip_enabled && zulip_mode == "webhook" {
+        let zulip_defaults = &defaults.channels.zulip;
+        let zulip_web_hook_url: String = input("Public HTTPS Zulip webhook URL")
+            .default_input(zulip_defaults.web_hook_url.as_deref().unwrap_or(""))
+            .validate(|value: &String| validate_webhook_url(value))
+            .interact()?;
+        Some(zulip_web_hook_url)
+    } else {
+        None
+    };
+
+    let webhook_enabled = telegram_mode == "webhook" || (zulip_enabled && zulip_mode == "webhook");
+    let webhook_host: String = if webhook_enabled {
+        input("Shared webhook bind host")
+            .default_input(&defaults.webhook.host)
+            .validate(|value: &String| required(value))
+            .interact()?
+    } else {
+        defaults.webhook.host.clone()
+    };
+    let webhook_port: String = if webhook_enabled {
+        input("Shared webhook bind port")
+            .default_input(&defaults.webhook.port.to_string())
+            .validate(|value: &String| validate_port(value))
+            .interact()?
+    } else {
+        defaults.webhook.port.to_string()
+    };
 
     let provider = select("Choose your LLM provider")
         .item(LlmProvider::OpenAi, "OpenAI", "models such as gpt-4o")
@@ -217,8 +297,15 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
         telegram_mode: telegram_mode.into(),
         telegram_token_env,
         web_hook_url,
-        telegram_host,
-        telegram_port: telegram_port.parse()?,
+        webhook_host,
+        webhook_port: webhook_port.parse()?,
+        zulip_enabled,
+        zulip_mode,
+        zulip_web_hook_url,
+        zulip_bot_email_env,
+        zulip_api_key_env,
+        zulip_site_url,
+        zulip_webhook_token_env,
         allowed_conversations: parse_id_list(&allowed_chat_ids)?
             .into_iter()
             .map(|id| id.to_string())
@@ -237,9 +324,17 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
 
     write_config(config_path, &answers)?;
     outro(format!(
-        "Wrote {}. Export {} and your LLM provider API key before starting NerdBot.",
+        "Wrote {}. Export {}{} and your LLM provider API key before starting NerdBot.",
         config_path.display(),
-        answers.telegram_token_env
+        answers.telegram_token_env,
+        if answers.zulip_enabled {
+            format!(
+                ", {} and {}",
+                answers.zulip_bot_email_env, answers.zulip_api_key_env
+            )
+        } else {
+            String::new()
+        }
     ))?;
     Ok(())
 }
@@ -277,11 +372,6 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
         Value::String(answers.telegram_token_env.clone()),
     );
     set_optional_string(telegram, "web_hook_url", answers.web_hook_url.as_deref());
-    telegram.insert("host".into(), Value::String(answers.telegram_host.clone()));
-    telegram.insert(
-        "port".into(),
-        Value::Integer(i64::from(answers.telegram_port)),
-    );
     telegram
         .entry("poll_interval_secs")
         .or_insert_with(|| Value::Integer(DEFAULT_TELEGRAM_POLL_INTERVAL_SECS as i64));
@@ -292,6 +382,35 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
     telegram.insert(
         "allowed_senders".into(),
         string_array(&answers.allowed_senders),
+    );
+
+    // Zulip channel config
+    let zulip = table_mut(channels, "zulip")?;
+    zulip.insert("enabled".into(), Value::Boolean(answers.zulip_enabled));
+    zulip.insert("ingress".into(), Value::String(answers.zulip_mode.clone()));
+    zulip.insert(
+        "bot_email_env".into(),
+        Value::String(answers.zulip_bot_email_env.clone()),
+    );
+    zulip.insert(
+        "api_key_env".into(),
+        Value::String(answers.zulip_api_key_env.clone()),
+    );
+    set_optional_string(zulip, "site_url", Some(&answers.zulip_site_url));
+    zulip.insert(
+        "web_hook_token_env".into(),
+        Value::String(answers.zulip_webhook_token_env.clone()),
+    );
+    set_optional_string(zulip, "web_hook_url", answers.zulip_web_hook_url.as_deref());
+    zulip
+        .entry("poll_interval_secs")
+        .or_insert_with(|| Value::Integer(2));
+
+    let webhook = table_mut(root, "webhook")?;
+    webhook.insert("host".into(), Value::String(answers.webhook_host.clone()));
+    webhook.insert(
+        "port".into(),
+        Value::Integer(i64::from(answers.webhook_port)),
     );
 
     table_mut(root, "workspace")?
@@ -411,8 +530,9 @@ fn validate_port(value: &str) -> Result<(), String> {
 }
 
 fn validate_webhook_url(value: &str) -> Result<(), String> {
-    required(value)?;
-    let parsed = Url::parse(value.trim()).map_err(|_| "Use a valid HTTPS URL.".to_string())?;
+    let trimmed = value.trim();
+    required(trimmed)?;
+    let parsed = Url::parse(trimmed).map_err(|_| "Use a valid HTTPS URL.".to_string())?;
     if parsed.scheme() != "https" {
         return Err("Webhook URL must use https.".to_string());
     }
@@ -443,8 +563,15 @@ mod tests {
             telegram_mode: "webhook".into(),
             telegram_token_env: "BOT_TOKEN".into(),
             web_hook_url: Some("https://example.test/telegram/webhook".into()),
-            telegram_host: "0.0.0.0".into(),
-            telegram_port: 24_683,
+            webhook_host: "0.0.0.0".into(),
+            webhook_port: 24_683,
+            zulip_enabled: false,
+            zulip_mode: "poll".into(),
+            zulip_web_hook_url: None,
+            zulip_bot_email_env: "ZULIP_BOT_EMAIL".into(),
+            zulip_api_key_env: "ZULIP_BOT_API_KEY".into(),
+            zulip_site_url: String::new(),
+            zulip_webhook_token_env: "ZULIP_WEBHOOK_TOKEN".into(),
             allowed_conversations: vec!["123".into()],
             allowed_senders: vec!["456".into()],
             model: "custom-model".into(),
@@ -472,8 +599,8 @@ mod tests {
             config.channels.telegram.web_hook_url.as_deref(),
             Some("https://example.test/telegram/webhook")
         );
-        assert_eq!(config.channels.telegram.host, "0.0.0.0");
-        assert_eq!(config.channels.telegram.port, 24_683);
+        assert_eq!(config.webhook.host, "0.0.0.0");
+        assert_eq!(config.webhook.port, 24_683);
         assert_eq!(
             config.channels.telegram.poll_interval_secs,
             DEFAULT_TELEGRAM_POLL_INTERVAL_SECS
@@ -521,8 +648,15 @@ poll_interval_secs = 11
             telegram_mode: "poll".into(),
             telegram_token_env: "BOT_TOKEN".into(),
             web_hook_url: None,
-            telegram_host: "127.0.0.1".into(),
-            telegram_port: 24_682,
+            webhook_host: "127.0.0.1".into(),
+            webhook_port: 24_682,
+            zulip_enabled: false,
+            zulip_mode: "poll".into(),
+            zulip_web_hook_url: None,
+            zulip_bot_email_env: "ZULIP_BOT_EMAIL".into(),
+            zulip_api_key_env: "ZULIP_BOT_API_KEY".into(),
+            zulip_site_url: String::new(),
+            zulip_webhook_token_env: "ZULIP_WEBHOOK_TOKEN".into(),
             allowed_conversations: vec![],
             allowed_senders: vec![],
             model: "new-model".into(),
@@ -539,8 +673,8 @@ poll_interval_secs = 11
         assert_eq!(config.agent.name, "updated-name");
         assert_eq!(config.channels.telegram.ingress, TelegramIngress::Poll);
         assert_eq!(config.channels.telegram.web_hook_url, None);
-        assert_eq!(config.channels.telegram.host, "127.0.0.1");
-        assert_eq!(config.channels.telegram.port, 24_682);
+        assert_eq!(config.webhook.host, "127.0.0.1");
+        assert_eq!(config.webhook.port, 24_682);
         assert_eq!(config.channels.telegram.poll_interval_secs, 11);
         assert_eq!(config.llm.model, "new-model");
         assert_eq!(config.llm.temperature, 0.7);

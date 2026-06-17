@@ -18,6 +18,9 @@ pub enum AgentError {
     #[error("Telegram error: {0}")]
     Telegram(String),
 
+    #[error("Zulip error: {0}")]
+    Zulip(String),
+
     #[error("Storage error: {0}")]
     Storage(String),
 

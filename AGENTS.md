@@ -2,7 +2,7 @@
 
 **NerdBot** is a minimal, self-hosted AI agent runtime written in Rust (Edition 2024).
 It runs as a single binary (Docker-friendly) and communicates with users through
-pluggable communication channels. Telegram is the first channel adapter.
+pluggable communication channels. Telegram and Zulip are supported channel adapters.
 The core loop: channel message → agent loop (LLM proposes tool calls → Rust harness
 executes them → results fed back → repeat) → channel reply.
 
@@ -11,7 +11,7 @@ executes them → results fed back → repeat) → channel reply.
 - **Async runtime:** Tokio (multi-thread, macros, signal, process, time)
 - **Database:** SQLite via `sqlx` with `migrate` feature
 - **LLM abstraction:** `genai` crate (supports OpenAI, Anthropic, Gemini, OpenRouter, custom OpenAI-compatible endpoints)
-- **Channels:** Generic channel abstraction; Telegram supports long polling or webhook push via axum
+- **Channels:** Generic channel abstraction; Telegram and Zulip each support long polling or webhook push via a shared axum webhook server
 - **Web search:** Exa API
 - **Config:** TOML files + environment variables
 - **Logging:** `tracing` + `tracing-subscriber` with `env-filter`
@@ -23,11 +23,12 @@ executes them → results fed back → repeat) → channel reply.
 ### Source Layout
 ```
 src/
-  main.rs          — CLI entry, channel registry/service wiring, Telegram poll/webhook ingress dispatch
+  main.rs          — CLI entry plus startup helpers: tracing/config load, runtime construction, channel registry/service wiring, scheduler/diagnostics startup, and Telegram/Zulip ingress loop dispatch
   lib.rs           — Crate root, re-exports all modules for tests and binary crate
-  config.rs        — TOML config loader (AppConfig with agent/channels/storage/workspace/llm/context/scheduler/shell/files/exa sections)
+  config.rs        — TOML config loader (AppConfig with agent/webhook/channels/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   onboarding.rs    — Interactive `config.toml` generator for first-run setup
   error.rs         — AgentError enum + domain-specific error types
+  webhook.rs       — Shared Axum webhook server for Telegram/Zulip push ingress routes and `/health`
 
   agent/
     mod.rs
@@ -58,7 +59,17 @@ src/
     update/
       mod.rs       — TelegramUpdate trait and ingress implementation exports
       poll.rs      — TelegramPoll getUpdates implementation
-      hook.rs      — TelegramHook axum webhook + mpsc channel implementation
+      hook.rs      — TelegramHook queue-backed webhook ingress; shared HTTP server validates/enqueues updates
+
+  zulip/
+    mod.rs         — Exports ZulipBot, ZulipService, ZulipPoll, ZulipHook
+    bot.rs         — Zulip HTTP API client (Basic auth, send_message, register_queue, get_events, download_file)
+    attachment.rs  — Regex extraction of user-upload markdown links, MIME classification, bounded download, LLM content conversion
+    service.rs     — ZulipService: send_message with 10K char splitting, typing indicators (PMs only), ChannelService implementation
+    update/
+      mod.rs       — Zulip ingress module entrypoint plus ZulipUpdate raw-message trait
+      poll.rs      — ZulipPoll: event queue registration, long-polling loop, BAD_EVENT_QUEUE_ID recovery, raw message buffering
+      hook.rs      — ZulipHook queue-backed webhook ingress; shared HTTP server validates/enqueues payloads
 
   scheduler/
     mod.rs
@@ -125,7 +136,7 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Telegram message with attachments (rich ingress):**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, configures the Telegram slash-command menu via `setMyCommands`, and registers TelegramService in ChannelRegistry under channel_id `telegram`. `[channels.telegram].ingress = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[channels.telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[channels.telegram].ingress = "webhook"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[channels.telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, configures the Telegram slash-command menu via `setMyCommands`, and registers TelegramService in ChannelRegistry under channel_id `telegram`. `[channels.telegram].ingress = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[channels.telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[channels.telegram].ingress = "webhook"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and uses the shared plain HTTP webhook server on `[webhook].host`/`port` (default `127.0.0.1:24682`) to validate `X-Telegram-Bot-Api-Secret-Token` and enqueue updates. The same server exposes `/health` and can also host Zulip webhook routes.
 1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
@@ -148,7 +159,7 @@ README.md          — Project documentation
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
 2. If the config file exists, load it and use its current values as prompt defaults
-3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, Telegram ingress (`poll` or `webhook`), webhook URL/host/port when applicable, conversation/sender allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
+3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, Telegram ingress (`poll` or `webhook`), Telegram webhook URL when applicable, Zulip enable/disable, Zulip bot email/API key env vars, Zulip site URL, Zulip ingress mode, shared webhook host/port when any webhook ingress is enabled, conversation/sender allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
 4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, use `AppConfig` defaults for omitted settings in a new file, and clear `[channels.telegram].web_hook_url` when onboarding is set back to poll mode
 
 **Custom OpenAI-compatible LLM endpoint:**
@@ -166,6 +177,23 @@ README.md          — Project documentation
 7. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 8. Persists current user message and assistant reply → sends through ChannelRegistry
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
+
+**Interactive Zulip message:**
+0. ZulipBot authenticates via Basic auth (bot_email + api_key), normalizes site_url with trailing slash. Zulip supports two ingress modes:
+   - **Poll**: POST `/api/v1/register` to get queue_id, then loop GET `/api/v1/events` with `dont_block=false`; on `BAD_EVENT_QUEUE_ID`, re-register. Poll interval controlled by `[channels.zulip].poll_interval_secs` (default 2s).
+   - **Webhook**: `[channels.zulip].web_hook_url` (required; public HTTPS Zulip webhook URL) — path is extracted from this URL (mirroring Telegram's pattern). The shared plain HTTP webhook server on `[webhook].host`/`port` validates `token` field against `web_hook_token_env`, queues accepted payloads, replies to Zulip with `{"response_not_required": true}`, and sends the eventual bot response asynchronously through Zulip's REST API rather than in the webhook HTTP response.
+1. Polling or webhook push receives Zulip message event
+2. Ingress handler strips bot mentions (`@**BotName** ` pattern) from message text
+3. Extracts user-upload attachments from markdown links (`[filename](/user_uploads/...)`), downloads via authenticated GET, classifies as binary (images) or text documents
+4. ChannelMessageHandler checks channel-qualified access policy
+5. Ensures channel-qualified chat session exists (creates if new)
+6. Routes: if `/command` → CommandHandler, else → agent loop
+7. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget
+8. Starts a channel typing indicator when supported (Zulip typing is direct-message-only, refreshed every 8 seconds, and stopped with a best-effort `op = "stop"` when the agent run finishes). For direct-message typing notifications, NerdBot keeps the stable conversation/session identity as sorted participant emails but caches numeric Zulip user IDs from inbound `display_recipient` payloads because `/api/v1/typing` requires `type = "direct"` and integer user IDs in the `to` array.
+9. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text; typing refresh stops as soon as the run returns
+10. Outbound messages split at 10,000 chars via `ZulipService::send_message`
+11. Persists current user message and assistant reply → sends through ChannelRegistry
+12. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job
@@ -207,7 +235,9 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
-- `[channels.telegram]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for webhook), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_conversations, allowed_senders, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[webhook]` — host/port for the shared local webhook server used by Telegram and/or Zulip webhook ingress (default `127.0.0.1:24682`)
+- `[channels.telegram]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for webhook), allowed_conversations, allowed_senders, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[channels.zulip]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_email_env (default `ZULIP_BOT_EMAIL`), api_key_env (default `ZULIP_BOT_API_KEY`), site_url (required), web_hook_token_env (default `ZULIP_WEBHOOK_TOKEN`), web_hook_url (required for webhook; public HTTPS Zulip webhook URL), poll_interval_secs (default 2), allowed_conversations (ConversationAddressPattern with stream names and optional topics), allowed_senders (email addresses), max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
@@ -230,7 +260,7 @@ README.md          — Project documentation
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,
-Telegram, Storage, Config, MaxToolIterationsExceeded, Context, Scheduler, WebSearch,
+Telegram, Zulip, Storage, Config, MaxToolIterationsExceeded, Context, Scheduler, WebSearch,
 WebFetch, FileIo, SandboxViolation, TokenEstimation, Compaction, PermissionDenied,
 Timeout, Generic.
 
@@ -265,12 +295,12 @@ Standing instructions and behavior rules that **must** be followed by any AI age
 ## Channel Access Policy
 * NerdBot uses a channel-aware access policy system: `ChannelAccessPolicy` groups `allowed_conversations` (a list of `ConversationAddressPattern`) and `allowed_senders`.
 * `ConversationAddressPattern` includes `channel_id`, `conversation_id`, and `thread_id`. A pattern with `thread_id: None` matches any thread (wildcard); `Some(id)` requires exact thread match.
-* `AppConfig.channels.access_policy_for(channel_id)` derives the policy for a channel from its config. Currently only `"telegram"` is supported — it maps `[channels.telegram].allowed_conversations` to channel-qualified patterns.
+* `AppConfig.channels.access_policy_for(channel_id)` derives the policy for a channel from its config. Supports `"telegram"` (maps `[channels.telegram].allowed_conversations` to channel-qualified patterns) and `"zulip"` (passes through `[channels.zulip].allowed_conversations` as-is, which are already ConversationAddressPattern structs with stream names and optional topic thread_ids).
 * The interactive handler (`ChannelMessageHandler`) derives the policy from the inbound message's `address.channel_id`.
 * The scheduler derives the policy from the job's `owner_address().channel_id` before running it.
 * `AgentContext` and `ToolContext` carry a single `access_policy: ChannelAccessPolicy` field (replacing the old flat `allowed_conversations: Vec<String>` / `allowed_senders: Vec<String>`).
 * `send_user_message` enforces the policy against the full `ConversationAddress` — same conversation ID on a different channel is rejected.
-* Telegram config shape is preserved: `allowed_conversations = ["123"]` becomes a channel-qualified pattern internally.
+* Telegram config shape is preserved: `allowed_conversations = ["123"]` becomes a channel-qualified pattern internally. Zulip uses full `ConversationAddressPattern` structs directly (e.g., `{ channel_id = "zulip", conversation_id = "general" }` for all topics in stream, or `{ channel_id = "zulip", conversation_id = "engineering", thread_id = "alerts" }` for a specific topic).
 
 ## Session Continuity
 * After completing a feature, fix, or any significant change, **update this AGENTS.md file** to reflect the new state of the codebase. Add or modify sections in "Project Overview" → "Source Layout" or "Runtime Flows" as needed so the next coding session can build context by scanning this file without exploring the codebase.

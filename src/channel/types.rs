@@ -206,6 +206,8 @@ pub struct ChannelInboundEvent {
 pub struct ChannelConfig {
     #[serde(default)]
     pub telegram: crate::config::TelegramChannelConfig,
+    #[serde(default)]
+    pub zulip: crate::config::ZulipChannelConfig,
 }
 
 impl ChannelConfig {
@@ -229,6 +231,13 @@ impl ChannelConfig {
                 ChannelAccessPolicy {
                     allowed_conversations,
                     allowed_senders: telegram.allowed_senders.clone(),
+                }
+            }
+            "zulip" => {
+                let zulip = &self.zulip;
+                ChannelAccessPolicy {
+                    allowed_conversations: zulip.allowed_conversations.clone(),
+                    allowed_senders: zulip.allowed_senders.clone(),
                 }
             }
             _ => ChannelAccessPolicy::default(),

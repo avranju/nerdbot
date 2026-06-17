@@ -11,6 +11,13 @@ personality_file = "/config/personality.md"
 max_tool_iterations = 10
 default_timezone = "UTC"
 
+# ── Webhook Server ─────────────────────────────────────────────────
+# Shared local plain-HTTP listener used when any channel uses webhook ingress.
+# TLS, DNS, and reverse proxy/tunnel termination are expected outside NerdBot.
+[webhook]
+host = "127.0.0.1"
+port = 24682
+
 # ── Channels / Telegram ───────────────────────────────────────────
 [channels.telegram]
 enabled = true
@@ -20,10 +27,7 @@ poll_interval_secs = 5 # Sleep after an empty getUpdates response in poll mode
 # Required when ingress = "webhook"; register this public URL with Telegram.
 # NerdBot's webhook listener is plain HTTP; TLS, DNS, and reverse proxy/tunnel
 # termination are expected outside NerdBot.
-# web_hook_url = "https://example.com/telegram/webhook"
-# Local plain-HTTP webhook bind address used only when ingress = "webhook".
-host = "127.0.0.1"
-port = 24682
+# web_hook_url = "https://example.com/telegram/hook"
 # Allowed channel-specific conversation IDs. Telegram conversation/chat IDs are strings here.
 # Leave empty to allow all conversations (development mode).
 allowed_conversations = []
@@ -36,6 +40,42 @@ max_attachment_bytes = 5242880
 # Maximum number of characters when extracting text from text documents.
 # Text documents exceeding this limit are truncated with a notice.
 max_text_document_chars = 32768
+
+# ── Channels / Zulip ──────────────────────────────────────────────
+# Uncomment and fill in to enable Zulip integration.
+# Zulip uses Basic authentication (bot email + API key) instead of a single token.
+# [channels.zulip]
+# enabled = false
+# ingress = "poll" # "poll" for event queue long polling, "webhook" for Zulip outgoing webhooks
+# Environment variable containing the bot's email address (e.g. name-bot@org.zulipchat.com).
+# bot_email_env = "ZULIP_BOT_EMAIL"
+# Environment variable containing the bot's 32-character hex API key.
+# api_key_env = "ZULIP_BOT_API_KEY"
+# Base URL of the Zulip server (required when enabled).
+# site_url = "https://your-org.zulipchat.com"
+# Required when ingress = "webhook" — the verification token configured in Zulip's outgoing webhook settings.
+# web_hook_token_env = "ZULIP_WEBHOOK_TOKEN"
+# Required when ingress = "webhook" — register this public URL with Zulip's outgoing webhook settings.
+# NerdBot's webhook listener is plain HTTP; TLS, DNS, and reverse proxy/tunnel
+# termination are expected outside NerdBot.
+# web_hook_url = "https://example.com/zulip/hook"
+# Sleep duration after an empty events response in poll mode (seconds).
+# poll_interval_secs = 2
+# Allowed Zulip conversations using ConversationAddressPattern syntax.
+# conversation_id matches stream name; thread_id matches topic name.
+# thread_id = None (omitted) matches all topics in a stream.
+# Leave empty to allow all streams and senders (development mode).
+# allowed_conversations = [
+#     { channel_id = "zulip", conversation_id = "general" },
+#     { channel_id = "zulip", conversation_id = "engineering", thread_id = "alerts" },
+# ]
+# Allowed Zulip sender email addresses.
+# Leave empty to allow all senders (development mode).
+# allowed_senders = []
+# Maximum download size for Zulip attachments in bytes.
+# max_attachment_bytes = 5242880
+# Maximum number of characters when extracting text from text documents.
+# max_text_document_chars = 32768
 
 # ── Storage ───────────────────────────────────────────────────────
 [storage]

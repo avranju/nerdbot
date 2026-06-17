@@ -133,6 +133,77 @@ impl ChannelMessageHandler {
         }
     }
 
+    /// Handle a Zulip message with two-phase processing: resolve address, check access policy,
+    /// then download and process attachments. This ensures unauthorized senders never trigger
+    /// attachment downloads.
+    #[instrument(
+        skip(self, msg, bot),
+        fields(
+            message_id = msg.id,
+            sender = msg.sender_email,
+            channel_id = "zulip",
+        )
+    )]
+    pub async fn handle_zulip_message(
+        &self,
+        msg: &crate::zulip::bot::ZulipMessage,
+        bot: &crate::zulip::bot::ZulipBot,
+        bot_email: &str,
+        max_attachment_bytes: usize,
+        max_text_document_chars: usize,
+    ) -> Result<(), AgentError> {
+        // Phase 1: Resolve address and sender without downloading attachments
+        let (address, sender_email, sender_full_name, content) =
+            crate::zulip::update::resolve_zulip_message(msg, bot_email);
+        if address.thread_id.is_none() {
+            bot.cache_typing_recipient_ids(
+                &address.conversation_id,
+                crate::zulip::update::resolve_zulip_private_recipient_ids(msg, bot_email),
+            );
+        }
+
+        // Skip messages sent by the bot itself
+        if sender_email == bot_email {
+            debug!(message_id = msg.id, "skipping Zulip message sent by bot");
+            return Ok(());
+        }
+
+        let sender = SenderIdentity::new(sender_email, Some(sender_full_name));
+
+        // Phase 2: Check access policy BEFORE downloading attachments
+        self.check_allowlist(&address, &sender)?;
+
+        // Phase 3: Download and process attachments (only if access is allowed)
+        let (clean_text, attachment_parts, attachments) =
+            crate::zulip::attachment::process_inbound_attachments(
+                &content,
+                bot,
+                max_attachment_bytes,
+                max_text_document_chars,
+            )
+            .await?;
+
+        // Strip bot mentions
+        let bot_name = bot.bot_name();
+        let clean_text = crate::zulip::update::strip_bot_mention(&clean_text, &bot_name);
+
+        let inbound = InboundMessage {
+            text: clean_text,
+            attachments,
+            attachment_parts,
+        };
+
+        match self.handle_rich_message(&address, &sender, &inbound).await {
+            Ok(Some(response)) => {
+                self.channel_registry
+                    .send_message(&address, OutboundMessage::markdown(response))
+                    .await
+            }
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     fn check_allowlist(
         &self,
         address: &ConversationAddress,

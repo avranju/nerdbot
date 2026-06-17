@@ -16,4 +16,6 @@ pub mod storage;
 pub mod telegram;
 pub mod tools;
 pub mod web;
+pub mod webhook;
 pub mod workspace;
+pub mod zulip;

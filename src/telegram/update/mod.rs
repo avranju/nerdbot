@@ -1,8 +1,8 @@
 //! Telegram update ingress implementations.
 //!
 //! This module keeps transport-specific update retrieval out of the main
-//! application loop. Polling uses Telegram's `getUpdates`; webhook push uses
-//! a local axum server that forwards validated updates into an async channel.
+//! application loop. Polling uses Telegram's `getUpdates`; webhook push
+//! consumes validated updates queued by the shared webhook server.
 
 use async_trait::async_trait;
 

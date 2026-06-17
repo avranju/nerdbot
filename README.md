@@ -2,11 +2,11 @@
 
 A minimal, self-hosted AI agent runtime written in Rust.
 
-NerdBot communicates with users through pluggable **communication channels**. Telegram is the first channel adapter and supports both long-polling and webhook ingress. NerdBot uses an **iterative tool-calling loop** driven by multiple LLM providers (OpenAI, Anthropic, Gemini, OpenRouter, and any OpenAI-compatible endpoint), and persists all conversation state and scheduled jobs in **SQLite**.
+NerdBot communicates with users through pluggable **communication channels**. Both **Telegram** and **Zulip** are supported channel adapters, each offering long-polling and webhook ingress modes. NerdBot uses an **iterative tool-calling loop** driven by multiple LLM providers (OpenAI, Anthropic, Gemini, OpenRouter, and any OpenAI-compatible endpoint), and persists all conversation state and scheduled jobs in **SQLite**.
 
 ## Features
 
-- **Communication channels** — channel-qualified conversations with Telegram polling/webhook support and room for future adapters such as Zulip
+- **Communication channels** — pluggable adapters for Telegram and Zulip, each supporting long-polling and webhook ingress with channel-qualified access control
 - **Iterative tool loop** — the harness owns orchestration; the LLM proposes tool calls, Rust validates and executes them, and the loop continues until completion
 - **Built-in tools** — scheduling, user messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
@@ -14,6 +14,7 @@ NerdBot communicates with users through pluggable **communication channels**. Te
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
 - **Single binary, Docker-friendly** — multi-stage build, non-root runtime user, no external services required
 - **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. Supported formats: JPEG, PNG, WebP, GIF, PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
+- **Zulip attachments** — user-uploaded files embedded as markdown links in Zulip messages are extracted, downloaded via authenticated API calls, and forwarded to the LLM as base64 (images) or extracted text (documents). Supported formats: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, rs, etc.).
 
 ## Quickstart
 
@@ -36,6 +37,7 @@ During onboarding:
 
 - Choose `poll` for Telegram ingress mode.
 - Enter the environment variable name that will hold your Telegram token, usually `TELEGRAM_BOT_TOKEN`.
+- (Optional) Enable the Zulip channel and configure its ingress mode, bot email/API key environment variables, Zulip server URL, and access allowlists.
 - Choose your LLM provider and model.
 - Enter the environment variable name for your LLM API key, such as `OPENAI_API_KEY`, when your provider requires one.
 - Enter `EXA_API_KEY` for Exa if you want web search, or leave it blank if not.
@@ -59,7 +61,9 @@ Then export the secrets named in `config.toml` and start the bot:
 export TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
 export OPENAI_API_KEY="your-llm-api-key"     # use the env var/provider you configured
 export EXA_API_KEY="your-exa-api-key"        # optional
-
+# For Zulip (if enabled):
+# export ZULIP_BOT_EMAIL="name-bot@org.zulipchat.com"
+# export ZULIP_BOT_API_KEY="your-32-char-hex-key"
 cargo run
 ```
 
@@ -71,6 +75,7 @@ Open Telegram, send a message to your bot, and you should get a reply.
 
 - A Rust toolchain for local development, or Docker and Docker Compose for deployment
 - A Telegram bot token ([@BotFather](https://t.me/BotFather))
+- (Optional) A Zulip bot email and API key — create a bot user in your Zulip organization and generate an API key via the Zulip web UI
 - (Optional) An Exa API key for web search
 
 ### Local Development
@@ -83,6 +88,9 @@ cargo run -- onboard
 export TELEGRAM_BOT_TOKEN="your-bot-token-here"
 export OPENAI_API_KEY="your-openai-key-here"  # when using OpenAI
 export EXA_API_KEY="your-exa-key-here"  # optional
+# For Zulip (if enabled):
+# export ZULIP_BOT_EMAIL="name-bot@org.zulipchat.com"
+# export ZULIP_BOT_API_KEY="your-32-char-hex-key"
 
 # 3. Run
 cargo run
@@ -103,6 +111,9 @@ cp personality.md.example config/personality.md
 # 3. Set environment variables
 export TELEGRAM_BOT_TOKEN="your-bot-token-here"
 export EXA_API_KEY="your-exa-key-here"  # optional
+# For Zulip (if enabled):
+# export ZULIP_BOT_EMAIL="name-bot@org.zulipchat.com"
+# export ZULIP_BOT_API_KEY="your-32-char-hex-key"
 
 # 4. Start
 docker compose up -d
@@ -170,16 +181,27 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `personality_file` | Path to the personality Markdown file (default: `/config/personality.md`) |
 | | `max_tool_iterations` | Maximum tool-call loop iterations per request (default: `10`) |
 | | `default_timezone` | Default IANA timezone for agent behavior |
+| `[webhook]` | `host` | Local plain-HTTP shared webhook bind host when any channel uses webhook ingress (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
+| | `port` | Local plain-HTTP shared webhook bind port when any channel uses webhook ingress (default: `24682`) |
 | `[channels.telegram]` | `enabled` | Enable the Telegram channel adapter (default: `true`) |
 | | `ingress` | Telegram ingress transport: `poll` or `webhook` (default: `poll`) |
 | | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
 | | `poll_interval_secs` | Seconds to sleep after an empty Telegram `getUpdates` response in poll mode (default: `5`) |
 | | `web_hook_url` | Public HTTPS webhook URL required when `ingress = "webhook"` |
-| | `host` | Local plain-HTTP webhook bind host for webhook mode (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
-| | `port` | Local plain-HTTP webhook bind port for webhook mode (default: `24682`) |
 | | `allowed_conversations` | List of Telegram conversation/chat IDs as strings (empty = all). Internally these become channel-qualified allowlist patterns for `channel_id = "telegram"` |
 | | `allowed_senders` | List of Telegram sender/user IDs as strings (empty = all) |
 | | `max_attachment_bytes` | Maximum download size for Telegram attachments in bytes (default: `5242880`, 5 MB) |
+| | `max_text_document_chars` | Max characters when extracting text from text documents (default: `32768`, 32 KB) |
+| `[channels.zulip]` | `enabled` | Enable the Zulip channel adapter (default: `false`) |
+| | `ingress` | Zulip ingress transport: `poll` (event queue) or `webhook` (outgoing webhook) (default: `poll`) |
+| | `bot_email_env` | Environment variable name for the Zulip bot email (default: `ZULIP_BOT_EMAIL`) |
+| | `api_key_env` | Environment variable name for the Zulip bot API key (default: `ZULIP_BOT_API_KEY`) |
+| | `site_url` | Base URL of the Zulip server (e.g., `https://your-org.zulipchat.com`); required when enabled |
+| | `web_hook_token_env` | Environment variable name for the webhook verification token (default: `ZULIP_WEBHOOK_TOKEN`) |
+| | `poll_interval_secs` | Seconds to sleep after an empty Zulip events response in poll mode (default: `2`) |
+| | `allowed_conversations` | List of `ConversationAddressPattern` objects with `channel_id`, `conversation_id` (stream name), and optional `thread_id` (topic name). Empty = all streams (default: `[]`) |
+| | `allowed_senders` | List of Zulip sender email addresses (empty = all) |
+| | `max_attachment_bytes` | Maximum download size for Zulip attachments in bytes (default: `5242880`, 5 MB) |
 | | `max_text_document_chars` | Max characters when extracting text from text documents (default: `32768`, 32 KB) |
 | `[storage]` | `sqlite_path` | Path to the SQLite database file |
 | `[workspace]` | `root` | Sandbox root for file tools |
@@ -210,7 +232,9 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |
 
-## Telegram Commands
+## Channel Commands
+
+Commands work identically across both Telegram and Zulip. In Zulip streams, prefix commands with a bot mention (e.g., `@**NerdBot** /help`).
 
 | Command | Description |
 |---------|-------------|
@@ -220,11 +244,71 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | `/run <job-id>` | Immediately execute a scheduled job |
 | `/delete <job-id>` | Delete a scheduled job |
 | `/reset_context` | Reset the conversation context for the current channel conversation |
+| `/new_topic` | Alias for `/reset_context` |
+
+## Zulip Integration
+
+NerdBot supports Zulip as a full-featured communication channel alongside Telegram. Zulip messages are mapped to NerdBot's generic conversation model:
+
+- **Stream messages** — `conversation_id` = stream name, `thread_id` = topic name
+- **Private messages** — `conversation_id` = sorted comma-separated participant email addresses
+
+### Zulip Setup
+
+1. Create a bot user in your Zulip organization and generate an API key from the bot's settings page.
+2. Note the bot's email address (e.g., `name-bot@org.zulipchat.com`).
+3. Enable the Zulip channel in `config.toml`:
+
+```toml
+[channels.zulip]
+enabled = true
+ingress = "poll"  # or "webhook" for push-based delivery
+bot_email_env = "ZULIP_BOT_EMAIL"
+api_key_env = "ZULIP_BOT_API_KEY"
+site_url = "https://your-org.zulipchat.com"
+# web_hook_token_env = "ZULIP_WEBHOOK_TOKEN"  # required when ingress = "webhook"
+allowed_conversations = [
+    { channel_id = "zulip", conversation_id = "general" },                    # All topics in "general"
+    { channel_id = "zulip", conversation_id = "engineering", thread_id = "alerts" },  # Only "alerts" topic
+]
+allowed_senders = []  # Empty = allow all senders
+```
+
+4. Export the Zulip credentials:
+
+```bash
+export ZULIP_BOT_EMAIL="name-bot@org.zulipchat.com"
+export ZULIP_BOT_API_KEY="your-32-char-hex-key"
+```
+
+### Zulip Ingress Modes
+
+**Poll mode** (default): NerdBot registers a Zulip event queue via `POST /api/v1/register` and polls `GET /api/v1/events` for new messages. The queue automatically refreshes when it expires.
+
+**Webhook mode**: NerdBot runs a shared local HTTP server configured by `[webhook]` that receives channel webhooks and exposes `/health`. Zulip outgoing webhooks should post to `/zulip/hook`. If Telegram webhook mode is enabled too, both Telegram and Zulip routes are served from the same `webhook.host`/`webhook.port`, so one reverse-proxy vhost can forward to one local listener. For example, use `https://nerdbot.example.com/telegram/hook` for Telegram and `https://nerdbot.example.com/zulip/hook` for Zulip. NerdBot acknowledges accepted Zulip webhook requests with `{"response_not_required": true}` and sends the actual bot reply asynchronously through Zulip's REST API.
+
+### Zulip Attachments
+
+Zulip embeds uploaded files as markdown links in message content (e.g., `[report.pdf](/user_uploads/1/99/abc/report.pdf)`). NerdBot automatically:
+
+1. Extracts these links using regex pattern matching
+2. Downloads files via the authenticated Zulip API
+3. Classifies them as binary (images) or text documents
+4. Forwards images as base64-encoded content and text documents as extracted text to the LLM
+5. Replaces attachment links in the message text with `[Attachment: filename]` placeholders
+
+### Zulip Typing Indicators
+
+Zulip typing indicators are supported for direct messages only (not streams). The bot caches numeric participant user IDs from inbound direct-message payloads because Zulip's typing endpoint requires user IDs and `type = "direct"`, while message sending can still use email recipients. NerdBot sends a typing refresh every 8 seconds while generating a response and sends `op = "stop"` when the agent run finishes.
+
+### Zulip Message Limits
+
+Zulip has a 10,000-character message limit. NerdBot automatically splits long responses into multiple messages when sending through the Zulip channel.
 
 ## Architecture
 
 ```
-Channel ingress (Telegram polling or webhook push)
+Channel ingress (Telegram/Zulip polling or webhook push)
     │
     ▼
 ChannelMessageHandler ──► Channel access policy ──► Session lookup
@@ -245,7 +329,7 @@ The Rust harness **owns orchestration**. The LLM proposes actions through tool c
 
 ```
 src/
-  main.rs              — CLI entry, channel registry/service wiring, Telegram ingress dispatch
+  main.rs              — CLI entry, runtime construction, channel wiring, scheduler/diagnostics startup, ingress dispatch
   config.rs            — TOML config loader
   onboarding.rs        — Interactive config.toml generator
   error.rs             — Error types
@@ -253,11 +337,13 @@ src/
   channel/             — Generic channel types, access policy, registry, and handler
   llm/                 — LLM client (via genai crate)
   telegram/            — Telegram bot, commands, service adapter, ingress, and attachments
+  zulip/               — Zulip bot, service adapter, attachment processing, ingress (poll + webhook)
   scheduler/           — Cron/one-shot job service
   tools/               — Built-in tools (echo, calculator, files, web, shell, etc.)
   context/             — Context budgeting, compaction service & worker
   storage/             — SQLite persistence (sessions, messages, summaries, jobs)
   web/                 — Web fetcher with SSRF protection, search backend
+  webhook.rs           — Shared Axum webhook server for Telegram/Zulip push ingress and /health
   workspace/           — Path sandboxing for file tools
 migrations/            — SQLx database migrations
 tests/                 — Integration tests
@@ -281,9 +367,12 @@ your-project/
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN` | Yes* | Telegram bot token from @BotFather (*required if Telegram is enabled) |
 | `OPENAI_API_KEY` | No | OpenAI API key (needed for default `gpt-4o` model) |
 | `EXA_API_KEY` | No | Exa API key for web search |
+| `ZULIP_BOT_EMAIL` | No* | Zulip bot email address (*required if Zulip is enabled) |
+| `ZULIP_BOT_API_KEY` | No* | Zulip bot API key (32-char hex string; *required if Zulip is enabled) |
+| `ZULIP_WEBHOOK_TOKEN` | No* | Zulip webhook verification token (*required if Zulip webhook ingress is enabled) |
 | `RUST_LOG` | No | Log level (e.g., `info`, `debug`, `warn`) |
 
 Any provider-specific API keys should also be set as environment variables and referenced via `api_key_env` in the config.

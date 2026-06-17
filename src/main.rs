@@ -8,16 +8,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
+use nerdbot::agent::personality::Personality;
 use nerdbot::channel::{
     AttachmentInfo, ChannelInboundEvent, ChannelMessageHandler, ChannelMessageHandlerInput,
-    ChannelRegistry, ConversationAddress, InboundMessage, SenderIdentity,
+    ChannelRegistry, ChannelService, ConversationAddress, InboundMessage, SenderIdentity,
 };
-use nerdbot::config::{AppConfig, TelegramChannelConfig, TelegramIngress};
+use nerdbot::config::{
+    AppConfig, TelegramChannelConfig, TelegramIngress, ZulipChannelConfig, ZulipIngress,
+};
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
 use nerdbot::context::compaction_worker::CompactionWorker;
+use nerdbot::diagnostics::server::DiagnosticsServer;
 use nerdbot::error::AgentError;
-use nerdbot::llm::LlmClient;
+use nerdbot::llm::{LlmClient, LlmExecutor};
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
@@ -34,7 +38,15 @@ use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::schedule::{DeleteJob, ListJobs, RunJobNow, ScheduleJob};
 use nerdbot::tools::shell::{ShellConfig, ShellExecute};
 use nerdbot::tools::web::{WebFetch, WebSearch};
+use nerdbot::webhook::{
+    TelegramWebhookRoute, WebhookServer, WebhookServerConfig, ZulipWebhookRoute,
+};
+use nerdbot::zulip::update::ZulipUpdate;
+use nerdbot::zulip::update::hook::ZulipWebhookPayload;
+use nerdbot::zulip::{ZulipBot, ZulipHook, ZulipPoll, ZulipService};
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 /// NerdBot — a minimal, self-hosted AI agent runtime.
 #[derive(Parser, Debug)]
@@ -95,52 +107,76 @@ enum DiagnosticsCommand {
 
 #[tokio::main]
 async fn main() {
-    // Initialize structured logging
+    init_tracing();
+
+    let cli = Cli::parse();
+
+    if let Some(command) = cli.command {
+        handle_cli_command(&cli.config, cli.diagnostics_socket.as_deref(), command).await;
+        return;
+    }
+
+    let config = match load_config(&cli.config) {
+        Ok(config) => config,
+        Err(e) => {
+            error!(error = %e, "invalid configuration");
+            return;
+        }
+    };
+
+    let runtime = match build_runtime(config, cli.diagnostics_socket).await {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            error!(error = %e, "failed to initialize runtime");
+            return;
+        }
+    };
+
+    run_runtime(runtime).await;
+}
+
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+}
 
-    let cli = Cli::parse();
-
-    if let Some(command) = cli.command {
-        match command {
-            Command::Onboard => {
-                if let Err(e) = nerdbot::onboarding::run(&cli.config) {
-                    error!(error = %e, "onboarding failed");
-                }
-            }
-            Command::Diagnostics(args) => {
-                let Some(socket_path) = cli.diagnostics_socket.as_deref() else {
-                    eprintln!("error: --diagnostics-socket <path> is required");
-                    std::process::exit(2);
-                };
-                if let Err(e) = run_diagnostics_command(socket_path, args).await {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
+async fn handle_cli_command(
+    config_path: &std::path::Path,
+    diagnostics_socket: Option<&std::path::Path>,
+    command: Command,
+) {
+    match command {
+        Command::Onboard => {
+            if let Err(e) = nerdbot::onboarding::run(config_path) {
+                error!(error = %e, "onboarding failed");
             }
         }
-        return;
+        Command::Diagnostics(args) => {
+            let Some(socket_path) = diagnostics_socket else {
+                eprintln!("error: --diagnostics-socket <path> is required");
+                std::process::exit(2);
+            };
+            if let Err(e) = run_diagnostics_command(socket_path, args).await {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
+}
 
-    info!(config_path = %cli.config.display(), "starting nerdbot");
+fn load_config(config_path: &std::path::Path) -> Result<AppConfig, AgentError> {
+    info!(config_path = %config_path.display(), "starting nerdbot");
 
-    // Load and validate configuration
-    let config = match AppConfig::from_file(&cli.config) {
-        Ok(c) => {
-            info!("configuration loaded");
-            c
-        }
-        Err(e) if !cli.config.exists() => {
+    let config = match AppConfig::from_file(config_path) {
+        Ok(config) => config,
+        Err(e) if !config_path.exists() => {
             tracing::warn!(error = %e, "no config file found, using defaults");
             AppConfig::default()
         }
-        Err(e) => {
-            error!(error = %e, "invalid configuration");
-            return;
-        }
+        Err(e) => return Err(e),
     };
 
     info!(
@@ -148,50 +184,119 @@ async fn main() {
         model = config.llm.model,
         "configuration loaded"
     );
+    Ok(config)
+}
 
-    // Initialize storage
-    let db = match Database::new(config.storage.sqlite_path.clone()).await {
-        Ok(db) => {
-            if let Err(e) = db.init().await {
-                error!(error = %e, "database migration failed");
-                return;
-            }
-            Arc::new(db)
-        }
-        Err(e) => {
-            error!(error = %e, "database connection failed");
-            return;
-        }
-    };
+struct AppRuntime {
+    scheduler: Arc<SchedulerService>,
+    diagnostics_server: Option<DiagnosticsServer>,
+    webhook_server: Option<WebhookServer>,
+    handler: Arc<ChannelMessageHandler>,
+    telegram: Option<TelegramRuntime>,
+    zulip: Option<ZulipRuntime>,
+}
 
-    let telegram_config = config.channels.telegram.clone();
-    if !telegram_config.enabled {
-        error!("No communication channels are enabled");
-        return;
+struct TelegramRuntime {
+    bot: Arc<TelegramBot>,
+    config: TelegramChannelConfig,
+    webhook: Option<TelegramWebhookRuntime>,
+}
+
+struct TelegramWebhookRuntime {
+    secret_token: String,
+    receiver: mpsc::Receiver<Update>,
+}
+
+struct ZulipRuntime {
+    bot: Arc<ZulipBot>,
+    config: ZulipChannelConfig,
+    webhook: Option<ZulipWebhookRuntime>,
+}
+
+struct ZulipWebhookRuntime {
+    receiver: mpsc::Receiver<ZulipWebhookPayload>,
+}
+
+async fn build_runtime(
+    config: AppConfig,
+    diagnostics_socket: Option<PathBuf>,
+) -> Result<AppRuntime, AgentError> {
+    ensure_channel_enabled(&config)?;
+
+    let db = init_storage(&config).await?;
+    let registry = build_tool_registry(&config);
+    let llm = build_llm(&config)?;
+    let compaction_service = build_compaction_service(&config, db.clone(), llm.clone());
+    let personality = Personality::from_config(&config);
+    let diagnostics_server = start_diagnostics_server(
+        diagnostics_socket,
+        db.clone(),
+        compaction_service.clone(),
+        config.clone(),
+        personality.clone(),
+        registry.clone(),
+    )
+    .await?;
+    let telegram = build_telegram_runtime(&config.channels.telegram).await?;
+    let zulip = build_zulip_runtime(&config.channels.zulip).await?;
+    let mut telegram = telegram;
+    let mut zulip = zulip;
+    let webhook_server = start_webhook_server(&config, telegram.as_mut(), zulip.as_mut()).await?;
+    let channel_registry = build_channel_registry(&telegram, &zulip);
+    let scheduler = build_scheduler(
+        db.clone(),
+        llm.clone(),
+        registry.clone(),
+        channel_registry.clone(),
+        config.clone(),
+        personality.clone(),
+    );
+    let handler = build_message_handler(MessageHandlerDeps {
+        db,
+        llm,
+        registry,
+        channel_registry,
+        config,
+        personality,
+        scheduler: scheduler.clone(),
+        compaction_service,
+    });
+
+    Ok(AppRuntime {
+        scheduler,
+        diagnostics_server,
+        webhook_server,
+        handler,
+        telegram,
+        zulip,
+    })
+}
+
+fn ensure_channel_enabled(config: &AppConfig) -> Result<(), AgentError> {
+    if !config.channels.telegram.enabled && !config.channels.zulip.enabled {
+        return Err(AgentError::Config(
+            "No communication channels are enabled".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn init_storage(config: &AppConfig) -> Result<Arc<Database>, AgentError> {
+    let db = Database::new(config.storage.sqlite_path.clone()).await?;
+    db.init().await?;
+    Ok(Arc::new(db))
+}
+
+async fn build_telegram_runtime(
+    config: &TelegramChannelConfig,
+) -> Result<Option<TelegramRuntime>, AgentError> {
+    if !config.enabled {
+        return Ok(None);
     }
 
-    // Initialize Telegram bot
-    let bot_token = match std::env::var(&telegram_config.bot_token_env) {
-        Ok(token) if !token.is_empty() => token,
-        Ok(_) => {
-            error!(
-                env_var = telegram_config.bot_token_env,
-                "Telegram bot token is empty"
-            );
-            return;
-        }
-        Err(_) => {
-            error!(
-                env_var = telegram_config.bot_token_env,
-                "Telegram bot token environment variable not set"
-            );
-            return;
-        }
-    };
+    let bot_token = required_env(&config.bot_token_env, "Telegram bot token")?;
+    let bot = Arc::new(TelegramBot::new(bot_token));
 
-    let bot = TelegramBot::new(bot_token.clone());
-
-    // Verify the bot token
     match bot.get_me().await {
         Ok(user) => {
             info!(
@@ -200,10 +305,7 @@ async fn main() {
                 "Telegram bot authenticated"
             );
         }
-        Err(e) => {
-            error!(error = %e, "Telegram bot authentication failed");
-            return;
-        }
+        Err(e) => return Err(e),
     }
 
     if let Err(e) = bot.set_my_commands(&TelegramCommand::menu_commands()).await {
@@ -213,7 +315,14 @@ async fn main() {
         );
     }
 
-    // Set up tool registry
+    Ok(Some(TelegramRuntime {
+        bot,
+        config: config.clone(),
+        webhook: None,
+    }))
+}
+
+fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
     registry.register(CalculatorTool);
@@ -222,13 +331,13 @@ async fn main() {
     registry.register(DeleteJob);
     registry.register(RunJobNow);
     registry.register(SendUserMessage);
+
     let file_config = FileConfig::from(config.files.clone());
     registry.register(ReadFile::new(file_config.clone()));
     registry.register(WriteFile::new(file_config.clone()));
     registry.register(AppendFile::new(file_config.clone()));
     registry.register(ListDirectory::new(file_config));
 
-    // Web tools — Exa-powered
     let exa_api_key = std::env::var(&config.exa.api_key_env).unwrap_or_default();
     if exa_api_key.is_empty() {
         warn!(
@@ -237,10 +346,7 @@ async fn main() {
         );
     }
     registry.register(WebSearch::new(exa_api_key.clone(), config.exa.max_results));
-    registry.register(WebFetch::new(
-        exa_api_key.clone(),
-        config.exa.max_text_chars,
-    ));
+    registry.register(WebFetch::new(exa_api_key, config.exa.max_text_chars));
 
     registry.register(ShellExecute::new(ShellConfig {
         allowed_commands: config.shell.allowed_commands.clone(),
@@ -250,139 +356,428 @@ async fn main() {
         sandbox_mode: config.shell.sandbox_mode.clone(),
         network_access: config.shell.network_access.clone(),
     }));
-    let registry = Arc::new(registry);
 
-    // Create the LLM client via genai
-    let llm = match LlmClient::from_config(&config) {
-        Ok(client) => {
-            info!(model = config.llm.model, "LLM client initialized via genai");
-            Arc::new(client)
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to create LLM client");
-            return;
-        }
-    };
+    Arc::new(registry)
+}
 
-    // Validate LLM model is configured (required for both agent and compaction).
+fn build_llm(config: &AppConfig) -> Result<Arc<dyn LlmExecutor>, AgentError> {
     if config.llm.model.is_empty() {
-        error!(
-            "LLM model not configured. Set llm.model in config.toml (e.g. gpt-4o, claude-sonnet-4-5)."
-        );
-        return;
+        return Err(AgentError::Config(
+            "LLM model not configured. Set llm.model in config.toml (e.g. gpt-4o, claude-sonnet-4-5).".to_string(),
+        ));
     }
 
-    // Initialize compaction service using the same LLM.
+    let client = LlmClient::from_config(config)?;
+    info!(model = config.llm.model, "LLM client initialized via genai");
+    Ok(Arc::new(client))
+}
+
+fn build_compaction_service(
+    config: &AppConfig,
+    db: Arc<Database>,
+    llm: Arc<dyn LlmExecutor>,
+) -> Arc<CompactionService> {
     let compaction_budget = ContextBudget::from_llm_and_context(&config.llm, &config.context);
     let compaction_worker = CompactionWorker::new_with_preserve(
-        llm.clone(),
+        llm,
         config.llm.model.clone(),
         config.llm.temperature,
         config.context.recent_turns_to_preserve,
     );
-    let compaction_service = Arc::new(CompactionService::new(
+
+    Arc::new(CompactionService::new(
         db.pool().clone(),
         Arc::new(compaction_worker),
         compaction_budget,
         config.context.recent_turns_to_preserve,
-    ));
-    let personality = nerdbot::agent::personality::Personality::from_config(&config);
-    let mut diagnostics_server = match cli.diagnostics_socket {
-        Some(socket_path) => {
-            match nerdbot::diagnostics::server::DiagnosticsServer::start(
-                socket_path,
-                db.pool().clone(),
-                compaction_service.clone(),
-                config.clone(),
-                personality.clone(),
-                registry.clone(),
-            )
-            .await
-            {
-                Ok(server) => Some(server),
-                Err(e) => {
-                    error!(error = %e, "failed to start diagnostics service");
-                    return;
-                }
-            }
-        }
-        None => None,
+    ))
+}
+
+async fn start_diagnostics_server(
+    socket_path: Option<PathBuf>,
+    db: Arc<Database>,
+    compaction_service: Arc<CompactionService>,
+    config: AppConfig,
+    personality: Personality,
+    registry: Arc<ToolRegistry>,
+) -> Result<Option<DiagnosticsServer>, AgentError> {
+    let Some(socket_path) = socket_path else {
+        return Ok(None);
     };
 
-    let bot = Arc::new(bot);
-    let service = TelegramService::new(bot.clone());
-    let channel_registry = Arc::new(ChannelRegistry::new(vec![Arc::new(service.clone())]));
-
-    // Initialize the scheduler service
-    let scheduler = Arc::new(SchedulerService::new(
+    DiagnosticsServer::start(
+        socket_path,
         db.pool().clone(),
-        llm.clone(),
-        registry.clone(),
-        channel_registry.clone(),
-        config.clone(),
-        personality.clone(),
-    ));
+        compaction_service,
+        config,
+        personality,
+        registry,
+    )
+    .await
+    .map(Some)
+}
 
-    // Create a drop guard to guarantee scheduler shutdown
+async fn build_zulip_runtime(
+    config: &ZulipChannelConfig,
+) -> Result<Option<ZulipRuntime>, AgentError> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    let bot_email = required_env(&config.bot_email_env, "Zulip bot email")?;
+    let api_key = required_env(&config.api_key_env, "Zulip API key")?;
+    let bot = Arc::new(ZulipBot::new(config.site_url.clone(), bot_email, api_key));
+
+    info!(
+        site_url = config.site_url,
+        bot_email = bot.bot_email(),
+        "Zulip bot initialized"
+    );
+
+    match bot.get_me().await {
+        Ok(user_info) => {
+            bot.set_bot_name(user_info.full_name);
+            let bot_name = bot.bot_name();
+            info!(
+                bot_name = %bot_name,
+                bot_id = user_info.user_id,
+                "Zulip bot name resolved"
+            );
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to fetch Zulip bot name; mention stripping will use broad pattern"
+            );
+        }
+    }
+
+    Ok(Some(ZulipRuntime {
+        bot,
+        config: config.clone(),
+        webhook: None,
+    }))
+}
+
+async fn start_webhook_server(
+    config: &AppConfig,
+    telegram: Option<&mut TelegramRuntime>,
+    zulip: Option<&mut ZulipRuntime>,
+) -> Result<Option<WebhookServer>, AgentError> {
+    let telegram_webhook_enabled = config.channels.telegram.enabled
+        && config.channels.telegram.ingress == TelegramIngress::Webhook;
+    let zulip_webhook_enabled =
+        config.channels.zulip.enabled && config.channels.zulip.ingress == ZulipIngress::Webhook;
+
+    if !telegram_webhook_enabled && !zulip_webhook_enabled {
+        return Ok(None);
+    }
+
+    let mut telegram_route = None;
+    let mut zulip_route = None;
+
+    if telegram_webhook_enabled {
+        let Some(telegram) = telegram else {
+            return Err(AgentError::Config(
+                "Telegram webhook ingress is enabled but Telegram runtime was not initialized"
+                    .into(),
+            ));
+        };
+        let route_path = telegram_webhook_path(&telegram.config)?;
+        let secret_token = Uuid::new_v4().simple().to_string();
+        let (sender, receiver) = mpsc::channel(100);
+        telegram.webhook = Some(TelegramWebhookRuntime {
+            secret_token: secret_token.clone(),
+            receiver,
+        });
+        telegram_route = Some(TelegramWebhookRoute {
+            path: route_path,
+            secret_token,
+            sender,
+        });
+    }
+
+    if zulip_webhook_enabled {
+        let Some(zulip) = zulip else {
+            return Err(AgentError::Config(
+                "Zulip webhook ingress is enabled but Zulip runtime was not initialized".into(),
+            ));
+        };
+        let route_path = zulip_webhook_path(&zulip.config)?;
+        let token = required_env(&zulip.config.web_hook_token_env, "Zulip webhook token")?;
+        let (sender, receiver) = mpsc::channel(100);
+        zulip.webhook = Some(ZulipWebhookRuntime { receiver });
+        zulip_route = Some(ZulipWebhookRoute {
+            path: route_path,
+            token,
+            sender,
+        });
+    }
+
+    WebhookServer::start(WebhookServerConfig {
+        host: config.webhook.host.clone(),
+        port: config.webhook.port,
+        telegram: telegram_route,
+        zulip: zulip_route,
+    })
+    .await
+    .map(Some)
+}
+
+fn telegram_webhook_path(config: &TelegramChannelConfig) -> Result<String, AgentError> {
+    extract_webhook_path(config.web_hook_url.as_deref())
+}
+
+fn zulip_webhook_path(config: &ZulipChannelConfig) -> Result<String, AgentError> {
+    extract_webhook_path(config.web_hook_url.as_deref())
+}
+
+fn extract_webhook_path(url: Option<&str>) -> Result<String, AgentError> {
+    url.and_then(|url| url::Url::parse(url).ok())
+        .map(|url| {
+            let path = url.path();
+            if path.is_empty() {
+                "/".to_string()
+            } else {
+                path.to_string()
+            }
+        })
+        .ok_or_else(|| AgentError::Config("web_hook_url is not a valid URL".into()))
+}
+
+fn build_channel_registry(
+    telegram: &Option<TelegramRuntime>,
+    zulip: &Option<ZulipRuntime>,
+) -> Arc<ChannelRegistry> {
+    let mut services: Vec<Arc<dyn ChannelService>> = Vec::new();
+    if let Some(telegram) = telegram {
+        services.push(Arc::new(TelegramService::new(telegram.bot.clone())));
+    }
+    if let Some(zulip) = zulip {
+        services.push(Arc::new(ZulipService::new(zulip.bot.clone())));
+    }
+    Arc::new(ChannelRegistry::new(services))
+}
+
+fn build_scheduler(
+    db: Arc<Database>,
+    llm: Arc<dyn LlmExecutor>,
+    registry: Arc<ToolRegistry>,
+    channel_registry: Arc<ChannelRegistry>,
+    config: AppConfig,
+    personality: Personality,
+) -> Arc<SchedulerService> {
+    Arc::new(SchedulerService::new(
+        db.pool().clone(),
+        llm,
+        registry,
+        channel_registry,
+        config,
+        personality,
+    ))
+}
+
+struct MessageHandlerDeps {
+    db: Arc<Database>,
+    llm: Arc<dyn LlmExecutor>,
+    registry: Arc<ToolRegistry>,
+    channel_registry: Arc<ChannelRegistry>,
+    config: AppConfig,
+    personality: Personality,
+    scheduler: Arc<SchedulerService>,
+    compaction_service: Arc<CompactionService>,
+}
+
+fn build_message_handler(deps: MessageHandlerDeps) -> Arc<ChannelMessageHandler> {
+    Arc::new(ChannelMessageHandler::new(ChannelMessageHandlerInput {
+        pool: deps.db.pool().clone(),
+        llm: deps.llm,
+        registry: deps.registry,
+        channel_registry: deps.channel_registry,
+        config: deps.config,
+        personality: deps.personality,
+        scheduler_notifier: Some(deps.scheduler.notifier()),
+        compaction_service: deps.compaction_service,
+    }))
+}
+
+async fn run_runtime(mut runtime: AppRuntime) {
+    let scheduler = runtime.scheduler.clone();
     let _scheduler_guard = SchedulerGuard {
         scheduler: scheduler.clone(),
     };
 
-    // Create the message handler
-    let handler = Arc::new(ChannelMessageHandler::new(ChannelMessageHandlerInput {
-        pool: db.pool().clone(),
-        llm: llm.clone(),
-        registry,
-        channel_registry: channel_registry.clone(),
-        config: config.clone(),
-        personality,
-        scheduler_notifier: Some(scheduler.notifier()),
-        compaction_service,
-    }));
-
-    // Start scheduler
     if let Err(e) = scheduler.start().await {
         error!(error = %e, "Failed to start scheduler");
         return;
     }
 
-    match telegram_config.ingress {
-        TelegramIngress::Poll => {
-            let updates = TelegramPoll::new(bot.clone(), telegram_config.poll_interval_secs);
-            if let Err(e) = run_telegram_update_loop(
-                updates,
-                bot.clone(),
-                handler.clone(),
-                telegram_config.clone(),
-            )
-            .await
-            {
-                error!(error = %e, "Telegram polling ingress failed");
-            }
-        }
-        TelegramIngress::Webhook => {
-            let updates = TelegramHook::new(bot.clone(), telegram_config.clone());
-            if let Err(e) = run_telegram_update_loop(
-                updates,
-                bot.clone(),
-                handler.clone(),
-                telegram_config.clone(),
-            )
-            .await
-            {
-                error!(error = %e, "Telegram webhook ingress failed");
-            }
-        }
-    }
+    run_channel_ingress_loops(runtime.telegram, runtime.zulip, runtime.handler.clone()).await;
 
     info!("Gracefully shutting down services...");
     if let Err(e) = scheduler.stop().await {
         error!(error = %e, "Failed to stop scheduler gracefully");
     }
-    if let Some(server) = diagnostics_server.as_mut() {
+    if let Some(server) = runtime.diagnostics_server.as_mut() {
+        server.stop().await;
+    }
+    if let Some(server) = runtime.webhook_server.as_mut() {
         server.stop().await;
     }
     info!("Shutdown complete.");
+}
+
+async fn run_channel_ingress_loops(
+    telegram: Option<TelegramRuntime>,
+    zulip: Option<ZulipRuntime>,
+    handler: Arc<ChannelMessageHandler>,
+) {
+    let telegram_handle = telegram.map(|telegram| {
+        let handler = handler.clone();
+        tokio::spawn(async move {
+            run_telegram_ingress_loop(telegram, handler).await;
+        })
+    });
+
+    let zulip_handle = zulip.map(|zulip| {
+        let handler = handler.clone();
+        tokio::spawn(async move {
+            run_zulip_ingress_loop(zulip, handler).await;
+        })
+    });
+
+    if let Some(handle) = telegram_handle {
+        if let Some(zulip_handle) = zulip_handle {
+            tokio::select! {
+                _ = handle => {}
+                _ = zulip_handle => {}
+            }
+        } else {
+            let _ = handle.await;
+        }
+    } else if let Some(handle) = zulip_handle {
+        let _ = handle.await;
+    }
+}
+
+async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<ChannelMessageHandler>) {
+    match telegram.config.ingress {
+        TelegramIngress::Poll => {
+            let updates =
+                TelegramPoll::new(telegram.bot.clone(), telegram.config.poll_interval_secs);
+            if let Err(e) =
+                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
+            {
+                error!(error = %e, "Telegram polling ingress failed");
+            }
+        }
+        TelegramIngress::Webhook => {
+            let Some(webhook) = telegram.webhook else {
+                error!(
+                    "Telegram webhook ingress is enabled but shared webhook receiver is missing"
+                );
+                return;
+            };
+            let updates = TelegramHook::new(
+                telegram.bot.clone(),
+                telegram.config.clone(),
+                webhook.secret_token,
+                webhook.receiver,
+            );
+            if let Err(e) =
+                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
+            {
+                error!(error = %e, "Telegram webhook ingress failed");
+            }
+        }
+    }
+}
+
+async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHandler>) {
+    match zulip.config.ingress {
+        ZulipIngress::Poll => {
+            let updates = ZulipPoll::new(zulip.bot.clone(), zulip.config.poll_interval_secs)
+                .with_attachment_limits(
+                    zulip.config.max_attachment_bytes,
+                    zulip.config.max_text_document_chars,
+                );
+            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
+                error!(error = %e, "Zulip polling ingress failed");
+            }
+        }
+        ZulipIngress::Webhook => {
+            let Some(webhook) = zulip.webhook else {
+                error!("Zulip webhook ingress is enabled but shared webhook receiver is missing");
+                return;
+            };
+            let updates = ZulipHook::new(webhook.receiver);
+            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
+                error!(error = %e, "Zulip webhook ingress failed");
+            }
+        }
+    }
+}
+
+async fn run_zulip_update_loop<T>(
+    mut updates: T,
+    bot: Arc<ZulipBot>,
+    handler: Arc<ChannelMessageHandler>,
+    config: ZulipChannelConfig,
+) -> Result<(), AgentError>
+where
+    T: ZulipUpdate,
+{
+    updates.init().await?;
+
+    loop {
+        tokio::select! {
+            res = updates.poll() => {
+                match res {
+                    Ok(Some(msg)) => {
+                        if let Err(e) = handler
+                            .handle_zulip_message(
+                                &msg,
+                                &bot,
+                                bot.bot_email(),
+                                config.max_attachment_bytes,
+                                config.max_text_document_chars,
+                            )
+                            .await
+                        {
+                            error!(error = %e, "Zulip handler error");
+                        }
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        error!(error = %e, "Zulip polling failed, retrying in 5s");
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = tokio::signal::ctrl_c() => {
+                                info!("received Ctrl-C during Zulip retry sleep, shutting down...");
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("received Ctrl-C, shutting down Zulip...");
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> {
+    match std::env::var(env_var) {
+        Ok(value) if !value.is_empty() => Ok(value),
+        Ok(_) => Err(AgentError::Config(format!(
+            "{description} environment variable {env_var} is empty"
+        ))),
+        Err(_) => Err(AgentError::Config(format!(
+            "{description} environment variable {env_var} is not set"
+        ))),
+    }
 }
 
 async fn run_diagnostics_command(

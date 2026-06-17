@@ -18,6 +18,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub channels: ChannelConfig,
     #[serde(default)]
+    pub webhook: WebhookConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
     pub workspace: WorkspaceConfig,
@@ -74,12 +76,6 @@ pub struct TelegramChannelConfig {
     /// Public HTTPS webhook URL registered with Telegram in push mode.
     #[serde(default)]
     pub web_hook_url: Option<String>,
-    /// Local interface used by the webhook HTTP server in push mode.
-    #[serde(default = "default_telegram_host")]
-    pub host: String,
-    /// Local port used by the webhook HTTP server in push mode.
-    #[serde(default = "default_telegram_port")]
-    pub port: u16,
     /// Sleep duration after an empty getUpdates response in poll mode.
     #[serde(default = "default_telegram_poll_interval_secs")]
     pub poll_interval_secs: u64,
@@ -110,8 +106,6 @@ impl Default for TelegramChannelConfig {
             ingress: TelegramIngress::Poll,
             bot_token_env: default_telegram_token_env(),
             web_hook_url: None,
-            host: default_telegram_host(),
-            port: default_telegram_port(),
             poll_interval_secs: default_telegram_poll_interval_secs(),
             allowed_conversations: Vec::new(),
             allowed_senders: Vec::new(),
@@ -130,6 +124,97 @@ pub enum TelegramIngress {
     Poll,
     /// Receive updates through Telegram webhooks.
     Webhook,
+}
+
+/// Zulip update ingress mode.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ZulipIngress {
+    /// Receive updates through Zulip's event queue long-polling API.
+    #[default]
+    Poll,
+    /// Receive updates through Zulip outgoing webhooks.
+    Webhook,
+}
+
+/// Zulip channel configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ZulipChannelConfig {
+    /// Whether the Zulip channel should start.
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    /// Zulip ingress transport: long polling or webhook push.
+    #[serde(default)]
+    pub ingress: ZulipIngress,
+    /// Environment variable name holding the bot's email address.
+    #[serde(default = "default_zulip_bot_email_env")]
+    pub bot_email_env: String,
+    /// Environment variable name holding the bot's API key.
+    #[serde(default = "default_zulip_api_key_env")]
+    pub api_key_env: String,
+    /// Base URL of the Zulip server (e.g., https://your-org.zulipchat.com).
+    #[serde(default)]
+    pub site_url: String,
+    /// Environment variable name holding the webhook verification token.
+    #[serde(default = "default_zulip_webhook_token_env")]
+    pub web_hook_token_env: String,
+    /// Public Zulip webhook URL registered with Zulip's outgoing webhook settings.
+    #[serde(default)]
+    pub web_hook_url: Option<String>,
+    /// Sleep duration after an empty events response in poll mode.
+    #[serde(default = "default_zulip_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+    /// Allowed Zulip conversations (stream names + optional topics).
+    #[serde(default)]
+    pub allowed_conversations: Vec<crate::channel::types::ConversationAddressPattern>,
+    /// Allowed Zulip sender email addresses.
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+    /// Maximum size in bytes for downloaded Zulip attachments.
+    #[serde(default = "default_max_attachment_bytes")]
+    pub max_attachment_bytes: usize,
+    /// Maximum number of characters when extracting text from text documents.
+    #[serde(default = "default_max_text_document_chars")]
+    pub max_text_document_chars: usize,
+}
+
+impl Default for ZulipChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ingress: ZulipIngress::Poll,
+            bot_email_env: default_zulip_bot_email_env(),
+            api_key_env: default_zulip_api_key_env(),
+            site_url: String::new(),
+            web_hook_token_env: default_zulip_webhook_token_env(),
+            web_hook_url: None,
+            poll_interval_secs: default_zulip_poll_interval_secs(),
+            allowed_conversations: Vec::new(),
+            allowed_senders: Vec::new(),
+            max_attachment_bytes: default_max_attachment_bytes(),
+            max_text_document_chars: default_max_text_document_chars(),
+        }
+    }
+}
+
+/// Shared webhook HTTP server configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct WebhookConfig {
+    /// Local interface used by the shared webhook HTTP server.
+    #[serde(default = "default_webhook_host")]
+    pub host: String,
+    /// Local port used by the shared webhook HTTP server.
+    #[serde(default = "default_webhook_port")]
+    pub port: u16,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            host: default_webhook_host(),
+            port: default_webhook_port(),
+        }
+    }
 }
 
 /// Storage configuration.
@@ -380,10 +465,10 @@ fn default_telegram_token_env() -> String {
 fn default_true() -> bool {
     true
 }
-fn default_telegram_host() -> String {
+fn default_webhook_host() -> String {
     "127.0.0.1".to_string()
 }
-fn default_telegram_port() -> u16 {
+fn default_webhook_port() -> u16 {
     24_682
 }
 fn default_telegram_poll_interval_secs() -> u64 {
@@ -475,6 +560,22 @@ fn default_max_attachment_bytes() -> usize {
 fn default_max_text_document_chars() -> usize {
     32_768 // 32 KB
 }
+
+fn default_false() -> bool {
+    false
+}
+fn default_zulip_bot_email_env() -> String {
+    "ZULIP_BOT_EMAIL".to_string()
+}
+fn default_zulip_api_key_env() -> String {
+    "ZULIP_BOT_API_KEY".to_string()
+}
+fn default_zulip_webhook_token_env() -> String {
+    "ZULIP_WEBHOOK_TOKEN".to_string()
+}
+fn default_zulip_poll_interval_secs() -> u64 {
+    2
+}
 impl AppConfig {
     /// Load configuration from a TOML file.
     pub fn from_file(path: &std::path::Path) -> Result<Self, AgentError> {
@@ -492,6 +593,8 @@ impl AppConfig {
     /// Validate cross-field configuration constraints after TOML defaults are applied.
     pub fn validate(&self) -> Result<(), AgentError> {
         let telegram = &self.channels.telegram;
+        let telegram_webhook_enabled =
+            telegram.enabled && telegram.ingress == TelegramIngress::Webhook;
 
         if let Some(conversation_id) = telegram
             .allowed_conversations
@@ -513,7 +616,7 @@ impl AppConfig {
             )));
         }
 
-        if telegram.enabled && telegram.ingress == TelegramIngress::Webhook {
+        if telegram_webhook_enabled {
             let Some(web_hook_url) = telegram
                 .web_hook_url
                 .as_deref()
@@ -539,6 +642,78 @@ impl AppConfig {
             if parsed.host_str().is_none() {
                 return Err(AgentError::Config(
                     "channels.telegram.web_hook_url must include a host".into(),
+                ));
+            }
+        }
+
+        let zulip = &self.channels.zulip;
+        let mut zulip_webhook_enabled = false;
+
+        if zulip.enabled {
+            let site_url = zulip.site_url.trim();
+            if site_url.is_empty() {
+                return Err(AgentError::Config(
+                    "channels.zulip.site_url is required when channels.zulip.enabled is true"
+                        .into(),
+                ));
+            }
+            let parsed = Url::parse(site_url).map_err(|e| {
+                AgentError::Config(format!("channels.zulip.site_url is not a valid URL: {e}"))
+            })?;
+            if parsed.host_str().is_none() {
+                return Err(AgentError::Config(
+                    "channels.zulip.site_url must include a host".into(),
+                ));
+            }
+
+            if zulip.ingress == ZulipIngress::Webhook {
+                zulip_webhook_enabled = true;
+                let token_env = zulip.web_hook_token_env.trim();
+                if token_env.is_empty() {
+                    return Err(AgentError::Config(
+                        "channels.zulip.web_hook_token_env is required when channels.zulip.ingress is \"webhook\"".into(),
+                    ));
+                }
+                let Some(web_hook_url) = zulip
+                    .web_hook_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                else {
+                    return Err(AgentError::Config(
+                        "channels.zulip.web_hook_url is required when channels.zulip.ingress is \"webhook\"".into(),
+                    ));
+                };
+
+                let parsed = Url::parse(web_hook_url).map_err(|e| {
+                    AgentError::Config(format!(
+                        "channels.zulip.web_hook_url is not a valid URL: {e}"
+                    ))
+                })?;
+                if parsed.scheme() != "https" {
+                    return Err(AgentError::Config(format!(
+                        "channels.zulip.web_hook_url must use https, got {:?}",
+                        parsed.scheme()
+                    )));
+                }
+                if parsed.host_str().is_none() {
+                    return Err(AgentError::Config(
+                        "channels.zulip.web_hook_url must include a host".into(),
+                    ));
+                }
+            }
+        }
+
+        if telegram_webhook_enabled || zulip_webhook_enabled {
+            if self.webhook.host.trim().is_empty() {
+                return Err(AgentError::Config(
+                    "webhook.host is required when any channel webhook ingress is enabled".into(),
+                ));
+            }
+            if self.webhook.port == 0 {
+                return Err(AgentError::Config(
+                    "webhook.port must be greater than 0 when any channel webhook ingress is enabled"
+                        .into(),
                 ));
             }
         }
