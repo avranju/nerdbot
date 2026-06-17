@@ -16,6 +16,7 @@ use genai::chat::{
 };
 use nerdbot::agent::personality::Personality;
 use nerdbot::agent::run_mode::AgentRunMode;
+use nerdbot::channel::{ChannelRegistry, ConversationAddress};
 use nerdbot::config::AppConfig;
 use nerdbot::llm::LlmExecutor;
 use nerdbot::llm::fake::FakeProvider;
@@ -46,6 +47,16 @@ fn make_test_config() -> AppConfig {
     config
 }
 
+fn telegram_address(chat_id: i64) -> ConversationAddress {
+    ConversationAddress::telegram_chat(chat_id)
+}
+
+fn telegram_channel_registry(
+    telegram_service: nerdbot::telegram::service::TelegramService,
+) -> Arc<ChannelRegistry> {
+    Arc::new(ChannelRegistry::new(vec![Arc::new(telegram_service)]))
+}
+
 // ── Test 1: Cron parsing and padding ─────────────────────────────────────
 
 #[tokio::test]
@@ -55,13 +66,12 @@ async fn test_cron_parsing_and_padding() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test-token".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: Some(pool.clone()),
         scheduler_notifier: Some(notifier),
     };
@@ -111,7 +121,7 @@ async fn test_startup_overdue_run_overdue_true() {
     let job = storage::jobs::create_job_full(
         &pool,
         storage::jobs::CreateJobInput {
-            owner_chat_id: 111,
+            owner_address: telegram_address(111),
             name: "Overdue Job".into(),
             prompt: "prompt".into(),
             schedule_type: ScheduleType::OneShot,
@@ -142,13 +152,14 @@ async fn test_startup_overdue_run_overdue_true() {
     ));
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
 
+    let channel_registry = telegram_channel_registry(telegram_service);
     let scheduler = SchedulerService::new(
         pool.clone(),
         provider,
         registry,
+        channel_registry,
         config.clone(),
         Personality::from_config(&config),
-        telegram_service,
     );
 
     // Call start (this will run the startup overdue logic)
@@ -174,7 +185,7 @@ async fn test_startup_overdue_run_overdue_false() {
     let job = storage::jobs::create_job_full(
         &pool,
         storage::jobs::CreateJobInput {
-            owner_chat_id: 111,
+            owner_address: telegram_address(111),
             name: "Overdue Job".into(),
             prompt: "prompt".into(),
             schedule_type: ScheduleType::OneShot,
@@ -201,13 +212,14 @@ async fn test_startup_overdue_run_overdue_false() {
     ));
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
 
+    let channel_registry = telegram_channel_registry(telegram_service);
     let scheduler = SchedulerService::new(
         pool.clone(),
         provider,
         registry,
+        channel_registry,
         config.clone(),
         Personality::from_config(&config),
-        telegram_service,
     );
 
     // Call start
@@ -234,13 +246,12 @@ async fn test_scheduling_tools_and_wakeup_signaling() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: Some(pool.clone()),
         scheduler_notifier: Some(notifier.clone()),
     };
@@ -312,13 +323,12 @@ async fn test_list_jobs_tool_can_include_disabled_jobs() {
     let pool = setup_test_db().await;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: Some(pool.clone()),
         scheduler_notifier: None,
     };
@@ -391,8 +401,7 @@ async fn test_telegram_commands_wire_and_trigger() {
     let notify_future = notifier.notified();
     let response = CommandHandler::handle(
         TelegramCommand::Run(job.id.clone()),
-        999,
-        1,
+        &telegram_address(999),
         &pool,
         Some(&notifier),
     )
@@ -418,8 +427,7 @@ async fn test_telegram_commands_wire_and_trigger() {
     let notify_future = notifier.notified();
     let response = CommandHandler::handle(
         TelegramCommand::Delete(job.id.clone()),
-        999,
-        1,
+        &telegram_address(999),
         &pool,
         Some(&notifier),
     )
@@ -475,7 +483,7 @@ async fn test_run_scheduled_job_execution() {
     let job = storage::jobs::create_job_full(
         &pool,
         storage::jobs::CreateJobInput {
-            owner_chat_id: 123,
+            owner_address: telegram_address(123),
             name: "Mock Job".into(),
             prompt: "Say hello".into(),
             schedule_type: ScheduleType::OneShot,
@@ -516,6 +524,7 @@ async fn test_run_scheduled_job_execution() {
         mock_server.uri(),
     ));
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
+    let channel_registry = telegram_channel_registry(telegram_service);
 
     // 5. Run the job directly
     nerdbot::scheduler::runner::run_scheduled_job(
@@ -526,10 +535,18 @@ async fn test_run_scheduled_job_execution() {
             loop_config,
             personality: "You are an assistant".into(),
             workspace_root: PathBuf::from("/tmp"),
-            telegram_token: "test-token".into(),
-            telegram_service,
-            allowed_chat_ids: vec![123],
-            allowed_user_ids: vec![],
+            channel_registry,
+            access_policy: nerdbot::channel::ChannelAccessPolicy {
+                allowed_conversations: vec![123]
+                    .into_iter()
+                    .map(|id| nerdbot::channel::ConversationAddressPattern {
+                        channel_id: "telegram".to_string(),
+                        conversation_id: id.to_string(),
+                        thread_id: None,
+                    })
+                    .collect(),
+                allowed_senders: Vec::<String>::new(),
+            },
             timezone: "UTC".to_string(),
         },
         &job.id,
@@ -586,7 +603,7 @@ async fn test_disabled_job_rejection() {
     let job = storage::jobs::create_job_full(
         &pool,
         storage::jobs::CreateJobInput {
-            owner_chat_id: 123,
+            owner_address: telegram_address(123),
             name: "Disabled Job".into(),
             prompt: "Say hello".into(),
             schedule_type: ScheduleType::OneShot,
@@ -607,13 +624,12 @@ async fn test_disabled_job_rejection() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: Some(pool.clone()),
         scheduler_notifier: Some(notifier.clone()),
     };
@@ -630,8 +646,7 @@ async fn test_disabled_job_rejection() {
     // 3. Try running via CommandHandler `/run`
     let response = CommandHandler::handle(
         TelegramCommand::Run(job.id.clone()),
-        123,
-        456,
+        &telegram_address(123),
         &pool,
         Some(&notifier),
     )
@@ -668,13 +683,12 @@ async fn test_timezone_aware_cron_calculation() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test-token".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: Some(pool.clone()),
         scheduler_notifier: Some(notifier),
     };
@@ -736,7 +750,7 @@ async fn test_scheduler_graceful_shutdown() {
     let job = storage::jobs::create_job_full(
         &pool,
         storage::jobs::CreateJobInput {
-            owner_chat_id: 555,
+            owner_address: telegram_address(555),
             name: "Long Job".into(),
             prompt: "Say hello slowly".into(),
             schedule_type: ScheduleType::OneShot,
@@ -799,18 +813,19 @@ async fn test_scheduler_graceful_shutdown() {
     let telegram_service = nerdbot::telegram::service::TelegramService::new(bot_client);
 
     let mut config = make_test_config();
-    config.telegram.allowed_chat_ids = vec![555];
+    config.channels.telegram.allowed_conversations = vec!["555".to_string()];
     // Enable overdue startup execution so the overdue job is re-scheduled
     // to run immediately rather than being discarded as Missed.
     config.scheduler.run_overdue_one_shots_on_startup = true;
 
+    let channel_registry = telegram_channel_registry(telegram_service);
     let scheduler = SchedulerService::new(
         pool.clone(),
         provider,
         registry,
+        channel_registry,
         config.clone(),
         Personality::from_config(&config),
-        telegram_service,
     );
 
     // 5. Start the scheduler service

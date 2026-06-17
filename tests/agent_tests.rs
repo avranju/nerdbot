@@ -10,28 +10,40 @@
 use std::path::PathBuf;
 
 use nerdbot::agent::outcome::{AgentOutcome, AgentResult, RunMetadata, RunTokenUsage};
-use nerdbot::agent::run_mode::{AgentRunMode, JobId, TelegramChatId, TelegramUserId};
+use nerdbot::agent::run_mode::{AgentRunMode, JobId};
 
 // ── AgentRunMode: InteractiveReply ───────────────────────────────────────
 
 #[test]
 fn test_interactive_reply_chat_id() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 123_456_789,
-        user_id: 987_654_321,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(123_456_789),
+        sender: nerdbot::channel::SenderIdentity::new((987_654_321).to_string(), None),
     };
-    assert_eq!(mode.chat_id(), Some(123_456_789i64));
-    assert_eq!(mode.user_id(), Some(987_654_321i64));
+    assert_eq!(
+        mode.address().unwrap().conversation_id.parse::<i64>().ok(),
+        Some(123_456_789i64)
+    );
+    assert_eq!(
+        mode.sender().unwrap().sender_id.parse::<i64>().ok(),
+        Some(987_654_321i64)
+    );
 }
 
 #[test]
 fn test_interactive_reply_no_internal_chat() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 0,
-        user_id: 0,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(0),
+        sender: nerdbot::channel::SenderIdentity::new((0).to_string(), None),
     };
-    assert_eq!(mode.chat_id(), Some(0i64));
-    assert_eq!(mode.user_id(), Some(0i64));
+    assert_eq!(
+        mode.address().unwrap().conversation_id.parse::<i64>().ok(),
+        Some(0i64)
+    );
+    assert_eq!(
+        mode.sender().unwrap().sender_id.parse::<i64>().ok(),
+        Some(0i64)
+    );
 }
 
 // ── AgentRunMode: ScheduledJob ───────────────────────────────────────────
@@ -40,22 +52,28 @@ fn test_interactive_reply_no_internal_chat() {
 fn test_scheduled_job_chat_id() {
     let mode = AgentRunMode::ScheduledJob {
         job_id: "job-123".into(),
-        default_chat_id: 111_111_111,
+        default_address: nerdbot::channel::ConversationAddress::telegram_chat(111_111_111),
         notify_on_completion: true,
     };
-    assert_eq!(mode.chat_id(), Some(111_111_111i64));
-    assert!(mode.user_id().is_none());
+    assert_eq!(
+        mode.address().unwrap().conversation_id.parse::<i64>().ok(),
+        Some(111_111_111i64)
+    );
+    assert!(mode.sender().is_none());
 }
 
 #[test]
 fn test_scheduled_job_no_notify() {
     let mode = AgentRunMode::ScheduledJob {
         job_id: "job-456".into(),
-        default_chat_id: 222_222_222,
+        default_address: nerdbot::channel::ConversationAddress::telegram_chat(222_222_222),
         notify_on_completion: false,
     };
-    assert_eq!(mode.chat_id(), Some(222_222_222i64));
-    assert_eq!(mode.user_id(), None);
+    assert_eq!(
+        mode.address().unwrap().conversation_id.parse::<i64>().ok(),
+        Some(222_222_222i64)
+    );
+    assert!(mode.sender().is_none());
 }
 
 // ── AgentRunMode: Internal ───────────────────────────────────────────────
@@ -65,8 +83,8 @@ fn test_internal_run_no_chat_id() {
     let mode = AgentRunMode::Internal {
         reason: "background compaction".into(),
     };
-    assert_eq!(mode.chat_id(), None);
-    assert_eq!(mode.user_id(), None);
+    assert_eq!(mode.address(), None);
+    assert_eq!(mode.sender(), None);
 }
 
 #[test]
@@ -82,8 +100,8 @@ fn test_internal_run_with_reason() {
 #[test]
 fn test_agent_run_mode_clone() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 123,
-        user_id: 456,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+        sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
     };
     let cloned = mode.clone();
     assert_eq!(mode, cloned);
@@ -93,7 +111,7 @@ fn test_agent_run_mode_clone() {
 fn test_agent_run_mode_debug() {
     let mode = AgentRunMode::ScheduledJob {
         job_id: "j1".into(),
-        default_chat_id: 1,
+        default_address: nerdbot::channel::ConversationAddress::telegram_chat(1),
         notify_on_completion: false,
     };
     let debug_str = format!("{mode:?}");
@@ -105,8 +123,8 @@ fn test_agent_run_mode_debug() {
 #[test]
 fn test_agent_run_mode_serialize_interactive() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 123,
-        user_id: 456,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+        sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
     };
     let json = serde_json::to_string(&mode).unwrap();
     assert!(json.contains("InteractiveReply"));
@@ -116,7 +134,7 @@ fn test_agent_run_mode_serialize_interactive() {
 fn test_agent_run_mode_serialize_scheduled() {
     let mode = AgentRunMode::ScheduledJob {
         job_id: "my-job".into(),
-        default_chat_id: 789,
+        default_address: nerdbot::channel::ConversationAddress::telegram_chat(789),
         notify_on_completion: true,
     };
     let json = serde_json::to_string(&mode).unwrap();
@@ -127,8 +145,8 @@ fn test_agent_run_mode_serialize_scheduled() {
 #[test]
 fn test_agent_run_mode_roundtrip() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 999,
-        user_id: 888,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(999),
+        sender: nerdbot::channel::SenderIdentity::new((888).to_string(), None),
     };
     let json = serde_json::to_string(&mode).unwrap();
     let restored: AgentRunMode = serde_json::from_str(&json).unwrap();
@@ -214,12 +232,6 @@ fn test_agent_result_silent() {
 
 #[test]
 fn test_type_aliases() {
-    let chat_id: TelegramChatId = 123;
-    assert_eq!(chat_id, 123i64);
-
-    let user_id: TelegramUserId = 456;
-    assert_eq!(user_id, 456i64);
-
     let job_id: JobId = "my-job".into();
     assert_eq!(job_id, "my-job");
 }

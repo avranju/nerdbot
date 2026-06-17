@@ -10,6 +10,9 @@ use crate::error::AgentError;
 use tracing::{debug, info, warn};
 
 use super::bot::TelegramBot;
+use crate::channel::{
+    ChannelService, ChannelTypingIndicator, ConversationAddress, MessageFormat, OutboundMessage,
+};
 
 /// High-level service for sending messages through Telegram.
 ///
@@ -203,5 +206,51 @@ fn is_telegram_parse_error(err: &AgentError) -> bool {
         msg.contains("can't parse entities") || msg.contains("can't parse message")
     } else {
         false
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelService for TelegramService {
+    fn channel_id(&self) -> &str {
+        "telegram"
+    }
+
+    async fn send_message(
+        &self,
+        address: &ConversationAddress,
+        message: OutboundMessage,
+    ) -> Result<(), AgentError> {
+        let chat_id = address.conversation_id.parse::<i64>().map_err(|e| {
+            AgentError::Telegram(format!(
+                "Telegram conversation_id must be an integer chat ID, got {:?}: {e}",
+                address.conversation_id
+            ))
+        })?;
+        let parse_mode = match message.format {
+            MessageFormat::PlainText => None,
+            MessageFormat::Markdown => Some("MarkdownV2"),
+            MessageFormat::MarkdownRaw => Some("MarkdownV2Raw"),
+        };
+        self.send_message_with_options(
+            chat_id,
+            &message.text,
+            parse_mode,
+            message.disable_notification,
+        )
+        .await
+    }
+
+    fn start_typing(&self, address: &ConversationAddress) -> Option<ChannelTypingIndicator> {
+        let chat_id = address.conversation_id.parse::<i64>().ok()?;
+        let service = self.clone();
+        let refresh_task = tokio::spawn(async move {
+            loop {
+                if let Err(e) = service.bot.send_typing_action(chat_id).await {
+                    warn!(chat_id, error = %e, "failed to send Telegram typing action");
+                }
+                tokio::time::sleep(Duration::from_secs(4)).await;
+            }
+        });
+        Some(ChannelTypingIndicator::new(refresh_task))
     }
 }

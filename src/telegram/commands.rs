@@ -9,6 +9,7 @@ use sqlx::SqlitePool;
 use tracing::debug;
 
 use super::bot::BotCommand;
+use crate::channel::ConversationAddress;
 
 /// Supported Telegram commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,25 +102,24 @@ impl CommandHandler {
     /// Handle a parsed command and return the response text to send to the user.
     pub async fn handle(
         command: TelegramCommand,
-        chat_id: i64,
-        _user_id: i64,
+        address: &ConversationAddress,
         pool: &SqlitePool,
         scheduler_notifier: Option<&tokio::sync::Notify>,
     ) -> Result<String, AgentError> {
-        debug!(?command, chat_id, "handling Telegram command");
+        debug!(?command, ?address, "handling channel command");
 
         match command {
             TelegramCommand::Start => Ok(Self::start()),
             TelegramCommand::Help => Ok(Self::help()),
-            TelegramCommand::Jobs => Self::jobs(chat_id, pool).await,
+            TelegramCommand::Jobs => Self::jobs(address, pool).await,
             TelegramCommand::Run(job_id) => {
-                Self::run_job(chat_id, &job_id, pool, scheduler_notifier).await
+                Self::run_job(address, &job_id, pool, scheduler_notifier).await
             }
             TelegramCommand::Delete(job_id) => {
-                Self::delete_job(chat_id, &job_id, pool, scheduler_notifier).await
+                Self::delete_job(address, &job_id, pool, scheduler_notifier).await
             }
             TelegramCommand::ResetContext => {
-                crate::storage::sessions::create_session(pool, chat_id).await?;
+                crate::storage::sessions::create_session(pool, address).await?;
                 Ok(Self::reset_context())
             }
         }
@@ -149,8 +149,8 @@ impl CommandHandler {
             .to_string()
     }
 
-    async fn jobs(chat_id: i64, pool: &SqlitePool) -> Result<String, AgentError> {
-        let jobs = crate::storage::jobs::list_jobs(pool, chat_id, true).await?;
+    async fn jobs(address: &ConversationAddress, pool: &SqlitePool) -> Result<String, AgentError> {
+        let jobs = crate::storage::jobs::list_jobs(pool, address, true).await?;
 
         if jobs.is_empty() {
             return Ok("📋 You have no scheduled jobs.\n\nCreate a job by asking me to schedule something!".to_string());
@@ -172,7 +172,7 @@ impl CommandHandler {
     }
 
     async fn run_job(
-        chat_id: i64,
+        address: &ConversationAddress,
         job_id: &str,
         pool: &SqlitePool,
         scheduler_notifier: Option<&tokio::sync::Notify>,
@@ -181,8 +181,8 @@ impl CommandHandler {
 
         match job {
             None => Ok(format!("❌ No job found with ID `{job_id}`.")),
-            Some(job) if job.owner_chat_id != chat_id => {
-                Ok("❌ That job belongs to a different chat.".to_string())
+            Some(job) if job.owner_address() != *address => {
+                Ok("❌ That job belongs to a different conversation.".to_string())
             }
             Some(job) if !job.enabled => Ok(format!(
                 "❌ Job `{job_id}` is disabled or deleted and cannot be run."
@@ -210,7 +210,7 @@ impl CommandHandler {
     }
 
     async fn delete_job(
-        chat_id: i64,
+        address: &ConversationAddress,
         job_id: &str,
         pool: &SqlitePool,
         scheduler_notifier: Option<&tokio::sync::Notify>,
@@ -219,8 +219,8 @@ impl CommandHandler {
 
         match job {
             None => Ok(format!("❌ No job found with ID `{job_id}`.")),
-            Some(job) if job.owner_chat_id != chat_id => {
-                Ok("❌ That job belongs to a different chat.".to_string())
+            Some(job) if job.owner_address() != *address => {
+                Ok("❌ That job belongs to a different conversation.".to_string())
             }
             Some(_job) => {
                 crate::storage::jobs::disable_job(pool, job_id).await?;

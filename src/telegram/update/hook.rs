@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::config::TelegramConfig;
+use crate::config::TelegramChannelConfig;
 use crate::error::AgentError;
 use crate::telegram::bot::{TelegramBot, Update};
 
@@ -24,7 +24,7 @@ const MAX_WEBHOOK_BODY_BYTES: usize = 1_048_576;
 /// Telegram update ingress via webhook push.
 pub struct TelegramHook {
     bot: Arc<TelegramBot>,
-    config: TelegramConfig,
+    config: TelegramChannelConfig,
     secret_token: String,
     sender: mpsc::Sender<Update>,
     receiver: mpsc::Receiver<Update>,
@@ -32,7 +32,7 @@ pub struct TelegramHook {
 }
 
 impl TelegramHook {
-    pub fn new(bot: Arc<TelegramBot>, config: TelegramConfig) -> Self {
+    pub fn new(bot: Arc<TelegramBot>, config: TelegramChannelConfig) -> Self {
         let (sender, receiver) = mpsc::channel(100);
         Self {
             bot,
@@ -50,7 +50,7 @@ impl TelegramUpdate for TelegramHook {
     async fn init(&mut self) -> Result<(), AgentError> {
         let webhook_url = self.config.web_hook_url.clone().ok_or_else(|| {
             AgentError::Config(
-                "telegram.web_hook_url is required when telegram.mode is \"push\"".into(),
+                "channels.telegram.web_hook_url is required when channels.telegram.ingress is \"webhook\"".into(),
             )
         })?;
 
@@ -94,7 +94,7 @@ struct WebhookServer {
 
 impl WebhookServer {
     async fn start(
-        config: TelegramConfig,
+        config: TelegramChannelConfig,
         secret_token: String,
         sender: mpsc::Sender<Update>,
     ) -> Result<Self, AgentError> {
@@ -110,7 +110,9 @@ impl WebhookServer {
                     path.to_string()
                 }
             })
-            .ok_or_else(|| AgentError::Config("telegram.web_hook_url is not a valid URL".into()))?;
+            .ok_or_else(|| {
+                AgentError::Config("channels.telegram.web_hook_url is not a valid URL".into())
+            })?;
 
         let start_time = Instant::now();
         let state = WebhookState {

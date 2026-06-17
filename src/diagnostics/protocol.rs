@@ -15,7 +15,11 @@ pub enum DiagnosticsRequest {
         #[serde(default)]
         session_id: Option<String>,
         #[serde(default)]
-        chat_id: Option<i64>,
+        channel_id: Option<String>,
+        #[serde(default)]
+        conversation_id: Option<String>,
+        #[serde(default)]
+        thread_id: Option<String>,
         #[serde(default)]
         include_prompts: bool,
     },
@@ -25,7 +29,10 @@ pub enum DiagnosticsRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionDiagnostics {
     pub id: String,
-    pub telegram_chat_id: i64,
+    pub channel_id: String,
+    pub conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -34,7 +41,9 @@ impl From<crate::storage::sessions::ChatSession> for SessionDiagnostics {
     fn from(session: crate::storage::sessions::ChatSession) -> Self {
         Self {
             id: session.id,
-            telegram_chat_id: session.telegram_chat_id,
+            channel_id: session.channel_id,
+            conversation_id: session.conversation_id,
+            thread_id: session.thread_id,
             created_at: session.created_at,
             updated_at: session.updated_at,
         }

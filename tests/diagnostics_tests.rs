@@ -138,7 +138,8 @@ async fn test_diagnostics_server_lists_and_shows_session_by_chat_id() {
         DiagnosticsResponse::Sessions { sessions } => {
             assert_eq!(sessions.len(), 1);
             assert_eq!(sessions[0].id, session.id);
-            assert_eq!(sessions[0].telegram_chat_id, 42);
+            assert_eq!(sessions[0].channel_id, "telegram");
+            assert_eq!(sessions[0].conversation_id, "42");
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -147,7 +148,9 @@ async fn test_diagnostics_server_lists_and_shows_session_by_chat_id() {
         &socket_path,
         DiagnosticsRequest::ShowSession {
             session_id: None,
-            chat_id: Some(42),
+            channel_id: Some("telegram".to_string()),
+            conversation_id: Some("42".to_string()),
+            thread_id: None,
             include_prompts: false,
         },
     )
@@ -278,14 +281,18 @@ async fn test_diagnostics_server_rejects_ambiguous_session_selector() {
         &socket_path,
         DiagnosticsRequest::ShowSession {
             session_id: Some("session-id".to_string()),
-            chat_id: Some(42),
+            channel_id: Some("telegram".to_string()),
+            conversation_id: Some("42".to_string()),
+            thread_id: None,
             include_prompts: false,
         },
     )
     .await;
     match response {
         DiagnosticsResponse::Error { message } => {
-            assert!(message.contains("exactly one of session_id or chat_id"));
+            assert!(message.contains(
+                "show_session requires either session_id or channel_id + conversation_id"
+            ));
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -318,7 +325,9 @@ async fn test_diagnostics_client_sends_requests_and_propagates_server_errors() {
         &socket_path,
         &DiagnosticsRequest::ShowSession {
             session_id: None,
-            chat_id: None,
+            channel_id: None,
+            conversation_id: None,
+            thread_id: None,
             include_prompts: false,
         },
     )
@@ -326,7 +335,7 @@ async fn test_diagnostics_client_sends_requests_and_propagates_server_errors() {
     .unwrap_err();
     assert!(
         err.to_string()
-            .contains("exactly one of session_id or chat_id")
+            .contains("show_session requires either session_id or channel_id + conversation_id")
     );
 
     server.stop().await;
@@ -337,7 +346,9 @@ fn test_diagnostics_client_renders_human_and_json_output() {
     let response = DiagnosticsResponse::Session {
         session: nerdbot::diagnostics::protocol::SessionDiagnostics {
             id: "session-1".to_string(),
-            telegram_chat_id: 42,
+            channel_id: "telegram".to_string(),
+            conversation_id: "42".to_string(),
+            thread_id: None,
             created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             updated_at: chrono::DateTime::from_timestamp(1_700_000_010, 0).unwrap(),
         },
@@ -376,7 +387,7 @@ fn test_diagnostics_client_renders_human_and_json_output() {
 
     let human = render_human(&response);
     assert!(human.contains("Session: session-1"));
-    assert!(human.contains("Telegram chat: 42"));
+    assert!(human.contains("Channel: telegram / 42"));
     assert!(human.contains("Remaining before run:     350"));
     assert!(human.contains("Pressure:                 25.0%"));
     assert!(human.contains("Personality prompt:       25 tokens (100 chars, timezone=UTC)"));
@@ -459,7 +470,9 @@ async fn test_diagnostics_server_exposes_personality_summary_and_tools_when_requ
         &socket_path,
         DiagnosticsRequest::ShowSession {
             session_id: Some(session.id.clone()),
-            chat_id: None,
+            channel_id: None,
+            conversation_id: None,
+            thread_id: None,
             include_prompts: true,
         },
     )
@@ -521,7 +534,9 @@ async fn test_diagnostics_prompt_redaction_by_default() {
         &socket_path,
         DiagnosticsRequest::ShowSession {
             session_id: Some(session.id.clone()),
-            chat_id: None,
+            channel_id: None,
+            conversation_id: None,
+            thread_id: None,
             include_prompts: false,
         },
     )
@@ -548,7 +563,9 @@ async fn test_diagnostics_prompt_redaction_by_default() {
 fn test_diagnostics_protocol_serialization() {
     let request = DiagnosticsRequest::ShowSession {
         session_id: Some("session-uuid".to_string()),
-        chat_id: None,
+        channel_id: None,
+        conversation_id: None,
+        thread_id: None,
         include_prompts: true,
     };
     let request_json = serde_json::to_string(&request).unwrap();

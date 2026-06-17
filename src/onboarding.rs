@@ -10,7 +10,7 @@ use url::Url;
 
 use crate::config::{
     AppConfig, DEFAULT_TELEGRAM_POLL_INTERVAL_SECS, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT,
-    SANDBOX_MODE_NONE, SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramMode,
+    SANDBOX_MODE_NONE, SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramIngress,
 };
 
 const DEFAULT_PERSONALITY_FILE: &str = "/config/personality.md";
@@ -35,8 +35,8 @@ struct OnboardingAnswers {
     web_hook_url: Option<String>,
     telegram_host: String,
     telegram_port: u16,
-    allowed_chat_ids: Vec<i64>,
-    allowed_user_ids: Vec<i64>,
+    allowed_conversations: Vec<String>,
+    allowed_senders: Vec<String>,
     model: String,
     endpoint: Option<String>,
     api_key_env: Option<String>,
@@ -54,8 +54,9 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
     } else {
         AppConfig::default()
     };
-    let default_chat_ids = format_id_list(&defaults.telegram.allowed_chat_ids);
-    let default_user_ids = format_id_list(&defaults.telegram.allowed_user_ids);
+    let telegram_defaults = &defaults.channels.telegram;
+    let default_chat_ids = telegram_defaults.allowed_conversations.join(",");
+    let default_user_ids = telegram_defaults.allowed_senders.join(",");
 
     let agent_name: String = input("Bot name")
         .default_input(&defaults.agent.name)
@@ -71,41 +72,41 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
         .interact()?;
     let telegram_token_env: String =
         input("Environment variable that holds your Telegram bot token")
-            .default_input(&defaults.telegram.bot_token_env)
+            .default_input(&telegram_defaults.bot_token_env)
             .validate(|value: &String| required(value))
             .interact()?;
     let telegram_mode = select("Telegram ingress mode")
         .item("poll", "poll", "use Telegram getUpdates long polling")
-        .item("push", "push", "receive Telegram webhooks")
-        .initial_value(match defaults.telegram.mode {
-            TelegramMode::Poll => "poll",
-            TelegramMode::Push => "push",
+        .item("webhook", "webhook", "receive Telegram webhooks")
+        .initial_value(match telegram_defaults.ingress {
+            TelegramIngress::Poll => "poll",
+            TelegramIngress::Webhook => "webhook",
         })
         .interact()?;
-    let web_hook_url = if telegram_mode == "push" {
+    let web_hook_url = if telegram_mode == "webhook" {
         let web_hook_url: String = input("Public HTTPS Telegram webhook URL")
-            .default_input(defaults.telegram.web_hook_url.as_deref().unwrap_or(""))
+            .default_input(telegram_defaults.web_hook_url.as_deref().unwrap_or(""))
             .validate(|value: &String| validate_webhook_url(value))
             .interact()?;
         Some(web_hook_url)
     } else {
         None
     };
-    let telegram_host: String = if telegram_mode == "push" {
+    let telegram_host: String = if telegram_mode == "webhook" {
         input("Local webhook bind host")
-            .default_input(&defaults.telegram.host)
+            .default_input(&telegram_defaults.host)
             .validate(|value: &String| required(value))
             .interact()?
     } else {
-        defaults.telegram.host.clone()
+        telegram_defaults.host.clone()
     };
-    let telegram_port: String = if telegram_mode == "push" {
+    let telegram_port: String = if telegram_mode == "webhook" {
         input("Local webhook bind port")
-            .default_input(&defaults.telegram.port.to_string())
+            .default_input(&telegram_defaults.port.to_string())
             .validate(|value: &String| validate_port(value))
             .interact()?
     } else {
-        defaults.telegram.port.to_string()
+        telegram_defaults.port.to_string()
     };
 
     note(
@@ -218,8 +219,14 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
         web_hook_url,
         telegram_host,
         telegram_port: telegram_port.parse()?,
-        allowed_chat_ids: parse_id_list(&allowed_chat_ids)?,
-        allowed_user_ids: parse_id_list(&allowed_user_ids)?,
+        allowed_conversations: parse_id_list(&allowed_chat_ids)?
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
+        allowed_senders: parse_id_list(&allowed_user_ids)?
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
         model,
         endpoint,
         api_key_env: optional_value(&api_key_env),
@@ -258,8 +265,13 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
         Value::String(answers.default_timezone.clone()),
     );
 
-    let telegram = table_mut(root, "telegram")?;
-    telegram.insert("mode".into(), Value::String(answers.telegram_mode.clone()));
+    let channels = table_mut(root, "channels")?;
+    let telegram = table_mut(channels, "telegram")?;
+    telegram.insert("enabled".into(), Value::Boolean(true));
+    telegram.insert(
+        "ingress".into(),
+        Value::String(answers.telegram_mode.clone()),
+    );
     telegram.insert(
         "bot_token_env".into(),
         Value::String(answers.telegram_token_env.clone()),
@@ -274,12 +286,12 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
         .entry("poll_interval_secs")
         .or_insert_with(|| Value::Integer(DEFAULT_TELEGRAM_POLL_INTERVAL_SECS as i64));
     telegram.insert(
-        "allowed_chat_ids".into(),
-        id_array(&answers.allowed_chat_ids),
+        "allowed_conversations".into(),
+        string_array(&answers.allowed_conversations),
     );
     telegram.insert(
-        "allowed_user_ids".into(),
-        id_array(&answers.allowed_user_ids),
+        "allowed_senders".into(),
+        string_array(&answers.allowed_senders),
     );
 
     table_mut(root, "workspace")?
@@ -323,8 +335,8 @@ fn table_mut<'a>(
         .ok_or_else(|| format!("Configuration section [{key}] must be a TOML table.").into())
 }
 
-fn id_array(ids: &[i64]) -> Value {
-    Value::Array(ids.iter().copied().map(Value::Integer).collect())
+fn string_array(ids: &[String]) -> Value {
+    Value::Array(ids.iter().map(|id| Value::String(id.clone())).collect())
 }
 
 fn set_optional_string(table: &mut toml::map::Map<String, Value>, key: &str, value: Option<&str>) {
@@ -342,10 +354,6 @@ fn optional_value(value: &str) -> Option<String> {
     } else {
         Some(value.into())
     }
-}
-
-fn format_id_list(ids: &[i64]) -> String {
-    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
 }
 
 fn infer_provider(config: &AppConfig) -> LlmProvider {
@@ -432,13 +440,13 @@ mod tests {
         let answers = OnboardingAnswers {
             agent_name: "test-bot".into(),
             default_timezone: "Asia/Kolkata".into(),
-            telegram_mode: "push".into(),
+            telegram_mode: "webhook".into(),
             telegram_token_env: "BOT_TOKEN".into(),
             web_hook_url: Some("https://example.test/telegram/webhook".into()),
             telegram_host: "0.0.0.0".into(),
             telegram_port: 24_683,
-            allowed_chat_ids: vec![123],
-            allowed_user_ids: vec![456],
+            allowed_conversations: vec!["123".into()],
+            allowed_senders: vec!["456".into()],
             model: "custom-model".into(),
             endpoint: Some("http://localhost:8080/v1".into()),
             api_key_env: Some("CUSTOM_API_KEY".into()),
@@ -458,20 +466,20 @@ mod tests {
             PathBuf::from(DEFAULT_PERSONALITY_FILE)
         );
         assert_eq!(config.agent.default_timezone, "Asia/Kolkata");
-        assert_eq!(config.telegram.mode, TelegramMode::Push);
-        assert_eq!(config.telegram.bot_token_env, "BOT_TOKEN");
+        assert_eq!(config.channels.telegram.ingress, TelegramIngress::Webhook);
+        assert_eq!(config.channels.telegram.bot_token_env, "BOT_TOKEN");
         assert_eq!(
-            config.telegram.web_hook_url.as_deref(),
+            config.channels.telegram.web_hook_url.as_deref(),
             Some("https://example.test/telegram/webhook")
         );
-        assert_eq!(config.telegram.host, "0.0.0.0");
-        assert_eq!(config.telegram.port, 24_683);
+        assert_eq!(config.channels.telegram.host, "0.0.0.0");
+        assert_eq!(config.channels.telegram.port, 24_683);
         assert_eq!(
-            config.telegram.poll_interval_secs,
+            config.channels.telegram.poll_interval_secs,
             DEFAULT_TELEGRAM_POLL_INTERVAL_SECS
         );
-        assert_eq!(config.telegram.allowed_chat_ids, vec![123]);
-        assert_eq!(config.telegram.allowed_user_ids, vec![456]);
+        assert_eq!(config.channels.telegram.allowed_conversations, vec!["123"]);
+        assert_eq!(config.channels.telegram.allowed_senders, vec!["456"]);
         assert_eq!(config.llm.model, "custom-model");
         assert_eq!(
             config.llm.endpoint.as_deref(),
@@ -502,7 +510,7 @@ name = "custom-name"
 model = "old-model"
 temperature = 0.7
 
-[telegram]
+[channels.telegram]
 poll_interval_secs = 11
 "#,
         )
@@ -515,8 +523,8 @@ poll_interval_secs = 11
             web_hook_url: None,
             telegram_host: "127.0.0.1".into(),
             telegram_port: 24_682,
-            allowed_chat_ids: vec![],
-            allowed_user_ids: vec![],
+            allowed_conversations: vec![],
+            allowed_senders: vec![],
             model: "new-model".into(),
             endpoint: None,
             api_key_env: None,
@@ -529,11 +537,11 @@ poll_interval_secs = 11
         let config = AppConfig::from_file(&path).unwrap();
 
         assert_eq!(config.agent.name, "updated-name");
-        assert_eq!(config.telegram.mode, TelegramMode::Poll);
-        assert_eq!(config.telegram.web_hook_url, None);
-        assert_eq!(config.telegram.host, "127.0.0.1");
-        assert_eq!(config.telegram.port, 24_682);
-        assert_eq!(config.telegram.poll_interval_secs, 11);
+        assert_eq!(config.channels.telegram.ingress, TelegramIngress::Poll);
+        assert_eq!(config.channels.telegram.web_hook_url, None);
+        assert_eq!(config.channels.telegram.host, "127.0.0.1");
+        assert_eq!(config.channels.telegram.port, 24_682);
+        assert_eq!(config.channels.telegram.poll_interval_secs, 11);
         assert_eq!(config.llm.model, "new-model");
         assert_eq!(config.llm.temperature, 0.7);
     }

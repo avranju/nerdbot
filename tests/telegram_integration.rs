@@ -37,6 +37,10 @@ use nerdbot::telegram::service::TelegramService;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
 
+fn addr(chat_id: i64) -> nerdbot::channel::ConversationAddress {
+    nerdbot::channel::ConversationAddress::telegram_chat(chat_id)
+}
+
 // ── Command parsing ──────────────────────────────────────────────────
 
 #[test]
@@ -125,7 +129,7 @@ async fn setup_test_db() -> sqlx::SqlitePool {
 #[tokio::test]
 async fn test_command_handler_start() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Start, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Start, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("Welcome"));
@@ -135,7 +139,7 @@ async fn test_command_handler_start() {
 #[tokio::test]
 async fn test_command_handler_help() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Help, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Help, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("/start"));
@@ -147,7 +151,7 @@ async fn test_command_handler_help() {
 #[tokio::test]
 async fn test_command_handler_jobs_empty() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("no scheduled jobs"));
@@ -169,7 +173,7 @@ async fn test_command_handler_jobs_with_job() {
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("Test Job"));
@@ -193,7 +197,7 @@ async fn test_command_handler_jobs_only_own_chat() {
     .unwrap();
 
     // Chat 2 sees no jobs
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 2, 2, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, &addr(2), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("no scheduled jobs"));
@@ -214,10 +218,14 @@ async fn test_command_handler_delete_job() {
     .await
     .unwrap();
 
-    let response =
-        CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 1, 1, &pool, None)
-            .await
-            .unwrap();
+    let response = CommandHandler::handle(
+        TelegramCommand::Delete(job.id.clone()),
+        &addr(1),
+        &pool,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(response.contains("deleted"));
 
     // Verify job is disabled
@@ -252,15 +260,14 @@ async fn test_command_handler_jobs_hides_deleted_jobs() {
 
     CommandHandler::handle(
         TelegramCommand::Delete(deleted_job.id.clone()),
-        1,
-        1,
+        &addr(1),
         &pool,
         None,
     )
     .await
     .unwrap();
 
-    let response = CommandHandler::handle(TelegramCommand::Jobs, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::Jobs, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("Active Job"));
@@ -273,8 +280,7 @@ async fn test_command_handler_delete_nonexistent_job() {
 
     let response = CommandHandler::handle(
         TelegramCommand::Delete("nonexistent".into()),
-        1,
-        1,
+        &addr(1),
         &pool,
         None,
     )
@@ -299,11 +305,15 @@ async fn test_command_handler_delete_wrong_chat() {
     .unwrap();
 
     // Chat 2 tries to delete it
-    let response =
-        CommandHandler::handle(TelegramCommand::Delete(job.id.clone()), 2, 2, &pool, None)
-            .await
-            .unwrap();
-    assert!(response.contains("belongs to a different chat"));
+    let response = CommandHandler::handle(
+        TelegramCommand::Delete(job.id.clone()),
+        &addr(2),
+        &pool,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(response.contains("belongs to a different conversation"));
 }
 
 #[tokio::test]
@@ -312,8 +322,7 @@ async fn test_command_handler_run_nonexistent_job() {
 
     let response = CommandHandler::handle(
         TelegramCommand::Run("nonexistent".into()),
-        1,
-        1,
+        &addr(1),
         &pool,
         None,
     )
@@ -325,7 +334,7 @@ async fn test_command_handler_run_nonexistent_job() {
 #[tokio::test]
 async fn test_command_handler_reset_context() {
     let pool = setup_test_db().await;
-    let response = CommandHandler::handle(TelegramCommand::ResetContext, 1, 1, &pool, None)
+    let response = CommandHandler::handle(TelegramCommand::ResetContext, &addr(1), &pool, None)
         .await
         .unwrap();
     assert!(response.contains("fresh conversation"));
@@ -501,7 +510,7 @@ async fn test_message_handler_allowlist_blocks_chat() {
     let pool = setup_test_db().await;
 
     let mut config = make_test_config();
-    config.telegram.allowed_chat_ids = vec![100]; // Only chat 100 allowed
+    config.channels.telegram.allowed_conversations = vec!["100".to_string()]; // Only chat 100 allowed
 
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
@@ -534,7 +543,7 @@ async fn test_message_handler_allowlist_blocks_user() {
     let pool = setup_test_db().await;
 
     let mut config = make_test_config();
-    config.telegram.allowed_user_ids = vec![100]; // Only user 100 allowed
+    config.channels.telegram.allowed_senders = vec!["100".to_string()]; // Only user 100 allowed
 
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);
@@ -968,20 +977,28 @@ async fn test_get_me() {
 fn test_tool_context_carries_telegram_config() {
     let ctx = nerdbot::tools::traits::ToolContext {
         run_mode: nerdbot::agent::run_mode::AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 2,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((2).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "bot123".into(),
-        allowed_chat_ids: vec![1, 2],
-        allowed_user_ids: vec![10, 20],
+        access_policy: nerdbot::channel::ChannelAccessPolicy {
+            allowed_conversations: vec![1, 2]
+                .into_iter()
+                .map(|id| nerdbot::channel::ConversationAddressPattern {
+                    channel_id: "telegram".to_string(),
+                    conversation_id: id.to_string(),
+                    thread_id: None,
+                })
+                .collect(),
+            allowed_senders: vec![10, 20].into_iter().map(|id| id.to_string()).collect(),
+        },
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
 
-    assert_eq!(ctx.telegram_token, "bot123");
-    assert_eq!(ctx.allowed_chat_ids, vec![1, 2]);
-    assert_eq!(ctx.allowed_user_ids, vec![10, 20]);
+    assert_eq!(ctx.access_policy.allowed_conversations.len(), 2);
+    assert_eq!(ctx.access_policy.allowed_senders, vec!["10", "20"]);
 }
 
 // ── Markdown V2 Integration Tests ─────────────────────────────────────

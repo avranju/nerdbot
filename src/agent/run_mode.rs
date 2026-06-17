@@ -2,11 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Identifier for a Telegram chat.
-pub type TelegramChatId = i64;
-
-/// Identifier for a Telegram user.
-pub type TelegramUserId = i64;
+use crate::channel::{ConversationAddress, SenderIdentity};
 
 /// Unique identifier for a scheduled job.
 pub type JobId = String;
@@ -14,16 +10,16 @@ pub type JobId = String;
 /// Which kind of agent run is being executed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentRunMode {
-    /// User sent a message in a Telegram chat.
+    /// User sent a message.
     InteractiveReply {
-        chat_id: TelegramChatId,
-        user_id: TelegramUserId,
+        address: ConversationAddress,
+        sender: SenderIdentity,
     },
     /// A scheduled job fired.
     ScheduledJob {
         job_id: JobId,
-        /// Default chat to send notification to if job completes.
-        default_chat_id: TelegramChatId,
+        /// Default conversation to send notification to if job completes.
+        default_address: ConversationAddress,
         /// Whether to send the final result if the model didn't already notify.
         notify_on_completion: bool,
     },
@@ -32,21 +28,21 @@ pub enum AgentRunMode {
 }
 
 impl AgentRunMode {
-    /// Returns the primary chat ID for this run (used for messaging).
-    pub fn chat_id(&self) -> Option<TelegramChatId> {
+    /// Returns the primary conversation address for this run.
+    pub fn address(&self) -> Option<&ConversationAddress> {
         match self {
-            AgentRunMode::InteractiveReply { chat_id, .. } => Some(*chat_id),
+            AgentRunMode::InteractiveReply { address, .. } => Some(address),
             AgentRunMode::ScheduledJob {
-                default_chat_id, ..
-            } => Some(*default_chat_id),
+                default_address, ..
+            } => Some(default_address),
             AgentRunMode::Internal { .. } => None,
         }
     }
 
-    /// Returns the user ID if this is an interactive run.
-    pub fn user_id(&self) -> Option<TelegramUserId> {
+    /// Returns the sender identity if this is an interactive run.
+    pub fn sender(&self) -> Option<&SenderIdentity> {
         match self {
-            AgentRunMode::InteractiveReply { user_id, .. } => Some(*user_id),
+            AgentRunMode::InteractiveReply { sender, .. } => Some(sender),
             _ => None,
         }
     }

@@ -36,13 +36,13 @@ use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
 /// Build a standard test agent context.
 fn test_context() -> AgentContext {
     AgentContext::new(
+        "telegram",
         AgentRunMode::InteractiveReply {
-            chat_id: 123_456_789,
-            user_id: 987_654_321,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123_456_789),
+            sender: nerdbot::channel::SenderIdentity::new((987_654_321).to_string(), None),
         },
         "You are a helpful assistant.".to_string(),
         PathBuf::from("/workspace"),
-        "fake-token".into(),
         vec![],
         vec![],
     )
@@ -254,13 +254,12 @@ async fn test_echo_tool_execution() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -284,13 +283,12 @@ async fn test_calculator_add() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -311,13 +309,12 @@ async fn test_calculator_subtract() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -340,13 +337,12 @@ async fn test_calculator_multiply() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -369,13 +365,12 @@ async fn test_calculator_divide() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -398,13 +393,12 @@ async fn test_calculator_division_by_zero() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -428,13 +422,12 @@ async fn test_calculator_invalid_operation() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -458,13 +451,12 @@ async fn test_calculator_missing_field() {
     let tool = CalculatorTool;
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -616,8 +608,12 @@ async fn test_agent_loop_permission_denied() {
     ]);
 
     let mut ctx = test_context();
-    // Set allowed_chat_ids to a non-matching value
-    ctx.allowed_chat_ids = vec![999_999_999];
+    // Set allowed_conversations to a non-matching value
+    ctx.access_policy.allowed_conversations = vec![nerdbot::channel::ConversationAddressPattern {
+        channel_id: "telegram".to_string(),
+        conversation_id: "999999999".to_string(),
+        thread_id: None,
+    }];
 
     let registry = toy_registry();
     let config = AgentLoopConfig::default();
@@ -772,13 +768,12 @@ async fn test_registry_execute_echo() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };
@@ -805,13 +800,12 @@ async fn test_registry_execute_calculator() {
 
     let ctx = ToolContext {
         run_mode: AgentRunMode::InteractiveReply {
-            chat_id: 1,
-            user_id: 1,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(1),
+            sender: nerdbot::channel::SenderIdentity::new((1).to_string(), None),
         },
         workspace_root: PathBuf::from("/tmp"),
-        telegram_token: "test".into(),
-        allowed_chat_ids: vec![],
-        allowed_user_ids: vec![],
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     };

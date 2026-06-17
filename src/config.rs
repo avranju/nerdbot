@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use url::Url;
 
+use crate::channel::ChannelConfig;
 use crate::error::AgentError;
 
 pub const DEFAULT_TELEGRAM_POLL_INTERVAL_SECS: u64 = 5;
@@ -15,7 +16,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
-    pub telegram: TelegramConfig,
+    pub channels: ChannelConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -58,12 +59,15 @@ impl Default for AgentConfig {
     }
 }
 
-/// Telegram-specific configuration.
+/// Telegram channel configuration.
 #[derive(Debug, Deserialize, Clone)]
-pub struct TelegramConfig {
-    /// Telegram ingress mode: long polling or webhook push.
+pub struct TelegramChannelConfig {
+    /// Whether the Telegram channel should start.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Telegram ingress transport: long polling or webhook push.
     #[serde(default)]
-    pub mode: TelegramMode,
+    pub ingress: TelegramIngress,
     /// Environment variable name holding the bot token.
     #[serde(default = "default_telegram_token_env")]
     pub bot_token_env: String,
@@ -83,12 +87,12 @@ pub struct TelegramConfig {
     /// Messages from chats not in this list are ignored. If empty, all chats
     /// are allowed (useful for local development).
     #[serde(default)]
-    pub allowed_chat_ids: Vec<i64>,
+    pub allowed_conversations: Vec<String>,
     /// Allowed Telegram **account** (user) IDs. Messages from users not in
     /// this list are ignored regardless of which chat they send from.
     /// If empty, all users are allowed (useful for local development).
     #[serde(default)]
-    pub allowed_user_ids: Vec<i64>,
+    pub allowed_senders: Vec<String>,
     /// Maximum size in bytes for downloaded Telegram attachments (images, PDFs, etc.).
     /// Files larger than this limit are rejected before download begins.
     #[serde(default = "default_max_attachment_bytes")]
@@ -99,17 +103,18 @@ pub struct TelegramConfig {
     pub max_text_document_chars: usize,
 }
 
-impl Default for TelegramConfig {
+impl Default for TelegramChannelConfig {
     fn default() -> Self {
         Self {
-            mode: TelegramMode::Poll,
+            enabled: true,
+            ingress: TelegramIngress::Poll,
             bot_token_env: default_telegram_token_env(),
             web_hook_url: None,
             host: default_telegram_host(),
             port: default_telegram_port(),
             poll_interval_secs: default_telegram_poll_interval_secs(),
-            allowed_chat_ids: Vec::new(),
-            allowed_user_ids: Vec::new(),
+            allowed_conversations: Vec::new(),
+            allowed_senders: Vec::new(),
             max_attachment_bytes: default_max_attachment_bytes(),
             max_text_document_chars: default_max_text_document_chars(),
         }
@@ -119,12 +124,12 @@ impl Default for TelegramConfig {
 /// Telegram update ingress mode.
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum TelegramMode {
+pub enum TelegramIngress {
     /// Receive updates through Telegram's getUpdates long-polling API.
     #[default]
     Poll,
     /// Receive updates through Telegram webhooks.
-    Push,
+    Webhook,
 }
 
 /// Storage configuration.
@@ -372,6 +377,9 @@ fn default_timezone() -> String {
 fn default_telegram_token_env() -> String {
     "TELEGRAM_BOT_TOKEN".to_string()
 }
+fn default_true() -> bool {
+    true
+}
 fn default_telegram_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -483,53 +491,54 @@ impl AppConfig {
 
     /// Validate cross-field configuration constraints after TOML defaults are applied.
     pub fn validate(&self) -> Result<(), AgentError> {
-        if let Some(chat_id) = self
-            .telegram
-            .allowed_chat_ids
+        let telegram = &self.channels.telegram;
+
+        if let Some(conversation_id) = telegram
+            .allowed_conversations
             .iter()
-            .find(|chat_id| **chat_id <= 0)
+            .find(|id| id.trim().is_empty())
         {
             return Err(AgentError::Config(format!(
-                "telegram.allowed_chat_ids must contain only positive IDs, got {chat_id}"
+                "channels.telegram.allowed_conversations must not contain blank IDs, got {conversation_id:?}"
             )));
         }
 
-        if let Some(user_id) = self
-            .telegram
-            .allowed_user_ids
+        if let Some(sender_id) = telegram
+            .allowed_senders
             .iter()
-            .find(|user_id| **user_id <= 0)
+            .find(|id| id.trim().is_empty())
         {
             return Err(AgentError::Config(format!(
-                "telegram.allowed_user_ids must contain only positive IDs, got {user_id}"
+                "channels.telegram.allowed_senders must not contain blank IDs, got {sender_id:?}"
             )));
         }
 
-        if self.telegram.mode == TelegramMode::Push {
-            let Some(web_hook_url) = self
-                .telegram
+        if telegram.enabled && telegram.ingress == TelegramIngress::Webhook {
+            let Some(web_hook_url) = telegram
                 .web_hook_url
                 .as_deref()
                 .map(str::trim)
                 .filter(|url| !url.is_empty())
             else {
                 return Err(AgentError::Config(
-                    "telegram.web_hook_url is required when telegram.mode is \"push\"".into(),
+                    "channels.telegram.web_hook_url is required when channels.telegram.ingress is \"webhook\"".into(),
                 ));
             };
 
             let parsed = Url::parse(web_hook_url).map_err(|e| {
-                AgentError::Config(format!("telegram.web_hook_url is not a valid URL: {e}"))
+                AgentError::Config(format!(
+                    "channels.telegram.web_hook_url is not a valid URL: {e}"
+                ))
             })?;
             if parsed.scheme() != "https" {
                 return Err(AgentError::Config(format!(
-                    "telegram.web_hook_url must use https, got {:?}",
+                    "channels.telegram.web_hook_url must use https, got {:?}",
                     parsed.scheme()
                 )));
             }
             if parsed.host_str().is_none() {
                 return Err(AgentError::Config(
-                    "telegram.web_hook_url must include a host".into(),
+                    "channels.telegram.web_hook_url must include a host".into(),
                 ));
             }
         }

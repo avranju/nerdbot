@@ -160,7 +160,7 @@ fn test_job_status_serialization() {
 fn test_chat_session_new() {
     let session = ChatSession::new(123_456_789i64);
     assert!(!session.id.is_empty());
-    assert_eq!(session.telegram_chat_id, 123_456_789i64);
+    assert_eq!(session.conversation_id, "123456789");
     assert!(session.created_at <= Utc::now());
     assert_eq!(session.created_at, session.updated_at);
 }
@@ -176,7 +176,7 @@ fn test_chat_session_unique_ids() {
 fn test_chat_session_clone() {
     let session = ChatSession::new(42);
     let cloned = session.clone();
-    assert_eq!(session.telegram_chat_id, cloned.telegram_chat_id);
+    assert_eq!(session.conversation_id, cloned.conversation_id);
     assert_eq!(session.id, cloned.id);
 }
 
@@ -262,7 +262,7 @@ fn test_stored_job_new_oneshot() {
         ScheduleType::OneShot,
     );
     assert!(!job.id.is_empty());
-    assert_eq!(job.owner_chat_id, 123_456_789i64);
+    assert_eq!(job.owner_conversation_id, "123456789");
     assert_eq!(job.name, "morning report");
     assert!(matches!(job.schedule_type(), Ok(ScheduleType::OneShot)));
     assert!(job.enabled);
@@ -301,7 +301,7 @@ fn test_stored_job_clone() {
         (job.schedule_type(), cloned.schedule_type()),
         (Ok(ScheduleType::Cron), Ok(ScheduleType::Cron))
     ));
-    assert_eq!(job.owner_chat_id, cloned.owner_chat_id);
+    assert_eq!(job.owner_conversation_id, cloned.owner_conversation_id);
 }
 
 #[test]

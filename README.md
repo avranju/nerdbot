@@ -2,13 +2,13 @@
 
 A minimal, self-hosted AI agent runtime written in Rust.
 
-NerdBot communicates with users via **Telegram**, uses an **iterative tool-calling loop** driven by multiple LLM providers (OpenAI, Anthropic, Gemini, OpenRouter, and any OpenAI-compatible endpoint), and persists all conversation state and scheduled jobs in **SQLite**.
+NerdBot communicates with users through pluggable **communication channels**. Telegram is the first channel adapter and supports both long-polling and webhook ingress. NerdBot uses an **iterative tool-calling loop** driven by multiple LLM providers (OpenAI, Anthropic, Gemini, OpenRouter, and any OpenAI-compatible endpoint), and persists all conversation state and scheduled jobs in **SQLite**.
 
 ## Features
 
-- **Telegram integration** — long-polling bot with chat/user allowlists and slash commands (`/help`, `/jobs`, `/run`, `/delete`, `/reset_context`)
+- **Communication channels** — channel-qualified conversations with Telegram polling/webhook support and room for future adapters such as Zulip
 - **Iterative tool loop** — the harness owns orchestration; the LLM proposes tool calls, Rust validates and executes them, and the loop continues until completion
-- **Built-in tools** — scheduling, Telegram messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
+- **Built-in tools** — scheduling, user messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
@@ -121,7 +121,7 @@ Query the running instance with the same socket path:
 ```bash
 cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics ping
 cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics list-sessions
-cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --chat-id 123456
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --channel-id telegram --conversation-id 123456
 cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --session-id <uuid> --json
 ```
 
@@ -130,7 +130,7 @@ cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --s
 By default, the actual text of prompts and tool specs is hidden from the console rendering to prevent terminal noise. To inspect the full effective personality prompt (with timezone context), the compaction summary prompt, and the full JSON specs of all registered tools, add the `--show-prompts` flag:
 
 ```bash
-cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --chat-id 123456 --show-prompts
+cargo run -- --diagnostics-socket /tmp/nerdbot/nerdbot.sock diagnostics show --channel-id telegram --conversation-id 123456 --show-prompts
 ```
 
 #### Docker Diagnostics Mount
@@ -170,14 +170,15 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `personality_file` | Path to the personality Markdown file (default: `/config/personality.md`) |
 | | `max_tool_iterations` | Maximum tool-call loop iterations per request (default: `10`) |
 | | `default_timezone` | Default IANA timezone for agent behavior |
-| `[telegram]` | `mode` | Telegram ingress mode: `poll` or `push` (default: `poll`) |
+| `[channels.telegram]` | `enabled` | Enable the Telegram channel adapter (default: `true`) |
+| | `ingress` | Telegram ingress transport: `poll` or `webhook` (default: `poll`) |
 | | `bot_token_env` | Environment variable name for the Telegram bot token (default: `TELEGRAM_BOT_TOKEN`) |
 | | `poll_interval_secs` | Seconds to sleep after an empty Telegram `getUpdates` response in poll mode (default: `5`) |
-| | `web_hook_url` | Public HTTPS webhook URL required when `mode = "push"` |
-| | `host` | Local plain-HTTP webhook bind host for push mode (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
-| | `port` | Local plain-HTTP webhook bind port for push mode (default: `24682`) |
-| | `allowed_chat_ids` | List of positive Telegram chat IDs (empty = all) |
-| | `allowed_user_ids` | List of positive Telegram user IDs (empty = all) |
+| | `web_hook_url` | Public HTTPS webhook URL required when `ingress = "webhook"` |
+| | `host` | Local plain-HTTP webhook bind host for webhook mode (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
+| | `port` | Local plain-HTTP webhook bind port for webhook mode (default: `24682`) |
+| | `allowed_conversations` | List of Telegram conversation/chat IDs as strings (empty = all). Internally these become channel-qualified allowlist patterns for `channel_id = "telegram"` |
+| | `allowed_senders` | List of Telegram sender/user IDs as strings (empty = all) |
 | | `max_attachment_bytes` | Maximum download size for Telegram attachments in bytes (default: `5242880`, 5 MB) |
 | | `max_text_document_chars` | Max characters when extracting text from text documents (default: `32768`, 32 KB) |
 | `[storage]` | `sqlite_path` | Path to the SQLite database file |
@@ -218,15 +219,15 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | `/jobs` | List all scheduled jobs |
 | `/run <job-id>` | Immediately execute a scheduled job |
 | `/delete <job-id>` | Delete a scheduled job |
-| `/reset_context` | Reset the conversation context for the current chat |
+| `/reset_context` | Reset the conversation context for the current channel conversation |
 
 ## Architecture
 
 ```
-Telegram (polling or webhook push)
+Channel ingress (Telegram polling or webhook push)
     │
     ▼
-MessageHandler ──► Allowlist check ──► Session lookup
+ChannelMessageHandler ──► Channel access policy ──► Session lookup
     │
     ▼
 ContextManager ──► Personality + tool specs + rolling summary + recent turns
@@ -235,7 +236,7 @@ ContextManager ──► Personality + tool specs + rolling summary + recent tur
 AgentLoop ──► LLM call ──► Tool calls? ──► Harness executes tools ──► Repeat
     │
     ▼
-Final text ──► Persist messages ──► Send to Telegram ──► Check compaction threshold
+Final text ──► Persist messages ──► Send through ChannelRegistry ──► Check compaction threshold
 ```
 
 The Rust harness **owns orchestration**. The LLM proposes actions through tool calls. The harness validates arguments, executes them, persists results, and feeds them back — looping until the task is complete or a stop condition fires.
@@ -244,13 +245,14 @@ The Rust harness **owns orchestration**. The LLM proposes actions through tool c
 
 ```
 src/
-  main.rs              — CLI entry, long polling loop, service wiring
+  main.rs              — CLI entry, channel registry/service wiring, Telegram ingress dispatch
   config.rs            — TOML config loader
   onboarding.rs        — Interactive config.toml generator
   error.rs             — Error types
   agent/               — Agent loop and run modes
+  channel/             — Generic channel types, access policy, registry, and handler
   llm/                 — LLM client (via genai crate)
-  telegram/            — Telegram bot, commands, message handler
+  telegram/            — Telegram bot, commands, service adapter, ingress, and attachments
   scheduler/           — Cron/one-shot job service
   tools/               — Built-in tools (echo, calculator, files, web, shell, etc.)
   context/             — Context budgeting, compaction service & worker

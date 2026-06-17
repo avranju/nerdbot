@@ -1,16 +1,17 @@
 ## Project Overview
 
 **NerdBot** is a minimal, self-hosted AI agent runtime written in Rust (Edition 2024).
-It runs as a single binary (Docker-friendly) and communicates with users via Telegram.
-The core loop: Telegram message → agent loop (LLM proposes tool calls → Rust harness
-executes them → results fed back → repeat) → Telegram reply.
+It runs as a single binary (Docker-friendly) and communicates with users through
+pluggable communication channels. Telegram is the first channel adapter.
+The core loop: channel message → agent loop (LLM proposes tool calls → Rust harness
+executes them → results fed back → repeat) → channel reply.
 
 ### Key Technologies
 - **Language:** Rust (Edition 2024)
 - **Async runtime:** Tokio (multi-thread, macros, signal, process, time)
 - **Database:** SQLite via `sqlx` with `migrate` feature
 - **LLM abstraction:** `genai` crate (supports OpenAI, Anthropic, Gemini, OpenRouter, custom OpenAI-compatible endpoints)
-- **Telegram:** Long polling or webhook push via axum
+- **Channels:** Generic channel abstraction; Telegram supports long polling or webhook push via axum
 - **Web search:** Exa API
 - **Config:** TOML files + environment variables
 - **Logging:** `tracing` + `tracing-subscriber` with `env-filter`
@@ -22,9 +23,9 @@ executes them → results fed back → repeat) → Telegram reply.
 ### Source Layout
 ```
 src/
-  main.rs          — CLI entry, Telegram poll/push ingress dispatch, webhook server, service wiring (imports from lib crate)
+  main.rs          — CLI entry, channel registry/service wiring, Telegram poll/webhook ingress dispatch
   lib.rs           — Crate root, re-exports all modules for tests and binary crate
-  config.rs        — TOML config loader (AppConfig with agent/telegram/storage/workspace/llm/context/scheduler/shell/files/exa sections)
+  config.rs        — TOML config loader (AppConfig with agent/channels/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   onboarding.rs    — Interactive `config.toml` generator for first-run setup
   error.rs         — AgentError enum + domain-specific error types
 
@@ -39,14 +40,21 @@ src/
     mod.rs         — LlmExecutor trait + LlmClient wrapping genai::Client, including configurable retries for transient network/server failures
     fake.rs        — FakeProvider for testing without real LLM APIs
 
+  channel/
+    mod.rs         — Generic communication channel exports
+    types.rs       — ConversationAddress, SenderIdentity, InboundMessage, OutboundMessage, MessageFormat, ConversationAddressPattern, ChannelAccessPolicy
+    traits.rs      — ChannelService and ChannelIngress traits plus typing guard
+    registry.rs    — ChannelRegistry for outbound routing by channel_id
+    handler.rs     — ChannelMessageHandler: access policy → session → route → agent loop → reply
+
   telegram/
     mod.rs
     bot.rs         — Telegram Bot API client (token-qualified API URLs, long polling, webhook registration, get_file, download_file)
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic); `/jobs` lists active jobs only while `/delete` soft-deletes by disabling rows
-    handler.rs     — MessageHandler: allowlist → session → route → agent loop → reply (with rich message/attachment support)
+    handler.rs     — Telegram-facing compatibility adapter over ChannelMessageHandler for Telegram-shaped callers/tests
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
-    service.rs     — TelegramService: send_message, etc.
+    service.rs     — TelegramService: send_message, typing, ChannelService implementation
     update/
       mod.rs       — TelegramUpdate trait and ingress implementation exports
       poll.rs      — TelegramPoll getUpdates implementation
@@ -56,7 +64,7 @@ src/
     mod.rs
     cron.rs        — get_next_cron_run helper
     models.rs      — ScheduledJob, JobStatus, ScheduleType, JobContextPolicy
-    runner.rs      — run_scheduled_job: builds AgentContext for scheduled runs; sends fallback Telegram completion notifications unless current run metadata shows send_user_message already succeeded
+    runner.rs      — run_scheduled_job: builds AgentContext for scheduled runs; sends fallback channel completion notifications unless current run metadata shows send_user_message already succeeded
     service.rs     — SchedulerService: background loop, startup reload, notifier
 
   tools/
@@ -68,7 +76,7 @@ src/
     files.rs       — read_file, write_file, append_file, list_directory
     schedule.rs    — schedule_job, list_jobs, delete_job, run_job_now
     shell.rs       — ShellExecute (bubblewrap-sandboxed command execution with namespace isolation)
-    telegram.rs    — SendTelegramMessage tool
+    messaging.rs   — send_user_message tool (enforces full channel conversation identity)
     web.rs         — WebSearch (Exa) + WebFetch tools
 
   context/
@@ -117,7 +125,7 @@ README.md          — Project documentation
 ### Runtime Flows
 
 **Telegram message with attachments (rich ingress):**
-0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. `[telegram].mode = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[telegram].mode = "push"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
+0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, configures the Telegram slash-command menu via `setMyCommands`, and registers TelegramService in ChannelRegistry under channel_id `telegram`. `[channels.telegram].ingress = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[channels.telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[channels.telegram].ingress = "webhook"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and starts a plain HTTP axum server on `[channels.telegram].host`/`port` (default `127.0.0.1:24682`) that validates `X-Telegram-Bot-Api-Secret-Token`.
 1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
@@ -128,20 +136,20 @@ README.md          — Project documentation
    f. Builds a user prompt from `caption` (priority) → `text` → default prompt ("Please analyze the attached file(s).")
    g. Never exposes token-qualified Telegram download URLs to the LLM
    h. Omits structured inbound payloads from tracing spans so attachment base64 content is not written to logs; records only text length and attachment counts
-3. MessageHandler checks allowlist (chat_id + user_id) BEFORE downloading any files
-4. Ensures chat session exists (creates if new)
+3. ChannelMessageHandler checks channel-qualified access policy (derived from inbound message's `address.channel_id`) BEFORE downloading any files
+4. Ensures channel-qualified chat session exists (creates if new)
 5. Routes: if `/command` → CommandHandler, else → agent loop
 6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, excludes binary payloads from token estimation, and appends the current date/time as a trailing text part on the current user message without flattening rich attachment parts. The datetime is formatted in 24-hour local time with timezone abbreviation and UTC offset.
-7. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
+7. Starts a channel typing indicator when supported; Telegram refreshes `typing` every 4 seconds while the interactive agent loop runs
 8. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-9. Persists current user message and assistant reply → sends to Telegram
+9. Persists current user message and assistant reply → sends via ChannelRegistry
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
 2. If the config file exists, load it and use its current values as prompt defaults
-3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, Telegram ingress mode (`poll` or `push`), push-mode webhook URL/host/port when applicable, chat/user allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
-4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, use `AppConfig` defaults for omitted settings in a new file, and clear `[telegram].web_hook_url` when onboarding is set back to poll mode
+3. `cliclack` prompts for agent name, timezone, Telegram token environment variable, Telegram ingress (`poll` or `webhook`), webhook URL/host/port when applicable, conversation/sender allowlists, LLM provider/model and optional API-key environment variable, custom endpoint details when needed, shell sandbox mode, and optional Exa API-key environment variable
+4. Update the selected values in a valid TOML file without embedding secrets; write fixed deployment defaults for `[agent].personality_file` (`/config/personality.md`), `[workspace].root` (`/workspace`), and `[storage].sqlite_path` (`/data/agent.db`), preserve existing settings outside the guided flow, use `AppConfig` defaults for omitted settings in a new file, and clear `[channels.telegram].web_hook_url` when onboarding is set back to poll mode
 
 **Custom OpenAI-compatible LLM endpoint:**
 - `LlmClient::from_config` normalizes configured endpoint URLs with a trailing slash and binds `genai` to the OpenAI adapter, preventing unknown local model names from falling back to native Ollama routing
@@ -150,21 +158,22 @@ README.md          — Project documentation
 **Interactive Telegram message:**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, and configures the Telegram slash-command menu via `setMyCommands` during startup. Reset commands use Telegram-safe underscore names (`/reset_context`, `/new_topic`) because Telegram command menus only allow lowercase letters, digits, and underscores.
 1. Polling or webhook push receives update
-2. MessageHandler checks allowlist (chat_id + user_id)
-3. Ensures chat session exists (creates if new)
+2. ChannelMessageHandler checks conversation/sender allowlist
+3. Ensures channel-qualified chat session exists (creates if new)
 4. Routes: if `/command` → CommandHandler, else → agent loop
 5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once, and adds the current date/time as trailing 24-hour timezone-qualified text in that user message to preserve cacheable prompt prefixes
-6. Starts a Telegram `typing` chat action and refreshes it every 4 seconds while the interactive agent loop runs
+6. Starts a channel typing indicator when supported
 7. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-8. Persists current user message and assistant reply → sends to Telegram
+8. Persists current user message and assistant reply → sends through ChannelRegistry
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job
-2. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode)
-3. Agent loop executes with cached `Personality` contents, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
-4. Job status updated to Success/Failed
-5. If notify_on_completion and the model didn't call send_user_message successfully during the current job run, harness sends final text as a fallback notification. The decision comes from AgentResult metadata produced inside the active agent loop rather than scanning session history, so unrelated tool calls or prior scheduled jobs in the same chat cannot suppress the fallback.
+2. Derives the job's channel-aware access policy from `job.owner_address().channel_id` via `config.channels.access_policy_for()`. A Telegram-owned job gets Telegram's policy; a Zulip-owned job gets Zulip's policy (currently empty/allow-all since only Telegram has configured allowlists).
+3. Runs job via scheduler::runner (builds AgentContext with ScheduledJob mode and derived access policy)
+4. Agent loop executes with cached `Personality` contents, configured timezone runtime context, and the job prompt enriched with current date/time as trailing user-message text; model may use web_search, send_user_message, etc.
+5. Job status updated to Success/Failed
+6. If notify_on_completion and the model didn't call send_user_message successfully during the current job run, harness sends final text through ChannelRegistry using `job.owner_address()` as the fallback notification target.
 
 **Personality prompt cache:**
 - Startup creates one `agent::personality::Personality` from `[agent].personality_file`, loads the file contents once, and hands clones to `MessageHandler`, `SchedulerService`, and the diagnostics server.
@@ -182,15 +191,15 @@ README.md          — Project documentation
 **Local diagnostics socket (opt-in):**
 1. Start NerdBot with `--diagnostics-socket <path>` to bind a local Unix domain socket; no diagnostics service runs unless this option is provided
 2. The socket uses owner-only (`0600`) permissions, refuses to replace regular files or active sockets, removes stale socket nodes, and is cleaned up during graceful shutdown
-3. The newline-delimited JSON protocol supports `ping`, `list_sessions`, and `show_session` by database session ID or Telegram chat ID
-4. Query the running instance with `nerdbot --diagnostics-socket <path> diagnostics ping`, `list-sessions`, or `show (--chat-id <id> | --session-id <uuid>)`; add `--json` for scripting
+3. The newline-delimited JSON protocol supports `ping`, `list_sessions`, and `show_session` by database session ID or channel conversation address
+4. Query the running instance with `nerdbot --diagnostics-socket <path> diagnostics ping`, `list-sessions`, or `show (--channel-id <id> --conversation-id <id> [--thread-id <id>] | --session-id <uuid>)`; add `--json` for scripting
 5. `show_session` returns the shared context snapshot, live in-memory `CompactionState`, the effective cached personality prompt (with timezone context), the summary prompt metadata, and tool-spec count/cost. The full prompt and spec bodies are hidden by default and returned only when requested (e.g. `--show-prompts`).
 
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo
 - `calculator` — Math evaluation
 - `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; list commands return active jobs by default, the `list_jobs` tool accepts `include_disabled = true` for disabled/deleted job history, and delete disables persisted jobs so they stop running but remain available for direct lookup/history
-- `send_telegram_message` — Send messages to Telegram chats
+- `send_user_message` — Send messages to the current or explicitly targeted channel conversation. Enforces the run's channel-aware access policy against the full `ConversationAddress` (channel_id + conversation_id + thread_id), not just conversation_id alone. Same conversation ID on a different channel is rejected.
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search
 - `web_fetch` — Fetch URL content with SSRF protection. Accepts optional `max_age_hours`; omit it for Exa's default cached contents behavior or set `0` to disable Exa's cache for fresh upstream content.
@@ -198,7 +207,7 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
-- `[telegram]` — mode (`"poll"` default or `"push"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for push), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_chat_ids, allowed_user_ids, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[channels.telegram]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for webhook), host/port for the local webhook server (default `127.0.0.1:24682`), allowed_conversations, allowed_senders, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes
@@ -252,6 +261,16 @@ Standing instructions and behavior rules that **must** be followed by any AI age
 * Use clean, idiomatic Rust.
 * SQLite connections must actively enable `.foreign_keys(true)` constraints via connection options on startup.
 * Cache long-lived config and secret variables (like `TELEGRAM_BOT_TOKEN`) on service/handler instantiation rather than reading them from the environment repeatedly.
+
+## Channel Access Policy
+* NerdBot uses a channel-aware access policy system: `ChannelAccessPolicy` groups `allowed_conversations` (a list of `ConversationAddressPattern`) and `allowed_senders`.
+* `ConversationAddressPattern` includes `channel_id`, `conversation_id`, and `thread_id`. A pattern with `thread_id: None` matches any thread (wildcard); `Some(id)` requires exact thread match.
+* `AppConfig.channels.access_policy_for(channel_id)` derives the policy for a channel from its config. Currently only `"telegram"` is supported — it maps `[channels.telegram].allowed_conversations` to channel-qualified patterns.
+* The interactive handler (`ChannelMessageHandler`) derives the policy from the inbound message's `address.channel_id`.
+* The scheduler derives the policy from the job's `owner_address().channel_id` before running it.
+* `AgentContext` and `ToolContext` carry a single `access_policy: ChannelAccessPolicy` field (replacing the old flat `allowed_conversations: Vec<String>` / `allowed_senders: Vec<String>`).
+* `send_user_message` enforces the policy against the full `ConversationAddress` — same conversation ID on a different channel is rejected.
+* Telegram config shape is preserved: `allowed_conversations = ["123"]` becomes a channel-qualified pattern internally.
 
 ## Session Continuity
 * After completing a feature, fix, or any significant change, **update this AGENTS.md file** to reflect the new state of the codebase. Add or modify sections in "Project Overview" → "Source Layout" or "Runtime Flows" as needed so the next coding session can build context by scanning this file without exploring the codebase.

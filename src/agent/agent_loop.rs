@@ -165,17 +165,10 @@ pub async fn run_agent(
         }
 
         // Check access before executing tool calls
-        let chat_id = ctx.run_mode.chat_id();
-        let user_id = ctx.run_mode.user_id();
-        if let Some(cid) = chat_id
-            && !ctx.allowed_chat_ids.is_empty()
-            && !ctx.allowed_chat_ids.contains(&cid)
-        {
-            return Err(AgentError::PermissionDenied);
-        }
-        if let Some(uid) = user_id
-            && !ctx.allowed_user_ids.is_empty()
-            && !ctx.allowed_user_ids.contains(&uid)
+        let address = ctx.run_mode.address();
+        let sender = ctx.run_mode.sender();
+        if let (Some(address), Some(sender)) = (address, sender)
+            && !ctx.access_policy.is_allowed(address, sender)
         {
             return Err(AgentError::PermissionDenied);
         }
@@ -184,9 +177,8 @@ pub async fn run_agent(
         let tool_ctx = ToolContext {
             run_mode: ctx.run_mode.clone(),
             workspace_root: ctx.workspace_root.clone(),
-            telegram_token: ctx.telegram_token.clone(),
-            allowed_chat_ids: ctx.allowed_chat_ids.clone(),
-            allowed_user_ids: ctx.allowed_user_ids.clone(),
+            access_policy: ctx.access_policy.clone(),
+            channel_registry: ctx.channel_registry.clone(),
             pool: ctx.pool.clone(),
             scheduler_notifier: ctx.scheduler_notifier.clone(),
         };
@@ -304,12 +296,10 @@ pub struct AgentContext {
     pub messages: Vec<ChatMessage>,
     /// Workspace root path.
     pub workspace_root: std::path::PathBuf,
-    /// Telegram bot token.
-    pub telegram_token: String,
-    /// Allowed Telegram conversation IDs (chats, groups, channels).
-    pub allowed_chat_ids: Vec<i64>,
-    /// Allowed Telegram account IDs (individual users).
-    pub allowed_user_ids: Vec<i64>,
+    /// Channel-qualified access policy for this run.
+    pub access_policy: crate::channel::ChannelAccessPolicy,
+    /// Registered outbound communication channels.
+    pub channel_registry: Option<std::sync::Arc<crate::channel::ChannelRegistry>>,
     /// Database pool for tools needing access to storage
     pub pool: Option<sqlx::SqlitePool>,
     /// Chat session ID for persisting tool results.
@@ -322,21 +312,34 @@ pub struct AgentContext {
 impl AgentContext {
     /// Construct a minimal `AgentContext` for testing.
     pub fn new(
+        channel_id: &str,
         run_mode: AgentRunMode,
         personality: String,
         workspace_root: std::path::PathBuf,
-        telegram_token: String,
         allowed_chat_ids: Vec<i64>,
         allowed_user_ids: Vec<i64>,
     ) -> Self {
+        let allowed_conversations = allowed_chat_ids
+            .into_iter()
+            .map(|id| crate::channel::ConversationAddressPattern {
+                channel_id: channel_id.to_string(),
+                conversation_id: id.to_string(),
+                thread_id: None,
+            })
+            .collect();
         Self {
             run_mode,
             personality,
             messages: Vec::new(),
             workspace_root,
-            telegram_token,
-            allowed_chat_ids,
-            allowed_user_ids,
+            access_policy: crate::channel::ChannelAccessPolicy {
+                allowed_conversations,
+                allowed_senders: allowed_user_ids
+                    .into_iter()
+                    .map(|id| id.to_string())
+                    .collect(),
+            },
+            channel_registry: None,
             pool: None,
             session_id: String::new(),
             scheduler_notifier: None,

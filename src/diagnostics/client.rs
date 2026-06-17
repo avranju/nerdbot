@@ -77,7 +77,8 @@ pub fn render_human(response: &DiagnosticsResponse) -> String {
                 .unwrap_or_else(|| "none".to_string());
             let mut output = format!(
                 "Session: {}\n\
-                 Telegram chat: {}\n\
+                 Channel: {} / {}\n\
+                 Thread: {}\n\
                  Updated: {}\n\n\
                  Context usage (estimated):\n\
                    Uncompacted raw messages: {}\n\
@@ -97,7 +98,9 @@ pub fn render_human(response: &DiagnosticsResponse) -> String {
                    Summary prompt:           {} tokens ({} chars)\n\
                    Registered tools:         {} tools, {} tokens",
                 session.id,
-                session.telegram_chat_id,
+                session.channel_id,
+                session.conversation_id,
+                session.thread_id.as_deref().unwrap_or("none"),
                 session.updated_at,
                 context.raw_message_count,
                 context.preserved_raw_message_count,
@@ -151,9 +154,14 @@ fn render_sessions(sessions: &[SessionDiagnostics]) -> String {
 
     let mut output = String::from("Sessions:\n");
     for session in sessions {
+        let thread = session
+            .thread_id
+            .as_ref()
+            .map(|thread| format!("#{thread}"))
+            .unwrap_or_default();
         output.push_str(&format!(
-            "  {}  chat={}  updated={}\n",
-            session.id, session.telegram_chat_id, session.updated_at
+            "  {}  conversation={}/{}{}  updated={}\n",
+            session.id, session.channel_id, session.conversation_id, thread, session.updated_at
         ));
     }
     output.trim_end().to_string()

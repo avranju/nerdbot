@@ -595,7 +595,7 @@ async fn test_handler_blocks_unauthorized_chat() {
     let pool = setup_test_db().await;
 
     let mut config = AppConfig::default();
-    config.telegram.allowed_chat_ids = vec![100];
+    config.channels.telegram.allowed_conversations = vec!["100".to_string()];
 
     let mut registry = ToolRegistry::new();
     registry.register(EchoTool);

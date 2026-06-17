@@ -8,7 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use nerdbot::config::{AppConfig, TelegramConfig, TelegramMode};
+use nerdbot::channel::{
+    AttachmentInfo, ChannelInboundEvent, ChannelMessageHandler, ChannelMessageHandlerInput,
+    ChannelRegistry, ConversationAddress, InboundMessage, SenderIdentity,
+};
+use nerdbot::config::{AppConfig, TelegramChannelConfig, TelegramIngress};
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
 use nerdbot::context::compaction_worker::CompactionWorker;
@@ -19,18 +23,16 @@ use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
 use nerdbot::telegram::bot::{TelegramBot, Update};
 use nerdbot::telegram::commands::TelegramCommand;
-use nerdbot::telegram::handler::{
-    AttachmentInfo, InboundMessage, MessageHandler, MessageHandlerInput,
-};
 use nerdbot::telegram::service::TelegramService;
-use nerdbot::telegram::{TelegramHook, TelegramPoll, TelegramUpdate};
+use nerdbot::telegram::update::TelegramUpdate;
+use nerdbot::telegram::{TelegramHook, TelegramPoll};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::files::{AppendFile, FileConfig, ListDirectory, ReadFile, WriteFile};
+use nerdbot::tools::messaging::SendUserMessage;
 use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::schedule::{DeleteJob, ListJobs, RunJobNow, ScheduleJob};
 use nerdbot::tools::shell::{ShellConfig, ShellExecute};
-use nerdbot::tools::telegram::SendTelegramMessage;
 use nerdbot::tools::web::{WebFetch, WebSearch};
 use tracing::{error, info, warn};
 
@@ -74,15 +76,17 @@ enum DiagnosticsCommand {
     /// Show token usage and compaction state for one chat session.
     Show {
         /// Database session UUID.
-        #[arg(long, conflicts_with = "chat_id", required_unless_present = "chat_id")]
+        #[arg(long, conflicts_with_all = ["channel_id", "conversation_id"])]
         session_id: Option<String>,
-        /// Telegram chat ID. Uses the latest session for that chat.
-        #[arg(
-            long,
-            conflicts_with = "session_id",
-            required_unless_present = "session_id"
-        )]
-        chat_id: Option<i64>,
+        /// Channel ID, e.g. telegram.
+        #[arg(long, conflicts_with = "session_id", requires = "conversation_id")]
+        channel_id: Option<String>,
+        /// Channel-specific conversation ID.
+        #[arg(long, conflicts_with = "session_id", requires = "channel_id")]
+        conversation_id: Option<String>,
+        /// Optional channel-specific thread/topic ID.
+        #[arg(long, conflicts_with = "session_id")]
+        thread_id: Option<String>,
         /// Include full personality and compaction prompt bodies.
         #[arg(long)]
         show_prompts: bool,
@@ -160,19 +164,25 @@ async fn main() {
         }
     };
 
+    let telegram_config = config.channels.telegram.clone();
+    if !telegram_config.enabled {
+        error!("No communication channels are enabled");
+        return;
+    }
+
     // Initialize Telegram bot
-    let bot_token = match std::env::var(&config.telegram.bot_token_env) {
+    let bot_token = match std::env::var(&telegram_config.bot_token_env) {
         Ok(token) if !token.is_empty() => token,
         Ok(_) => {
             error!(
-                env_var = config.telegram.bot_token_env,
+                env_var = telegram_config.bot_token_env,
                 "Telegram bot token is empty"
             );
             return;
         }
         Err(_) => {
             error!(
-                env_var = config.telegram.bot_token_env,
+                env_var = telegram_config.bot_token_env,
                 "Telegram bot token environment variable not set"
             );
             return;
@@ -211,7 +221,7 @@ async fn main() {
     registry.register(ListJobs);
     registry.register(DeleteJob);
     registry.register(RunJobNow);
-    registry.register(SendTelegramMessage);
+    registry.register(SendUserMessage);
     let file_config = FileConfig::from(config.files.clone());
     registry.register(ReadFile::new(file_config.clone()));
     registry.register(WriteFile::new(file_config.clone()));
@@ -301,15 +311,16 @@ async fn main() {
 
     let bot = Arc::new(bot);
     let service = TelegramService::new(bot.clone());
+    let channel_registry = Arc::new(ChannelRegistry::new(vec![Arc::new(service.clone())]));
 
     // Initialize the scheduler service
     let scheduler = Arc::new(SchedulerService::new(
         db.pool().clone(),
         llm.clone(),
         registry.clone(),
+        channel_registry.clone(),
         config.clone(),
         personality.clone(),
-        service.clone(),
     ));
 
     // Create a drop guard to guarantee scheduler shutdown
@@ -318,14 +329,14 @@ async fn main() {
     };
 
     // Create the message handler
-    let handler = Arc::new(MessageHandler::new(MessageHandlerInput {
+    let handler = Arc::new(ChannelMessageHandler::new(ChannelMessageHandlerInput {
         pool: db.pool().clone(),
         llm: llm.clone(),
         registry,
+        channel_registry: channel_registry.clone(),
         config: config.clone(),
         personality,
         scheduler_notifier: Some(scheduler.notifier()),
-        telegram_service: Some(service.clone()),
         compaction_service,
     }));
 
@@ -335,29 +346,27 @@ async fn main() {
         return;
     }
 
-    match config.telegram.mode {
-        TelegramMode::Poll => {
-            let updates = TelegramPoll::new(bot.clone(), config.telegram.poll_interval_secs);
+    match telegram_config.ingress {
+        TelegramIngress::Poll => {
+            let updates = TelegramPoll::new(bot.clone(), telegram_config.poll_interval_secs);
             if let Err(e) = run_telegram_update_loop(
                 updates,
                 bot.clone(),
                 handler.clone(),
-                service.clone(),
-                config.telegram.clone(),
+                telegram_config.clone(),
             )
             .await
             {
                 error!(error = %e, "Telegram polling ingress failed");
             }
         }
-        TelegramMode::Push => {
-            let updates = TelegramHook::new(bot.clone(), config.telegram.clone());
+        TelegramIngress::Webhook => {
+            let updates = TelegramHook::new(bot.clone(), telegram_config.clone());
             if let Err(e) = run_telegram_update_loop(
                 updates,
                 bot.clone(),
                 handler.clone(),
-                service.clone(),
-                config.telegram.clone(),
+                telegram_config.clone(),
             )
             .await
             {
@@ -388,11 +397,15 @@ async fn run_diagnostics_command(
         DiagnosticsCommand::ListSessions => DiagnosticsRequest::ListSessions,
         DiagnosticsCommand::Show {
             session_id,
-            chat_id,
+            channel_id,
+            conversation_id,
+            thread_id,
             show_prompts,
         } => DiagnosticsRequest::ShowSession {
             session_id,
-            chat_id,
+            channel_id,
+            conversation_id,
+            thread_id,
             include_prompts: show_prompts,
         },
     };
@@ -409,9 +422,8 @@ async fn run_diagnostics_command(
 async fn run_telegram_update_loop<T>(
     mut updates: T,
     bot: Arc<TelegramBot>,
-    handler: Arc<MessageHandler>,
-    service: TelegramService,
-    telegram_config: TelegramConfig,
+    handler: Arc<ChannelMessageHandler>,
+    telegram_config: TelegramChannelConfig,
 ) -> Result<(), AgentError>
 where
     T: TelegramUpdate,
@@ -425,14 +437,12 @@ where
                     Ok(Some(update)) => {
                         let bot = bot.clone();
                         let handler = handler.clone();
-                        let service = service.clone();
                         let telegram_config = telegram_config.clone();
                         tokio::spawn(async move {
                             dispatch_telegram_update(
                                 update,
                                 bot,
                                 handler,
-                                service,
                                 telegram_config,
                             )
                             .await;
@@ -466,9 +476,8 @@ where
 async fn dispatch_telegram_update(
     update: Update,
     bot: Arc<TelegramBot>,
-    handler: Arc<MessageHandler>,
-    service: TelegramService,
-    telegram_config: TelegramConfig,
+    handler: Arc<ChannelMessageHandler>,
+    telegram_config: TelegramChannelConfig,
 ) {
     let msg = match update.message {
         Some(m) => m,
@@ -477,15 +486,24 @@ async fn dispatch_telegram_update(
 
     let chat_id = msg.chat.id;
     let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
+    let address = ConversationAddress::telegram_chat(chat_id);
+    let sender = SenderIdentity::new(
+        user_id.to_string(),
+        msg.from
+            .as_ref()
+            .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone())),
+    );
 
     // Allowlist check BEFORE building/downloading attachments.
     // This prevents untrusted users from triggering expensive downloads.
-    let allowed = (telegram_config.allowed_chat_ids.is_empty()
-        || telegram_config.allowed_chat_ids.contains(&chat_id))
-        && (telegram_config.allowed_user_ids.is_empty()
-            || telegram_config.allowed_user_ids.contains(&user_id));
+    let allowed = (telegram_config.allowed_conversations.is_empty()
+        || telegram_config
+            .allowed_conversations
+            .contains(&address.conversation_id))
+        && (telegram_config.allowed_senders.is_empty()
+            || telegram_config.allowed_senders.contains(&sender.sender_id));
     if !allowed {
-        warn!(chat_id, user_id, "skipping message: not in allowlist");
+        warn!(?address, ?sender, "skipping message: not in allowlist");
         return;
     }
 
@@ -503,26 +521,19 @@ async fn dispatch_telegram_update(
         attachments: attachment_infos,
     };
 
-    match handler
-        .handle_rich_message(chat_id, user_id, &inbound)
-        .await
-    {
-        Ok(Some(response)) => {
-            if let Err(e) = service
-                .send_message_with_options(chat_id, &response, Some("MarkdownV2"), None)
-                .await
-            {
-                error!(chat_id, error = %e, "failed to send reply");
-            }
-        }
-        Ok(None) => {}
+    let event = ChannelInboundEvent {
+        address,
+        sender,
+        message: inbound,
+    };
+
+    match handler.handle_event(event).await {
+        Ok(()) => {}
         Err(AgentError::PermissionDenied) => {
             error!(chat_id, user_id, "permission denied");
         }
         Err(e) => {
             error!(chat_id, error = %e, "message handler error");
-            let err_msg = format!("❌ Internal error: {e}");
-            let _ = service.send_message(chat_id, &err_msg).await;
         }
     }
 }

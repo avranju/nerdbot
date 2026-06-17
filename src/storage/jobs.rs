@@ -6,14 +6,18 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use tracing::debug;
 
+use crate::channel::ConversationAddress;
 use crate::error::AgentError;
 use crate::scheduler::models::{JobContextPolicy, JobStatus, ScheduleType};
+use crate::storage::sessions::IntoConversationAddress;
 
 /// A stored job row from the database.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct StoredJob {
     pub id: String,
-    pub owner_chat_id: i64,
+    pub owner_channel_id: String,
+    pub owner_conversation_id: String,
+    pub owner_thread_id: Option<String>,
     pub name: String,
     pub prompt: String,
     pub schedule_type: Value,
@@ -32,6 +36,14 @@ pub struct StoredJob {
 }
 
 impl StoredJob {
+    pub fn owner_address(&self) -> ConversationAddress {
+        ConversationAddress {
+            channel_id: self.owner_channel_id.clone(),
+            conversation_id: self.owner_conversation_id.clone(),
+            thread_id: self.owner_thread_id.clone(),
+        }
+    }
+
     /// Convert stored fields back to their typed representations.
     pub fn schedule_type(&self) -> Result<ScheduleType, AgentError> {
         serde_json::from_value(self.schedule_type.clone())
@@ -58,15 +70,18 @@ impl StoredJob {
 impl StoredJob {
     /// Create a new stored job (convenience constructor for tests).
     pub fn new(
-        owner_chat_id: i64,
+        owner_address: impl IntoConversationAddress,
         name: String,
         prompt: String,
         schedule_type: ScheduleType,
     ) -> Self {
+        let owner_address = owner_address.into_address();
         let now = chrono::Utc::now();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            owner_chat_id,
+            owner_channel_id: owner_address.channel_id,
+            owner_conversation_id: owner_address.conversation_id,
+            owner_thread_id: owner_address.thread_id,
             name,
             prompt,
             schedule_type: serde_json::to_value(&schedule_type).unwrap_or(Value::Null),
@@ -90,23 +105,26 @@ impl StoredJob {
 /// Create a job and insert it into the database.
 pub async fn create_job(
     pool: &SqlitePool,
-    owner_chat_id: i64,
+    owner_address: impl IntoConversationAddress,
     name: String,
     prompt: String,
     schedule_type: ScheduleType,
     next_run_at: Option<DateTime<chrono::Utc>>,
 ) -> Result<StoredJob, AgentError> {
+    let owner_address = owner_address.into_address();
     let now = chrono::Utc::now();
     let id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
         r#"
-        INSERT INTO scheduled_jobs (id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, enabled, created_at, updated_at, next_run_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, 0, ?6, 1, ?7, ?8, ?9)
+        INSERT INTO scheduled_jobs (id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, enabled, created_at, updated_at, next_run_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, 0, ?8, 1, ?9, ?10, ?11)
         "#,
     )
     .bind(&id)
-    .bind(owner_chat_id)
+    .bind(&owner_address.channel_id)
+    .bind(&owner_address.conversation_id)
+    .bind(&owner_address.thread_id)
     .bind(&name)
     .bind(&prompt)
     .bind(serde_json::to_value(&schedule_type).unwrap_or(Value::Null))
@@ -121,7 +139,9 @@ pub async fn create_job(
     debug!(job_id = %id, "created scheduled job");
     Ok(StoredJob {
         id,
-        owner_chat_id,
+        owner_channel_id: owner_address.channel_id,
+        owner_conversation_id: owner_address.conversation_id,
+        owner_thread_id: owner_address.thread_id,
         name,
         prompt,
         schedule_type: serde_json::to_value(&schedule_type).unwrap_or(Value::Null),
@@ -146,7 +166,7 @@ pub async fn create_job(
 /// The explicit column list in the query matches `StoredJob` fields precisely.
 pub async fn get_job(pool: &SqlitePool, job_id: &str) -> Result<Option<StoredJob>, AgentError> {
     let row = sqlx::query_as::<_, StoredJob>(
-        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE id = ?1",
+        "SELECT id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE id = ?1",
     )
     .bind(job_id)
     .fetch_optional(pool)
@@ -161,17 +181,20 @@ pub async fn get_job(pool: &SqlitePool, job_id: &str) -> Result<Option<StoredJob
 /// The explicit column list in the query matches `StoredJob` fields precisely.
 pub async fn list_jobs(
     pool: &SqlitePool,
-    owner_chat_id: i64,
+    owner_address: impl IntoConversationAddress,
     enabled_only: bool,
 ) -> Result<Vec<StoredJob>, AgentError> {
+    let owner_address = owner_address.into_address();
     let query = if enabled_only {
-        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_chat_id = ?1 AND enabled = 1 ORDER BY next_run_at ASC"
+        "SELECT id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_channel_id = ?1 AND owner_conversation_id = ?2 AND owner_thread_id IS ?3 AND enabled = 1 ORDER BY next_run_at ASC"
     } else {
-        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_chat_id = ?1 ORDER BY next_run_at ASC"
+        "SELECT id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE owner_channel_id = ?1 AND owner_conversation_id = ?2 AND owner_thread_id IS ?3 ORDER BY next_run_at ASC"
     };
 
     sqlx::query_as::<_, StoredJob>(query)
-        .bind(owner_chat_id)
+        .bind(owner_address.channel_id)
+        .bind(owner_address.conversation_id)
+        .bind(owner_address.thread_id)
         .fetch_all(pool)
         .await
         .map_err(|e| AgentError::Storage(format!("Failed to list jobs: {e}")))
@@ -195,7 +218,7 @@ pub async fn disable_job(pool: &SqlitePool, job_id: &str) -> Result<(), AgentErr
 /// The explicit column list in the query matches `StoredJob` fields precisely.
 pub async fn list_all_enabled_jobs(pool: &SqlitePool) -> Result<Vec<StoredJob>, AgentError> {
     sqlx::query_as::<_, StoredJob>(
-        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE enabled = 1 ORDER BY next_run_at ASC"
+        "SELECT id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE enabled = 1 ORDER BY next_run_at ASC"
     )
     .fetch_all(pool)
     .await
@@ -208,7 +231,7 @@ pub async fn list_all_enabled_jobs(pool: &SqlitePool) -> Result<Vec<StoredJob>, 
 /// The explicit column list in the query matches `StoredJob` fields precisely.
 pub async fn get_next_enabled_job(pool: &SqlitePool) -> Result<Option<StoredJob>, AgentError> {
     sqlx::query_as::<_, StoredJob>(
-        "SELECT id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE enabled = 1 ORDER BY next_run_at ASC LIMIT 1"
+        "SELECT id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at, timezone, notify_on_completion, context_policy, creation_context_snapshot, enabled, last_run_at, next_run_at, last_status, created_at, updated_at FROM scheduled_jobs WHERE enabled = 1 ORDER BY next_run_at ASC LIMIT 1"
     )
     .fetch_optional(pool)
     .await
@@ -217,7 +240,7 @@ pub async fn get_next_enabled_job(pool: &SqlitePool) -> Result<Option<StoredJob>
 
 /// Inputs required to create a new scheduled job.
 pub struct CreateJobInput {
-    pub owner_chat_id: i64,
+    pub owner_address: ConversationAddress,
     pub name: String,
     pub prompt: String,
     pub schedule_type: ScheduleType,
@@ -246,15 +269,17 @@ pub async fn create_job_full(
     sqlx::query(
         r#"
         INSERT INTO scheduled_jobs (
-            id, owner_chat_id, name, prompt, schedule_type, cron_expression, run_at,
+            id, owner_channel_id, owner_conversation_id, owner_thread_id, name, prompt, schedule_type, cron_expression, run_at,
             timezone, notify_on_completion, context_policy, creation_context_snapshot,
             enabled, created_at, updated_at, next_run_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?16)
         "#,
     )
     .bind(&id)
-    .bind(input.owner_chat_id)
+    .bind(&input.owner_address.channel_id)
+    .bind(&input.owner_address.conversation_id)
+    .bind(&input.owner_address.thread_id)
     .bind(&input.name)
     .bind(&input.prompt)
     .bind(&schedule_type_val)
@@ -274,7 +299,9 @@ pub async fn create_job_full(
     debug!(job_id = %id, "created fully parameterized scheduled job");
     Ok(StoredJob {
         id,
-        owner_chat_id: input.owner_chat_id,
+        owner_channel_id: input.owner_address.channel_id,
+        owner_conversation_id: input.owner_address.conversation_id,
+        owner_thread_id: input.owner_address.thread_id,
         name: input.name,
         prompt: input.prompt,
         schedule_type: schedule_type_val,

@@ -14,13 +14,12 @@ pub struct SchedulerService {
     pool: sqlx::SqlitePool,
     llm: Arc<dyn LlmExecutor>,
     registry: Arc<crate::tools::registry::ToolRegistry>,
+    channel_registry: Arc<crate::channel::ChannelRegistry>,
     config: crate::config::AppConfig,
     personality: crate::agent::personality::Personality,
-    telegram_service: crate::telegram::service::TelegramService,
     notifier: Arc<Notify>,
     shutdown_tx: broadcast::Sender<()>,
     active_task: Mutex<Option<JoinHandle<()>>>,
-    telegram_token: String,
     in_flight_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -30,24 +29,21 @@ impl SchedulerService {
         pool: sqlx::SqlitePool,
         llm: Arc<dyn LlmExecutor>,
         registry: Arc<crate::tools::registry::ToolRegistry>,
+        channel_registry: Arc<crate::channel::ChannelRegistry>,
         config: crate::config::AppConfig,
         personality: crate::agent::personality::Personality,
-        telegram_service: crate::telegram::service::TelegramService,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
-        let token_env = &config.telegram.bot_token_env;
-        let telegram_token = std::env::var(token_env).unwrap_or_default();
         Self {
             pool,
             llm,
             registry,
+            channel_registry,
             config,
             personality,
-            telegram_service,
             notifier: Arc::new(Notify::new()),
             shutdown_tx,
             active_task: Mutex::new(None),
-            telegram_token,
             in_flight_tasks: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -119,11 +115,10 @@ impl SchedulerService {
         let pool = self.pool.clone();
         let llm = self.llm.clone();
         let registry = self.registry.clone();
+        let channel_registry = self.channel_registry.clone();
         let config = self.config.clone();
         let personality = self.personality.clone();
-        let telegram_service = self.telegram_service.clone();
         let notifier = self.notifier.clone();
-        let telegram_token = self.telegram_token.clone();
         let in_flight_tasks = self.in_flight_tasks.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -192,11 +187,10 @@ impl SchedulerService {
 
                             let llm_clone = llm.clone();
                             let registry_clone = registry.clone();
+                            let channel_registry_clone = channel_registry.clone();
                             let config_clone = config.clone();
                             let personality_clone = personality.clone();
-                            let telegram_service_clone = telegram_service.clone();
                             let notifier_clone = notifier.clone();
-                            let telegram_token_clone = telegram_token.clone();
                             let in_flight_tasks_clone = in_flight_tasks.clone();
                             let task_handle = tokio::spawn(async move {
                                 info!(job_id = %job_id, "Executing scheduled job in background");
@@ -211,24 +205,24 @@ impl SchedulerService {
                                 let personality = personality_clone
                                     .effective_prompt(&config_clone.agent.default_timezone);
 
+                                // Derive the access policy from the job's owner channel.
+                                // A job owned by Telegram uses Telegram's policy;
+                                // a job owned by any other channel gets that channel's policy.
+                                let owner_address = job.owner_address();
+                                let access_policy = config_clone
+                                    .channels
+                                    .access_policy_for(&owner_address.channel_id);
+
                                 let run_result = crate::scheduler::runner::run_scheduled_job(
                                     crate::scheduler::runner::RunScheduledJobInput {
                                         pool: pool_clone.clone(),
                                         llm: llm_clone,
                                         registry: registry_clone,
+                                        channel_registry: channel_registry_clone,
                                         loop_config,
                                         personality,
                                         workspace_root: config_clone.workspace.root.clone(),
-                                        telegram_token: telegram_token_clone,
-                                        telegram_service: telegram_service_clone,
-                                        allowed_chat_ids: config_clone
-                                            .telegram
-                                            .allowed_chat_ids
-                                            .clone(),
-                                        allowed_user_ids: config_clone
-                                            .telegram
-                                            .allowed_user_ids
-                                            .clone(),
+                                        access_policy,
                                         timezone: config_clone.agent.default_timezone.clone(),
                                     },
                                     &job_id,

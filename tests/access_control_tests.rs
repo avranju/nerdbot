@@ -45,15 +45,28 @@ impl Tool for TestTool {
 
 fn make_tool_context(
     run_mode: AgentRunMode,
-    allowed_chat_ids: Vec<i64>,
-    allowed_user_ids: Vec<i64>,
+    allowed_conversations: Vec<i64>,
+    allowed_senders: Vec<i64>,
 ) -> ToolContext {
+    let allowed_conversations = allowed_conversations
+        .into_iter()
+        .map(|id| nerdbot::channel::ConversationAddressPattern {
+            channel_id: "telegram".to_string(),
+            conversation_id: id.to_string(),
+            thread_id: None,
+        })
+        .collect();
     ToolContext {
         run_mode,
         workspace_root: PathBuf::from("/workspace"),
-        telegram_token: "test-token".into(),
-        allowed_chat_ids,
-        allowed_user_ids,
+        access_policy: nerdbot::channel::ChannelAccessPolicy {
+            allowed_conversations,
+            allowed_senders: allowed_senders
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+        },
+        channel_registry: None,
         pool: None,
         scheduler_notifier: None,
     }
@@ -66,8 +79,8 @@ async fn test_access_allowed_when_no_restrictions() {
 
     let ctx = make_tool_context(
         AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         vec![], // empty = allow all
         vec![], // empty = allow all
@@ -94,13 +107,13 @@ async fn test_access_denied_when_chat_id_not_allowed() {
     registry.register(TestTool);
 
     // Config allows chat 999, but request comes from chat 123
-    let allowed_chat_ids = vec![999i64];
+    let allowed_conversations = vec![999i64];
     let ctx = make_tool_context(
         AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
-        allowed_chat_ids.clone(),
+        allowed_conversations.clone(),
         vec![],
     );
 
@@ -118,53 +131,59 @@ async fn test_access_denied_when_chat_id_not_allowed() {
 
     // ToolRegistry.execute doesn't check access — that's done in run_agent
     // This test verifies that ToolContext correctly carries the IDs
-    assert_eq!(allowed_chat_ids, vec![999]);
+    assert_eq!(allowed_conversations, vec![999]);
 }
 
 #[test]
 fn test_context_carries_both_id_lists() {
     let ctx = make_tool_context(
         AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         vec![111, 222],
         vec![333, 444],
     );
 
-    let allowed_chat_ids = ctx.allowed_chat_ids.clone();
-    let allowed_user_ids = ctx.allowed_user_ids.clone();
-    assert_eq!(allowed_chat_ids, vec![111, 222]);
-    assert_eq!(allowed_user_ids, vec![333, 444]);
+    let allowed_conversations = ctx.access_policy.allowed_conversations.clone();
+    let allowed_senders = ctx.access_policy.allowed_senders.clone();
+    assert_eq!(allowed_conversations.len(), 2);
+    assert_eq!(allowed_senders, vec!["333", "444"]);
 }
 
 #[test]
 fn test_agent_context_construction_with_user_ids() {
     let ctx = AgentContext::new(
+        "telegram",
         AgentRunMode::InteractiveReply {
-            chat_id: 123,
-            user_id: 456,
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
         },
         "You are a helpful assistant.".to_string(),
         PathBuf::from("/workspace"),
-        "bot-token".into(),
         vec![123],
         vec![456],
     );
 
-    assert_eq!(ctx.allowed_chat_ids, vec![123]);
-    assert_eq!(ctx.allowed_user_ids, vec![456]);
+    assert_eq!(ctx.access_policy.allowed_conversations.len(), 1);
+    assert_eq!(ctx.access_policy.allowed_senders, vec!["456"]);
 }
 
 #[test]
 fn test_run_mode_extract_chat_and_user_ids() {
     let mode = AgentRunMode::InteractiveReply {
-        chat_id: 123,
-        user_id: 456,
+        address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+        sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
     };
 
-    assert_eq!(mode.chat_id(), Some(123));
-    assert_eq!(mode.user_id(), Some(456));
+    assert_eq!(
+        mode.address().unwrap().conversation_id.parse::<i64>().ok(),
+        Some(123)
+    );
+    assert_eq!(
+        mode.sender().unwrap().sender_id.parse::<i64>().ok(),
+        Some(456)
+    );
 }
 
 #[test]
@@ -173,6 +192,6 @@ fn test_internal_run_returns_none_for_chat_and_user() {
         reason: "test".into(),
     };
 
-    assert_eq!(mode.chat_id(), None);
-    assert_eq!(mode.user_id(), None);
+    assert_eq!(mode.address(), None);
+    assert_eq!(mode.sender(), None);
 }

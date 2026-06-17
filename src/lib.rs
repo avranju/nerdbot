@@ -4,6 +4,7 @@
 
 // Re-export all modules for integration tests
 pub mod agent;
+pub mod channel;
 pub mod config;
 pub mod context;
 pub mod diagnostics;

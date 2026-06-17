@@ -9,6 +9,5 @@ pub mod service;
 pub mod update;
 
 pub use bot::TelegramBot;
-pub use handler::MessageHandler;
 pub use service::TelegramService;
-pub use update::{TelegramHook, TelegramPoll, TelegramUpdate};
+pub use update::{TelegramHook, TelegramPoll};

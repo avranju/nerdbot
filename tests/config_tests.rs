@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use nerdbot::config::{AppConfig, TelegramMode};
+use nerdbot::config::{AppConfig, TelegramIngress};
 
 // ── Default values ───────────────────────────────────────────────────────
 
@@ -43,24 +43,24 @@ fn test_default_config_timezone() {
 #[test]
 fn test_default_config_telegram_token_env() {
     let config = AppConfig::default();
-    assert_eq!(config.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
+    assert_eq!(config.channels.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
 }
 
 #[test]
 fn test_default_config_telegram_ingress() {
     let config = AppConfig::default();
-    assert_eq!(config.telegram.mode, TelegramMode::Poll);
-    assert_eq!(config.telegram.web_hook_url, None);
-    assert_eq!(config.telegram.host, "127.0.0.1");
-    assert_eq!(config.telegram.port, 24_682);
-    assert_eq!(config.telegram.poll_interval_secs, 5);
+    assert_eq!(config.channels.telegram.ingress, TelegramIngress::Poll);
+    assert_eq!(config.channels.telegram.web_hook_url, None);
+    assert_eq!(config.channels.telegram.host, "127.0.0.1");
+    assert_eq!(config.channels.telegram.port, 24_682);
+    assert_eq!(config.channels.telegram.poll_interval_secs, 5);
 }
 
 #[test]
 fn test_default_config_telegram_no_allowed_ids() {
     let config = AppConfig::default();
-    assert!(config.telegram.allowed_chat_ids.is_empty());
-    assert!(config.telegram.allowed_user_ids.is_empty());
+    assert!(config.channels.telegram.allowed_conversations.is_empty());
+    assert!(config.channels.telegram.allowed_senders.is_empty());
 }
 
 #[test]
@@ -173,15 +173,15 @@ personality_file = "/etc/personality.md"
 max_tool_iterations = 5
 default_timezone = "America/New_York"
 
-[telegram]
-mode = "push"
+[channels.telegram]
+ingress = "webhook"
 bot_token_env = "MY_TELEGRAM_TOKEN"
 web_hook_url = "https://example.test/telegram/webhook"
 host = "0.0.0.0"
 port = 24683
 poll_interval_secs = 7
-allowed_chat_ids = [111111111, 222222222]
-allowed_user_ids = [333333333]
+allowed_conversations = ["111111111", "222222222"]
+allowed_senders = ["333333333"]
 
 [storage]
 sqlite_path = "/tmp/test.db"
@@ -230,20 +230,23 @@ fn test_parse_full_config() {
     assert_eq!(config.agent.default_timezone, "America/New_York");
 
     // Telegram
-    assert_eq!(config.telegram.mode, TelegramMode::Push);
-    assert_eq!(config.telegram.bot_token_env, "MY_TELEGRAM_TOKEN");
+    assert_eq!(config.channels.telegram.ingress, TelegramIngress::Webhook);
+    assert_eq!(config.channels.telegram.bot_token_env, "MY_TELEGRAM_TOKEN");
     assert_eq!(
-        config.telegram.web_hook_url.as_deref(),
+        config.channels.telegram.web_hook_url.as_deref(),
         Some("https://example.test/telegram/webhook")
     );
-    assert_eq!(config.telegram.host, "0.0.0.0");
-    assert_eq!(config.telegram.port, 24_683);
-    assert_eq!(config.telegram.poll_interval_secs, 7);
+    assert_eq!(config.channels.telegram.host, "0.0.0.0");
+    assert_eq!(config.channels.telegram.port, 24_683);
+    assert_eq!(config.channels.telegram.poll_interval_secs, 7);
     assert_eq!(
-        config.telegram.allowed_chat_ids,
-        vec![111_111_111i64, 222_222_222]
+        config.channels.telegram.allowed_conversations,
+        vec!["111111111".to_string(), "222222222".to_string()]
     );
-    assert_eq!(config.telegram.allowed_user_ids, vec![333_333_333i64]);
+    assert_eq!(
+        config.channels.telegram.allowed_senders,
+        vec!["333333333".to_string()]
+    );
 
     // Storage
     assert_eq!(
@@ -292,7 +295,7 @@ fn test_parse_minimal_config() {
 
     // All values should be defaults
     assert_eq!(config.agent.name, "nerdbot");
-    assert_eq!(config.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
+    assert_eq!(config.channels.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
     assert_eq!(config.context.soft_compaction_threshold, 0.60);
 }
 
@@ -321,14 +324,14 @@ fn test_parse_invalid_toml() {
 }
 
 #[test]
-fn test_push_mode_requires_webhook_url() {
+fn test_webhook_ingress_requires_webhook_url() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
     fs::write(
         &path,
         r#"
-[telegram]
-mode = "push"
+[channels.telegram]
+ingress = "webhook"
 "#,
     )
     .unwrap();
@@ -337,20 +340,20 @@ mode = "push"
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("telegram.web_hook_url is required"),
+        err.contains("channels.telegram.web_hook_url is required"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn test_invalid_telegram_mode_is_rejected() {
+fn test_invalid_telegram_ingress_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
     fs::write(
         &path,
         r#"
-[telegram]
-mode = "webhook"
+[channels.telegram]
+ingress = "push"
 "#,
     )
     .unwrap();
@@ -370,8 +373,8 @@ fn test_push_mode_requires_valid_webhook_url() {
     fs::write(
         &path,
         r#"
-[telegram]
-mode = "push"
+[channels.telegram]
+ingress = "webhook"
 web_hook_url = "not a url"
 "#,
     )
@@ -381,7 +384,7 @@ web_hook_url = "not a url"
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("telegram.web_hook_url is not a valid URL"),
+        err.contains("channels.telegram.web_hook_url is not a valid URL"),
         "unexpected error: {err}"
     );
 }
@@ -393,8 +396,8 @@ fn test_push_mode_requires_https_webhook_url() {
     fs::write(
         &path,
         r#"
-[telegram]
-mode = "push"
+[channels.telegram]
+ingress = "webhook"
 web_hook_url = "http://example.test/telegram/webhook"
 "#,
     )
@@ -404,20 +407,20 @@ web_hook_url = "http://example.test/telegram/webhook"
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("telegram.web_hook_url must use https"),
+        err.contains("channels.telegram.web_hook_url must use https"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn test_allowed_chat_ids_must_be_positive() {
+fn test_allowed_conversations_must_not_be_blank() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
     fs::write(
         &path,
         r#"
-[telegram]
-allowed_chat_ids = [123, -456]
+[channels.telegram]
+allowed_conversations = ["room-1", "  "]
 "#,
     )
     .unwrap();
@@ -426,20 +429,20 @@ allowed_chat_ids = [123, -456]
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("telegram.allowed_chat_ids must contain only positive IDs"),
+        err.contains("channels.telegram.allowed_conversations must not contain blank IDs"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn test_allowed_user_ids_must_be_positive() {
+fn test_allowed_senders_must_not_be_blank() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
     fs::write(
         &path,
         r#"
-[telegram]
-allowed_user_ids = [123, 0]
+[channels.telegram]
+allowed_senders = ["alice", ""]
 "#,
     )
     .unwrap();
@@ -448,7 +451,7 @@ allowed_user_ids = [123, 0]
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("telegram.allowed_user_ids must contain only positive IDs"),
+        err.contains("channels.telegram.allowed_senders must not contain blank IDs"),
         "unexpected error: {err}"
     );
 }
@@ -475,6 +478,6 @@ model = "gpt-4o"
     assert_eq!(config.llm.model, "gpt-4o");
 
     // Unspecified fields should be defaults
-    assert_eq!(config.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
+    assert_eq!(config.channels.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN");
     assert_eq!(config.context.hard_context_threshold, 0.85);
 }

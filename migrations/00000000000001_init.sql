@@ -1,9 +1,14 @@
 CREATE TABLE chat_sessions (
     id TEXT PRIMARY KEY,
-    telegram_chat_id INTEGER NOT NULL,
+    channel_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    thread_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE INDEX idx_chat_sessions_address
+    ON chat_sessions(channel_id, conversation_id, thread_id, created_at);
 
 CREATE TABLE messages (
     id TEXT PRIMARY KEY,
@@ -25,7 +30,9 @@ CREATE TABLE context_summaries (
 
 CREATE TABLE scheduled_jobs (
     id TEXT PRIMARY KEY,
-    owner_chat_id INTEGER NOT NULL,
+    owner_channel_id TEXT NOT NULL,
+    owner_conversation_id TEXT NOT NULL,
+    owner_thread_id TEXT,
     name TEXT NOT NULL,
     prompt TEXT NOT NULL,
     schedule_type TEXT NOT NULL,
@@ -42,3 +49,6 @@ CREATE TABLE scheduled_jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE INDEX idx_scheduled_jobs_owner
+    ON scheduled_jobs(owner_channel_id, owner_conversation_id, owner_thread_id, next_run_at);

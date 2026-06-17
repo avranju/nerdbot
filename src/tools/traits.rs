@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::channel::ChannelRegistry;
 use crate::error::AgentError;
 
 /// Shared context available to all tool executions.
@@ -14,12 +15,10 @@ pub struct ToolContext {
     pub run_mode: crate::agent::run_mode::AgentRunMode,
     /// Workspace root for file-based tools.
     pub workspace_root: std::path::PathBuf,
-    /// Telegram bot token (for messaging tools).
-    pub telegram_token: String,
-    /// Allowed conversation IDs (private chats, groups, channels).
-    pub allowed_chat_ids: Vec<i64>,
-    /// Allowed account IDs (individual Telegram users).
-    pub allowed_user_ids: Vec<i64>,
+    /// Channel-qualified access policy for this run.
+    pub access_policy: crate::channel::ChannelAccessPolicy,
+    /// Registered outbound communication channels.
+    pub channel_registry: Option<std::sync::Arc<ChannelRegistry>>,
     /// Database pool for tools needing access to storage (like scheduling)
     pub pool: Option<sqlx::SqlitePool>,
     /// Notifier to wake up the scheduler service loop instantly
@@ -35,9 +34,8 @@ impl ToolContext {
                 reason: "test".into(),
             },
             workspace_root: std::path::PathBuf::from("/tmp"),
-            telegram_token: String::new(),
-            allowed_chat_ids: vec![],
-            allowed_user_ids: vec![],
+            access_policy: crate::channel::ChannelAccessPolicy::allow_all(),
+            channel_registry: None,
             pool: None,
             scheduler_notifier: None,
         }

@@ -12,6 +12,6 @@ pub use shell::bwrap_available;
 
 // Built-in tool modules
 pub mod files;
+pub mod messaging;
 pub mod schedule;
-pub mod telegram;
 pub mod web;

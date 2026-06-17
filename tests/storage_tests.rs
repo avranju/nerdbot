@@ -57,14 +57,14 @@ async fn test_create_and_get_session() {
     let session = nerdbot::storage::sessions::create_session(pool, 123_456_789)
         .await
         .unwrap();
-    assert_eq!(session.telegram_chat_id, 123_456_789);
+    assert_eq!(session.conversation_id, "123456789");
     assert!(!session.id.is_empty());
 
     let found = nerdbot::storage::sessions::get_session(pool, &session.id)
         .await
         .unwrap();
     assert!(found.is_some());
-    assert_eq!(found.unwrap().telegram_chat_id, 123_456_789);
+    assert_eq!(found.unwrap().conversation_id, "123456789");
 }
 
 #[tokio::test]
@@ -389,7 +389,7 @@ async fn test_create_and_get_job() {
     .await
     .unwrap();
 
-    assert_eq!(stored.owner_chat_id, 123);
+    assert_eq!(stored.owner_conversation_id, "123");
     assert_eq!(stored.name, "Morning report");
     assert!(stored.schedule_type().unwrap() == ScheduleType::Cron);
 
@@ -629,7 +629,7 @@ fn test_stored_job_serialization_roundtrip() {
     let json = serde_json::to_string(&job).unwrap();
     let restored: StoredJob = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.id, job.id);
-    assert_eq!(restored.owner_chat_id, 123);
+    assert_eq!(restored.owner_conversation_id, "123");
     assert_eq!(restored.name, "Test Job");
 }
 

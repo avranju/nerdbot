@@ -237,7 +237,9 @@ async fn handle_request(
         }
         DiagnosticsRequest::ShowSession {
             session_id,
-            chat_id,
+            channel_id,
+            conversation_id,
+            thread_id,
             include_prompts,
         } => {
             let input = ShowSessionInput {
@@ -247,7 +249,9 @@ async fn handle_request(
                 personality,
                 tools,
                 session_id,
-                chat_id,
+                channel_id,
+                conversation_id,
+                thread_id,
                 include_prompts,
             };
             show_session(input).await
@@ -262,7 +266,9 @@ struct ShowSessionInput<'a> {
     personality: &'a crate::agent::personality::Personality,
     tools: &'a crate::tools::registry::ToolRegistry,
     session_id: Option<String>,
-    chat_id: Option<i64>,
+    channel_id: Option<String>,
+    conversation_id: Option<String>,
+    thread_id: Option<String>,
     include_prompts: bool,
 }
 
@@ -274,18 +280,28 @@ async fn show_session(input: ShowSessionInput<'_>) -> DiagnosticsResponse {
         personality,
         tools,
         session_id,
-        chat_id,
+        channel_id,
+        conversation_id,
+        thread_id,
         include_prompts,
     } = input;
 
-    let session = match (session_id, chat_id) {
-        (Some(session_id), None) => crate::storage::sessions::get_session(pool, &session_id).await,
-        (None, Some(chat_id)) => {
-            crate::storage::sessions::get_session_for_chat(pool, chat_id).await
+    let session = match (session_id, channel_id, conversation_id) {
+        (Some(session_id), None, None) => {
+            crate::storage::sessions::get_session(pool, &session_id).await
+        }
+        (None, Some(channel_id), Some(conversation_id)) => {
+            let address = crate::channel::ConversationAddress {
+                channel_id,
+                conversation_id,
+                thread_id,
+            };
+            crate::storage::sessions::get_session_for_address(pool, &address).await
         }
         _ => {
             return DiagnosticsResponse::Error {
-                message: "show_session requires exactly one of session_id or chat_id".to_string(),
+                message: "show_session requires either session_id or channel_id + conversation_id"
+                    .to_string(),
             };
         }
     };

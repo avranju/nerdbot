@@ -11,24 +11,25 @@ personality_file = "/config/personality.md"
 max_tool_iterations = 10
 default_timezone = "UTC"
 
-# ── Telegram ──────────────────────────────────────────────────────
-[telegram]
-mode = "poll" # "poll" for getUpdates long polling, "push" for Telegram webhooks
+# ── Channels / Telegram ───────────────────────────────────────────
+[channels.telegram]
+enabled = true
+ingress = "poll" # "poll" for getUpdates long polling, "webhook" for Telegram webhooks
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 poll_interval_secs = 5 # Sleep after an empty getUpdates response in poll mode
-# Required when mode = "push"; register this public URL with Telegram.
+# Required when ingress = "webhook"; register this public URL with Telegram.
 # NerdBot's webhook listener is plain HTTP; TLS, DNS, and reverse proxy/tunnel
 # termination are expected outside NerdBot.
 # web_hook_url = "https://example.com/telegram/webhook"
-# Local plain-HTTP webhook bind address used only when mode = "push".
+# Local plain-HTTP webhook bind address used only when ingress = "webhook".
 host = "127.0.0.1"
 port = 24682
-# Allowed positive Telegram chat IDs (private chats, groups).
-# Leave empty to allow all chats (development mode).
-allowed_chat_ids = []
-# Allowed positive Telegram user IDs.
-# Leave empty to allow all users (development mode).
-allowed_user_ids = []
+# Allowed channel-specific conversation IDs. Telegram conversation/chat IDs are strings here.
+# Leave empty to allow all conversations (development mode).
+allowed_conversations = []
+# Allowed channel-specific sender IDs. Telegram user IDs are strings here.
+# Leave empty to allow all senders (development mode).
+allowed_senders = []
 # Maximum download size for Telegram attachments (images, PDFs, etc.) in bytes.
 # Files larger than this limit are rejected before download.
 max_attachment_bytes = 5242880

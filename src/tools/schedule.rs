@@ -48,7 +48,7 @@ impl Tool for ScheduleJob {
                 },
                 "notify_on_completion": {
                     "type": "boolean",
-                    "description": "Whether to notify the user via Telegram when the job completes. Defaults to true."
+                    "description": "Whether to notify the user via the current communication channel when the job completes. Defaults to true."
                 },
                 "context_policy": {
                     "type": "string",
@@ -64,8 +64,8 @@ impl Tool for ScheduleJob {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        let chat_id = ctx.run_mode.chat_id().ok_or_else(|| {
-            AgentError::Generic("Can only schedule jobs from a valid Telegram chat session".into())
+        let address = ctx.run_mode.address().cloned().ok_or_else(|| {
+            AgentError::Generic("Can only schedule jobs from a valid channel conversation".into())
         })?;
 
         let name = args
@@ -172,7 +172,7 @@ impl Tool for ScheduleJob {
             == crate::scheduler::models::JobContextPolicy::IncludeCreationSnapshot
         {
             if let Some(session) =
-                crate::storage::sessions::get_session_for_chat(&pool, chat_id).await?
+                crate::storage::sessions::get_session_for_address(&pool, &address).await?
             {
                 let stored =
                     crate::storage::messages::list_messages(&pool, &session.id, Some(30)).await?;
@@ -192,7 +192,7 @@ impl Tool for ScheduleJob {
         let job = crate::storage::jobs::create_job_full(
             &pool,
             crate::storage::jobs::CreateJobInput {
-                owner_chat_id: chat_id,
+                owner_address: address,
                 name: name.clone(),
                 prompt,
                 schedule_type,
@@ -249,8 +249,8 @@ impl Tool for ListJobs {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        let chat_id = ctx.run_mode.chat_id().ok_or_else(|| {
-            AgentError::Generic("Can only list jobs from a valid Telegram chat session".into())
+        let address = ctx.run_mode.address().cloned().ok_or_else(|| {
+            AgentError::Generic("Can only list jobs from a valid channel conversation".into())
         })?;
 
         let include_disabled = args
@@ -270,7 +270,7 @@ impl Tool for ListJobs {
             }
         };
 
-        let jobs = crate::storage::jobs::list_jobs(&pool, chat_id, !include_disabled).await?;
+        let jobs = crate::storage::jobs::list_jobs(&pool, &address, !include_disabled).await?;
         let summary = if jobs.is_empty() {
             "No scheduled jobs found.".to_string()
         } else {
@@ -329,8 +329,8 @@ impl Tool for DeleteJob {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        let chat_id = ctx.run_mode.chat_id().ok_or_else(|| {
-            AgentError::Generic("Can only delete jobs from a valid Telegram chat session".into())
+        let address = ctx.run_mode.address().cloned().ok_or_else(|| {
+            AgentError::Generic("Can only delete jobs from a valid channel conversation".into())
         })?;
 
         let job_id = args
@@ -357,8 +357,8 @@ impl Tool for DeleteJob {
             None => Err(AgentError::Generic(format!(
                 "No job found with ID `{job_id}`."
             ))),
-            Some(job) if job.owner_chat_id != chat_id => Err(AgentError::Generic(
-                "That job belongs to a different chat session.".into(),
+            Some(job) if job.owner_address() != address => Err(AgentError::Generic(
+                "That job belongs to a different conversation.".into(),
             )),
             Some(_) => {
                 crate::storage::jobs::disable_job(&pool, job_id).await?;
@@ -405,8 +405,8 @@ impl Tool for RunJobNow {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        let chat_id = ctx.run_mode.chat_id().ok_or_else(|| {
-            AgentError::Generic("Can only trigger jobs from a valid Telegram chat session".into())
+        let address = ctx.run_mode.address().cloned().ok_or_else(|| {
+            AgentError::Generic("Can only trigger jobs from a valid channel conversation".into())
         })?;
 
         let job_id = args
@@ -433,8 +433,8 @@ impl Tool for RunJobNow {
             None => Err(AgentError::Generic(format!(
                 "No job found with ID `{job_id}`."
             ))),
-            Some(job) if job.owner_chat_id != chat_id => Err(AgentError::Generic(
-                "That job belongs to a different chat session.".into(),
+            Some(job) if job.owner_address() != address => Err(AgentError::Generic(
+                "That job belongs to a different conversation.".into(),
             )),
             Some(job) if !job.enabled => Err(AgentError::Generic(format!(
                 "Job `{job_id}` is disabled or deleted and cannot be run."
