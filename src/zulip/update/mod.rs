@@ -25,6 +25,18 @@ pub fn resolve_zulip_message(
     (address, msg.sender_email.clone(), sender_full_name, content)
 }
 
+/// Lightweight pre-processing using the authenticated user's stable Zulip ID.
+pub fn resolve_zulip_message_for_user(
+    msg: &ZulipMessage,
+    bot_email: &str,
+    bot_user_id: Option<i64>,
+) -> (ConversationAddress, String, String, String) {
+    let address = resolve_zulip_address_for_user(msg, bot_email, bot_user_id);
+    let sender_full_name = msg.sender_full_name.clone();
+    let content = msg.content.clone();
+    (address, msg.sender_email.clone(), sender_full_name, content)
+}
+
 pub mod hook;
 pub mod poll;
 
@@ -53,6 +65,16 @@ static BROAD_MENTION_PATTERN: LazyLock<Regex> =
 /// - Stream messages: `conversation_id` = stream name, `thread_id` = topic
 /// - Private messages: `conversation_id` = sorted comma-separated participant emails
 pub fn resolve_zulip_address(msg: &ZulipMessage, bot_email: &str) -> ConversationAddress {
+    resolve_zulip_address_for_user(msg, bot_email, None)
+}
+
+/// Resolve a Zulip message to a ConversationAddress, preferring the stable
+/// authenticated user ID when available.
+pub fn resolve_zulip_address_for_user(
+    msg: &ZulipMessage,
+    bot_email: &str,
+    bot_user_id: Option<i64>,
+) -> ConversationAddress {
     if msg.message_type == "stream" {
         let stream_name = match &msg.display_recipient {
             ZulipDisplayRecipient::Stream(s) => s.clone(),
@@ -65,7 +87,9 @@ pub fn resolve_zulip_address(msg: &ZulipMessage, bot_email: &str) -> Conversatio
             ZulipDisplayRecipient::Private(recs) => recs
                 .iter()
                 .map(|r| r.email.clone())
-                .filter(|email| email != bot_email)
+                .zip(recs.iter().map(|r| r.id))
+                .filter(|(email, id)| Some(*id) != bot_user_id && email != bot_email)
+                .map(|(email, _id)| email)
                 .collect::<Vec<String>>(),
             _ => Vec::new(),
         };
@@ -82,6 +106,16 @@ pub fn resolve_zulip_address(msg: &ZulipMessage, bot_email: &str) -> Conversatio
 
 /// Resolve numeric participant IDs for Zulip private-message typing notifications.
 pub fn resolve_zulip_private_recipient_ids(msg: &ZulipMessage, bot_email: &str) -> Vec<i64> {
+    resolve_zulip_private_recipient_ids_for_user(msg, bot_email, None)
+}
+
+/// Resolve numeric participant IDs for private-message typing notifications,
+/// excluding the authenticated user by stable Zulip user ID when available.
+pub fn resolve_zulip_private_recipient_ids_for_user(
+    msg: &ZulipMessage,
+    bot_email: &str,
+    bot_user_id: Option<i64>,
+) -> Vec<i64> {
     if msg.message_type == "stream" {
         return Vec::new();
     }
@@ -89,7 +123,7 @@ pub fn resolve_zulip_private_recipient_ids(msg: &ZulipMessage, bot_email: &str) 
     let mut user_ids = match &msg.display_recipient {
         ZulipDisplayRecipient::Private(recs) => recs
             .iter()
-            .filter(|r| r.email != bot_email)
+            .filter(|r| Some(r.id) != bot_user_id && r.email != bot_email)
             .map(|r| r.id)
             .collect::<Vec<i64>>(),
         _ => Vec::new(),
@@ -127,7 +161,7 @@ pub async fn process_zulip_message(
     max_chars: usize,
 ) -> Result<Option<ChannelInboundEvent>, AgentError> {
     // Skip messages sent by the bot itself
-    if msg.sender_email == bot.bot_email() {
+    if bot.is_own_message(msg) {
         debug!(
             message_id = msg.id,
             sender = msg.sender_email,
@@ -144,11 +178,11 @@ pub async fn process_zulip_message(
     let bot_name = bot.bot_name();
     let clean_text = strip_bot_mention(&clean_text, &bot_name);
 
-    let address = resolve_zulip_address(msg, bot.bot_email());
+    let address = resolve_zulip_address_for_user(msg, bot.bot_email(), bot.user_id());
     if address.thread_id.is_none() {
         bot.cache_typing_recipient_ids(
             &address.conversation_id,
-            resolve_zulip_private_recipient_ids(msg, bot.bot_email()),
+            resolve_zulip_private_recipient_ids_for_user(msg, bot.bot_email(), bot.user_id()),
         );
     }
     let sender = SenderIdentity::new(msg.sender_email.clone(), Some(msg.sender_full_name.clone()));

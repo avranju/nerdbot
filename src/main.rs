@@ -436,6 +436,7 @@ async fn build_zulip_runtime(
 
     match bot.get_me().await {
         Ok(user_info) => {
+            bot.set_user_id(user_info.user_id);
             bot.set_bot_name(user_info.full_name);
             let bot_name = bot.bot_name();
             info!(

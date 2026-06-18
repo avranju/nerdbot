@@ -11,7 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{debug, info};
 
-use super::{ChannelInboundEvent, ZulipUpdate, resolve_zulip_address};
+use super::{ChannelInboundEvent, ZulipUpdate};
 use crate::channel::ChannelIngress;
 use crate::error::AgentError;
 use crate::zulip::bot::ZulipBot;
@@ -94,7 +94,11 @@ impl ChannelIngress for ZulipPoll {
         // This trait method is kept for compatibility but returns unprocessed events.
         if let Some(msg) = ZulipUpdate::poll(self).await? {
             return Ok(Some(ChannelInboundEvent {
-                address: resolve_zulip_address(&msg, self.bot.bot_email()),
+                address: super::resolve_zulip_address_for_user(
+                    &msg,
+                    self.bot.bot_email(),
+                    self.bot.user_id(),
+                ),
                 sender: crate::channel::SenderIdentity::new(
                     msg.sender_email.clone(),
                     Some(msg.sender_full_name.clone()),

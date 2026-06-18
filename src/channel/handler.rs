@@ -154,16 +154,20 @@ impl ChannelMessageHandler {
     ) -> Result<(), AgentError> {
         // Phase 1: Resolve address and sender without downloading attachments
         let (address, sender_email, sender_full_name, content) =
-            crate::zulip::update::resolve_zulip_message(msg, bot_email);
+            crate::zulip::update::resolve_zulip_message_for_user(msg, bot_email, bot.user_id());
         if address.thread_id.is_none() {
             bot.cache_typing_recipient_ids(
                 &address.conversation_id,
-                crate::zulip::update::resolve_zulip_private_recipient_ids(msg, bot_email),
+                crate::zulip::update::resolve_zulip_private_recipient_ids_for_user(
+                    msg,
+                    bot_email,
+                    bot.user_id(),
+                ),
             );
         }
 
-        // Skip messages sent by the bot itself
-        if sender_email == bot_email {
+        // Skip messages sent by the authenticated Zulip account itself.
+        if bot.is_own_message(msg) {
             debug!(message_id = msg.id, "skipping Zulip message sent by bot");
             return Ok(());
         }

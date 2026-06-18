@@ -10,7 +10,8 @@ use nerdbot::zulip::bot::{
 };
 use nerdbot::zulip::service::ZulipService;
 use nerdbot::zulip::update::{
-    resolve_zulip_address, resolve_zulip_private_recipient_ids, strip_bot_mention,
+    resolve_zulip_address, resolve_zulip_address_for_user, resolve_zulip_private_recipient_ids,
+    resolve_zulip_private_recipient_ids_for_user, strip_bot_mention,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -648,6 +649,67 @@ fn test_resolve_private_message_multi_participant() {
 
     let recipient_ids = resolve_zulip_private_recipient_ids(&msg, "bot@test.com");
     assert_eq!(recipient_ids, vec![100, 200]);
+}
+
+#[test]
+fn test_resolve_private_message_excludes_current_user_by_id_when_email_differs() {
+    let msg = ZulipMessage {
+        id: 1,
+        sender_id: 100,
+        sender_email: "alice@test.com".into(),
+        sender_full_name: "Alice".into(),
+        content: "hello".into(),
+        message_type: "private".into(),
+        display_recipient: ZulipDisplayRecipient::Private(vec![
+            ZulipPrivateRecipient {
+                id: 100,
+                email: "alice@test.com".into(),
+                full_name: "Alice".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 200,
+                email: "hidden-bot-email@test.com".into(),
+                full_name: "NerdBot User".into(),
+            },
+        ]),
+        subject: None,
+        stream_id: None,
+    };
+
+    let address = resolve_zulip_address_for_user(&msg, "login-email@test.com", Some(200));
+    assert_eq!(address.conversation_id, "alice@test.com");
+
+    let recipient_ids =
+        resolve_zulip_private_recipient_ids_for_user(&msg, "login-email@test.com", Some(200));
+    assert_eq!(recipient_ids, vec![100]);
+}
+
+#[test]
+fn test_zulip_bot_detects_own_message_by_user_id_when_email_differs() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "login-email@test.com".into(),
+        "key".into(),
+    );
+    bot.set_user_id(200);
+
+    let msg = ZulipMessage {
+        id: 1,
+        sender_id: 200,
+        sender_email: "hidden-bot-email@test.com".into(),
+        sender_full_name: "NerdBot User".into(),
+        content: "hello".into(),
+        message_type: "private".into(),
+        display_recipient: ZulipDisplayRecipient::Private(vec![ZulipPrivateRecipient {
+            id: 200,
+            email: "hidden-bot-email@test.com".into(),
+            full_name: "NerdBot User".into(),
+        }]),
+        subject: None,
+        stream_id: None,
+    };
+
+    assert!(bot.is_own_message(&msg));
 }
 
 // ── Mention Stripping Tests ───────────────────────────────────────

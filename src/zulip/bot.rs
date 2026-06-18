@@ -209,6 +209,11 @@ pub struct ZulipBot {
     /// Bot's full name as registered in Zulip (used for mention stripping).
     /// Uses interior mutability so it can be set after initialization.
     bot_name: Arc<Mutex<String>>,
+    /// Authenticated Zulip user ID from `/users/me`.
+    ///
+    /// This is more stable than email for detecting self-sent messages because
+    /// Zulip may expose a visibility-controlled event email for human accounts.
+    user_id: Arc<Mutex<Option<i64>>>,
     typing_recipient_ids: Arc<Mutex<HashMap<String, Vec<i64>>>>,
 }
 
@@ -228,6 +233,7 @@ impl ZulipBot {
             bot_email,
             api_key,
             bot_name,
+            user_id: Arc::new(Mutex::new(None)),
             typing_recipient_ids: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -244,9 +250,26 @@ impl ZulipBot {
         self.bot_name.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
+    /// Set the authenticated Zulip user ID.
+    pub fn set_user_id(&self, user_id: i64) {
+        if let Ok(mut stored_user_id) = self.user_id.lock() {
+            *stored_user_id = Some(user_id);
+        }
+    }
+
+    /// Get the authenticated Zulip user ID if it has been resolved.
+    pub fn user_id(&self) -> Option<i64> {
+        self.user_id.lock().ok().and_then(|id| *id)
+    }
+
     /// Get the bot's email address.
     pub fn bot_email(&self) -> &str {
         &self.bot_email
+    }
+
+    /// Returns true when a Zulip message was sent by the authenticated account.
+    pub fn is_own_message(&self, msg: &ZulipMessage) -> bool {
+        self.user_id() == Some(msg.sender_id) || msg.sender_email == self.bot_email
     }
 
     /// Cache the numeric Zulip user IDs for a private-message conversation.

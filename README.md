@@ -307,6 +307,8 @@ Zulip typing indicators are supported for direct messages only (not streams). Th
 
 Zulip's presence endpoint currently rejects bot-account API requests with `This endpoint does not accept bot requests.` NerdBot therefore leaves presence heartbeats disabled by default, and a bot user may still appear offline even while NerdBot is running. The experimental `presence_enabled` setting remains available, but the heartbeat stops automatically if Zulip returns that bot-account rejection.
 
+For a dedicated human/service account using long polling, presence updates can work. NerdBot resolves the authenticated account's Zulip user ID from `/users/me` and uses that stable ID to ignore its own outbound messages, which avoids reply loops when Zulip event email addresses differ from the configured login email.
+
 ### Zulip Message Limits
 
 Zulip has a 10,000-character message limit. NerdBot automatically splits long responses into multiple messages when sending through the Zulip channel.
