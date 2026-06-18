@@ -9,6 +9,7 @@ use crate::channel::ChannelConfig;
 use crate::error::AgentError;
 
 pub const DEFAULT_TELEGRAM_POLL_INTERVAL_SECS: u64 = 5;
+pub const DEFAULT_ZULIP_PRESENCE_PING_INTERVAL_SECS: u64 = 60;
 
 /// Top-level configuration.
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -164,6 +165,15 @@ pub struct ZulipChannelConfig {
     /// Sleep duration after an empty events response in poll mode.
     #[serde(default = "default_zulip_poll_interval_secs")]
     pub poll_interval_secs: u64,
+    /// Whether to attempt active presence pings while NerdBot is running.
+    ///
+    /// Zulip rejects this endpoint for bot accounts on current servers, so the
+    /// default is disabled.
+    #[serde(default = "default_false")]
+    pub presence_enabled: bool,
+    /// Interval for active presence pings.
+    #[serde(default = "default_zulip_presence_ping_interval_secs")]
+    pub presence_ping_interval_secs: u64,
     /// Allowed Zulip conversations (stream names + optional topics).
     #[serde(default)]
     pub allowed_conversations: Vec<crate::channel::types::ConversationAddressPattern>,
@@ -189,6 +199,8 @@ impl Default for ZulipChannelConfig {
             web_hook_token_env: default_zulip_webhook_token_env(),
             web_hook_url: None,
             poll_interval_secs: default_zulip_poll_interval_secs(),
+            presence_enabled: false,
+            presence_ping_interval_secs: default_zulip_presence_ping_interval_secs(),
             allowed_conversations: Vec::new(),
             allowed_senders: Vec::new(),
             max_attachment_bytes: default_max_attachment_bytes(),
@@ -576,6 +588,9 @@ fn default_zulip_webhook_token_env() -> String {
 fn default_zulip_poll_interval_secs() -> u64 {
     2
 }
+fn default_zulip_presence_ping_interval_secs() -> u64 {
+    DEFAULT_ZULIP_PRESENCE_PING_INTERVAL_SECS
+}
 impl AppConfig {
     /// Load configuration from a TOML file.
     pub fn from_file(path: &std::path::Path) -> Result<Self, AgentError> {
@@ -701,6 +716,12 @@ impl AppConfig {
                         "channels.zulip.web_hook_url must include a host".into(),
                     ));
                 }
+            }
+
+            if zulip.presence_enabled && zulip.presence_ping_interval_secs == 0 {
+                return Err(AgentError::Config(
+                    "channels.zulip.presence_ping_interval_secs must be greater than 0 when channels.zulip.presence_enabled is true".into(),
+                ));
             }
         }
 

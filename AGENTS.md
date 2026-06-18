@@ -63,7 +63,7 @@ src/
 
   zulip/
     mod.rs         — Exports ZulipBot, ZulipService, ZulipPoll, ZulipHook
-    bot.rs         — Zulip HTTP API client (Basic auth, send_message, register_queue, get_events, download_file)
+    bot.rs         — Zulip HTTP API client (Basic auth, send_message, update_presence, register_queue, get_events, download_file)
     attachment.rs  — Regex extraction of user-upload markdown links, MIME classification, bounded download, LLM content conversion
     service.rs     — ZulipService: send_message with 10K char splitting, typing indicators (PMs only), ChannelService implementation
     update/
@@ -179,7 +179,7 @@ README.md          — Project documentation
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Interactive Zulip message:**
-0. ZulipBot authenticates via Basic auth (bot_email + api_key), normalizes site_url with trailing slash. Zulip supports two ingress modes:
+0. ZulipBot authenticates via Basic auth (bot_email + api_key), normalizes site_url with trailing slash. `[channels.zulip].presence_enabled` defaults to false because current Zulip servers reject `POST /api/v1/users/me/presence` for bot accounts with `This endpoint does not accept bot requests.` If presence is explicitly enabled, the Zulip runtime attempts an active-presence heartbeat with `status = "active"`, `ping_only = true`, and `new_user_input = false`; the heartbeat interval is `[channels.zulip].presence_ping_interval_secs` (default 60 seconds), the task is aborted when the Zulip ingress loop exits, and it self-disables after the bot-account rejection. Zulip supports two ingress modes:
    - **Poll**: POST `/api/v1/register` to get queue_id, then loop GET `/api/v1/events` with `dont_block=false`; on `BAD_EVENT_QUEUE_ID`, re-register. Poll interval controlled by `[channels.zulip].poll_interval_secs` (default 2s).
    - **Webhook**: `[channels.zulip].web_hook_url` (required; public HTTPS Zulip webhook URL) — path is extracted from this URL (mirroring Telegram's pattern). The shared plain HTTP webhook server on `[webhook].host`/`port` validates `token` field against `web_hook_token_env`, queues accepted payloads, replies to Zulip with `{"response_not_required": true}`, and sends the eventual bot response asynchronously through Zulip's REST API rather than in the webhook HTTP response.
 1. Polling or webhook push receives Zulip message event
@@ -237,7 +237,7 @@ README.md          — Project documentation
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
 - `[webhook]` — host/port for the shared local webhook server used by Telegram and/or Zulip webhook ingress (default `127.0.0.1:24682`)
 - `[channels.telegram]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for webhook), allowed_conversations, allowed_senders, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
-- `[channels.zulip]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_email_env (default `ZULIP_BOT_EMAIL`), api_key_env (default `ZULIP_BOT_API_KEY`), site_url (required), web_hook_token_env (default `ZULIP_WEBHOOK_TOKEN`), web_hook_url (required for webhook; public HTTPS Zulip webhook URL), poll_interval_secs (default 2), allowed_conversations (ConversationAddressPattern with stream names and optional topics), allowed_senders (email addresses), max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
+- `[channels.zulip]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_email_env (default `ZULIP_BOT_EMAIL`), api_key_env (default `ZULIP_BOT_API_KEY`), site_url (required), web_hook_token_env (default `ZULIP_WEBHOOK_TOKEN`), web_hook_url (required for webhook; public HTTPS Zulip webhook URL), poll_interval_secs (default 2), presence_enabled (default false because Zulip rejects bot-account presence requests), presence_ping_interval_secs (default 60; must be >0 when presence is enabled), allowed_conversations (ConversationAddressPattern with stream names and optional topics), allowed_senders (email addresses), max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[storage]` — sqlite_path
 - `[workspace]` — root, max_read_bytes, max_write_bytes
 - `[files]` — max_read_bytes, max_write_bytes

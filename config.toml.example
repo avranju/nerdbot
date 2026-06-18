@@ -61,6 +61,11 @@ max_text_document_chars = 32768
 # web_hook_url = "https://example.com/zulip/hook"
 # Sleep duration after an empty events response in poll mode (seconds).
 # poll_interval_secs = 2
+# Experimental: attempt active presence heartbeats. Current Zulip servers reject
+# presence updates from bot accounts, so this defaults to false.
+# presence_enabled = false
+# Active presence heartbeat interval in seconds when enabled.
+# presence_ping_interval_secs = 60
 # Allowed Zulip conversations using ConversationAddressPattern syntax.
 # conversation_id matches stream name; thread_id matches topic name.
 # thread_id = None (omitted) matches all topics in a stream.

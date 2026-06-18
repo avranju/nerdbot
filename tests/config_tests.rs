@@ -57,6 +57,13 @@ fn test_default_config_telegram_ingress() {
 }
 
 #[test]
+fn test_default_config_zulip_presence() {
+    let config = AppConfig::default();
+    assert!(!config.channels.zulip.presence_enabled);
+    assert_eq!(config.channels.zulip.presence_ping_interval_secs, 60);
+}
+
+#[test]
 fn test_default_config_telegram_no_allowed_ids() {
     let config = AppConfig::default();
     assert!(config.channels.telegram.allowed_conversations.is_empty());
@@ -616,4 +623,56 @@ model = "gpt-4o"
 fn test_zulip_default_web_hook_url_is_none() {
     let config = AppConfig::default();
     assert_eq!(config.channels.zulip.web_hook_url, None);
+}
+
+#[test]
+fn test_zulip_presence_interval_must_be_positive_when_enabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[channels.zulip]
+enabled = true
+site_url = "https://org.zulipchat.com"
+presence_enabled = true
+presence_ping_interval_secs = 0
+
+[llm]
+model = "gpt-4o"
+"#,
+    )
+    .unwrap();
+
+    let result = AppConfig::from_file(&path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("channels.zulip.presence_ping_interval_secs must be greater than 0"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_zulip_presence_interval_can_be_zero_when_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[channels.zulip]
+enabled = true
+site_url = "https://org.zulipchat.com"
+presence_enabled = false
+presence_ping_interval_secs = 0
+
+[llm]
+model = "gpt-4o"
+"#,
+    )
+    .unwrap();
+
+    let config = AppConfig::from_file(&path).unwrap();
+    assert!(!config.channels.zulip.presence_enabled);
+    assert_eq!(config.channels.zulip.presence_ping_interval_secs, 0);
 }

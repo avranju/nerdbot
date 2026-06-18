@@ -9,8 +9,9 @@ use toml::Value;
 use url::Url;
 
 use crate::config::{
-    AppConfig, DEFAULT_TELEGRAM_POLL_INTERVAL_SECS, SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT,
-    SANDBOX_MODE_NONE, SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramIngress,
+    AppConfig, DEFAULT_TELEGRAM_POLL_INTERVAL_SECS, DEFAULT_ZULIP_PRESENCE_PING_INTERVAL_SECS,
+    SANDBOX_MODE_BWRAP, SANDBOX_MODE_BWRAP_STRICT, SANDBOX_MODE_NONE,
+    SHELL_NETWORK_ACCESS_DISABLED, SHELL_NETWORK_ACCESS_HOST, TelegramIngress,
 };
 
 const DEFAULT_PERSONALITY_FILE: &str = "/config/personality.md";
@@ -405,6 +406,12 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
     zulip
         .entry("poll_interval_secs")
         .or_insert_with(|| Value::Integer(2));
+    zulip
+        .entry("presence_enabled")
+        .or_insert_with(|| Value::Boolean(false));
+    zulip
+        .entry("presence_ping_interval_secs")
+        .or_insert_with(|| Value::Integer(DEFAULT_ZULIP_PRESENCE_PING_INTERVAL_SECS as i64));
 
     let webhook = table_mut(root, "webhook")?;
     webhook.insert("host".into(), Value::String(answers.webhook_host.clone()));

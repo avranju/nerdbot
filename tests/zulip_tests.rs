@@ -88,6 +88,31 @@ async fn test_send_typing_notification_url_construction() {
 }
 
 #[tokio::test]
+async fn test_update_presence_url_construction() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path_regex("/api/v1/users/me/presence"))
+        .and(body_string_contains("status=active"))
+        .and(body_string_contains("ping_only=true"))
+        .and(body_string_contains("new_user_input=false"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"result": "success", "msg": ""}"#),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let bot = ZulipBot::new(
+        mock_base_url(&mock_server),
+        "test-bot@test.com".into(),
+        "test-api-key".into(),
+    );
+
+    let result = bot.update_presence("active", true).await;
+    assert!(result.is_ok(), "update_presence should succeed: {result:?}");
+}
+
+#[tokio::test]
 async fn test_zulip_typing_indicator_sends_stop_on_drop() {
     let mock_server = MockServer::start().await;
 

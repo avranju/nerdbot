@@ -694,6 +694,12 @@ async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<Chann
 }
 
 async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHandler>) {
+    let presence_heartbeat = start_zulip_presence_heartbeat(
+        zulip.bot.clone(),
+        zulip.config.presence_enabled,
+        zulip.config.presence_ping_interval_secs,
+    );
+
     match zulip.config.ingress {
         ZulipIngress::Poll => {
             let updates = ZulipPoll::new(zulip.bot.clone(), zulip.config.poll_interval_secs)
@@ -716,6 +722,46 @@ async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessage
             }
         }
     }
+
+    if let Some(handle) = presence_heartbeat {
+        handle.abort();
+    }
+}
+
+fn start_zulip_presence_heartbeat(
+    bot: Arc<ZulipBot>,
+    enabled: bool,
+    interval_secs: u64,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !enabled {
+        info!("Zulip presence heartbeat disabled");
+        return None;
+    }
+
+    Some(tokio::spawn(async move {
+        let interval = std::time::Duration::from_secs(interval_secs);
+        info!(interval_secs, "starting Zulip active presence heartbeat");
+
+        loop {
+            if let Err(e) = bot.update_presence("active", true).await {
+                if zulip_presence_rejected_for_bot(&e) {
+                    warn!(
+                        error = %e,
+                        "Zulip rejected presence updates for the bot account; disabling presence heartbeat"
+                    );
+                    return;
+                }
+                warn!(error = %e, "failed to update Zulip presence");
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }))
+}
+
+fn zulip_presence_rejected_for_bot(error: &AgentError) -> bool {
+    error
+        .to_string()
+        .contains("This endpoint does not accept bot requests.")
 }
 
 async fn run_zulip_update_loop<T>(
@@ -777,6 +823,21 @@ fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> 
         Err(_) => Err(AgentError::Config(format!(
             "{description} environment variable {env_var} is not set"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_zulip_bot_presence_rejection() {
+        let error = AgentError::Zulip(
+            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
+                .to_string(),
+        );
+
+        assert!(zulip_presence_rejected_for_bot(&error));
     }
 }
 

@@ -450,6 +450,48 @@ impl ZulipBot {
         response.into_result()
     }
 
+    /// Update the bot user's Zulip presence.
+    pub async fn update_presence(&self, status: &str, ping_only: bool) -> Result<(), AgentError> {
+        let url = format!("{}{}/users/me/presence", self.site_url, ZULIP_API_PREFIX);
+        let params = vec![
+            ("status", status.to_string()),
+            ("ping_only", ping_only.to_string()),
+            ("new_user_input", "false".to_string()),
+        ];
+
+        debug!(status, ping_only, "updating Zulip presence");
+
+        let body = serde_urlencoded::to_string(&params).unwrap_or_default();
+        let res = self
+            .authenticate(self.client.post(&url))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| AgentError::Zulip(format!("HTTP error during presence update: {e}")))?;
+
+        let status_code = res.status();
+        let body = res.text().await.map_err(|e| {
+            AgentError::Zulip(format!("Failed to read presence response body: {e}"))
+        })?;
+
+        if !status_code.is_success() {
+            return Err(AgentError::Zulip(format!(
+                "Zulip presence update failed: HTTP {status_code}: {body}"
+            )));
+        }
+
+        let response: ZulipApiEmptyResponse = serde_json::from_str(&body).map_err(|e| {
+            AgentError::Zulip(format!(
+                "Failed to parse presence response: {e}. Body: {body}"
+            ))
+        })?;
+        response.into_result()
+    }
+
     /// Register a long-polling event queue.
     ///
     /// Returns the queue ID and initial last_event_id.

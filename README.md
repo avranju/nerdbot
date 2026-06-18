@@ -199,6 +199,8 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `site_url` | Base URL of the Zulip server (e.g., `https://your-org.zulipchat.com`); required when enabled |
 | | `web_hook_token_env` | Environment variable name for the webhook verification token (default: `ZULIP_WEBHOOK_TOKEN`) |
 | | `poll_interval_secs` | Seconds to sleep after an empty Zulip events response in poll mode (default: `2`) |
+| | `presence_enabled` | Experimental active presence heartbeat. Current Zulip servers reject presence updates from bot accounts, so this defaults to `false` |
+| | `presence_ping_interval_secs` | Seconds between Zulip active presence heartbeats when explicitly enabled (default: `60`) |
 | | `allowed_conversations` | List of `ConversationAddressPattern` objects with `channel_id`, `conversation_id` (stream name), and optional `thread_id` (topic name). Empty = all streams (default: `[]`) |
 | | `allowed_senders` | List of Zulip sender email addresses (empty = all) |
 | | `max_attachment_bytes` | Maximum download size for Zulip attachments in bytes (default: `5242880`, 5 MB) |
@@ -300,6 +302,10 @@ Zulip embeds uploaded files as markdown links in message content (e.g., `[report
 ### Zulip Typing Indicators
 
 Zulip typing indicators are supported for direct messages only (not streams). The bot caches numeric participant user IDs from inbound direct-message payloads because Zulip's typing endpoint requires user IDs and `type = "direct"`, while message sending can still use email recipients. NerdBot sends a typing refresh every 8 seconds while generating a response and sends `op = "stop"` when the agent run finishes.
+
+### Zulip Presence
+
+Zulip's presence endpoint currently rejects bot-account API requests with `This endpoint does not accept bot requests.` NerdBot therefore leaves presence heartbeats disabled by default, and a bot user may still appear offline even while NerdBot is running. The experimental `presence_enabled` setting remains available, but the heartbeat stops automatically if Zulip returns that bot-account rejection.
 
 ### Zulip Message Limits
 
