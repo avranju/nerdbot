@@ -124,6 +124,7 @@ src/
 
 tests/             — Integration tests (agent_loop, storage, scheduler, telegram, workspace, context, tools, access_control, config)
 docs/              — System design document and other docs
+  zulip-editable-progress-messages.md — Proposal for Zulip progress/status messages using one editable message per agent run
   nerdbot-user.service.example — Sample user systemd unit for running NerdBot from ~/.local/bin with config/secrets under ~/.config/nerdbot
 migrations/        — SQLx migrations (00000000000001_init.sql)
 Dockerfile         — Multi-stage Docker build (builder → runtime)

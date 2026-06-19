@@ -108,12 +108,23 @@ fn test_reject_traversal_after_nested_dirs() {
 }
 
 #[test]
+fn test_accept_absolute_path_inside_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = WorkspaceSandbox::new(tmp.path().to_path_buf(), 1024, 2048);
+
+    // Absolute paths that fall within the workspace root are accepted.
+    // This allows the LLM to send absolute paths like "/workspace".
+    let result = sandbox.resolve(tmp.path());
+    assert!(result.is_ok());
+    assert!(result.unwrap().starts_with(tmp.path()));
+}
+
+#[test]
 fn test_reject_absolute_path_outside_root() {
     let tmp = tempfile::tempdir().unwrap();
     let sandbox = WorkspaceSandbox::new(tmp.path().to_path_buf(), 1024, 2048);
 
-    // Joining an absolute path with the root gives the absolute path,
-    // which doesn't start with tmp.path()
+    // Absolute paths outside the workspace root are rejected.
     let result = sandbox.resolve(std::path::Path::new("/etc/passwd"));
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AgentError::SandboxViolation));

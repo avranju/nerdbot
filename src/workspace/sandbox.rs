@@ -22,18 +22,30 @@ impl WorkspaceSandbox {
         }
     }
 
-    /// Resolve a relative path within the sandbox.
+    /// Resolve a path within the sandbox.
     ///
-    /// Rejects path traversal attempts by checking for `..` components.
+    /// Accepts both relative and absolute paths. Absolute paths must fall
+    /// within the workspace root; relative paths are resolved against it.
+    /// Rejects path traversal attempts (e.g. `..` components).
     pub fn resolve(&self, relative: &Path) -> Result<PathBuf, AgentError> {
+        // Handle absolute paths: accept if inside the workspace root,
+        // reject if outside. This allows the LLM to send absolute paths
+        // like "/workspace" without triggering a sandbox violation.
+        if relative.is_absolute() {
+            let canonical = relative
+                .canonicalize()
+                .unwrap_or_else(|_| relative.to_path_buf());
+            if canonical.starts_with(&self.root) {
+                return Ok(canonical);
+            }
+            return Err(AgentError::SandboxViolation);
+        }
+
         // Reject any path that contains `..` components
         for component in relative.components() {
             match component {
                 std::path::Component::Normal(_) => {}
                 std::path::Component::ParentDir => {
-                    return Err(AgentError::SandboxViolation);
-                }
-                std::path::Component::RootDir => {
                     return Err(AgentError::SandboxViolation);
                 }
                 _ => {}
