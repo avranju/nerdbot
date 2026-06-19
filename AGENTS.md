@@ -127,6 +127,8 @@ docs/              — System design document and other docs
   zulip-editable-progress-messages.md — Proposal for Zulip progress/status messages using one editable message per agent run
   nerdbot-user.service.example — Sample user systemd unit for running NerdBot from ~/.local/bin with config/secrets under ~/.config/nerdbot
 migrations/        — SQLx migrations (00000000000001_init.sql)
+.gitea/workflows/
+  docker-image.yml — Manual Gitea Actions workflow that builds the root Dockerfile and pushes git.nerdworks.dev/avranju/nerdbot:<tag>
 Dockerfile         — Multi-stage Docker build (builder → runtime)
 docker-compose.yml — Example Docker Compose setup
 config.toml.example — Annotated example configuration
@@ -251,6 +253,7 @@ README.md          — Project documentation
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets
+- **.gitea/workflows/docker-image.yml** — manually triggered Gitea Actions workflow. It accepts a required `tag` input, builds `git.nerdworks.dev/avranju/nerdbot:<tag>` from the repository root `Dockerfile`, and pushes it to the Gitea container registry using `GITEA_PACKAGE_TOKEN`.
 - Entrypoint: `nerdbot --config /config/config.toml`
 - **config.toml.example** — annotated example configuration covering all sections
 - **personality.md.example** — example personality/system prompt file
