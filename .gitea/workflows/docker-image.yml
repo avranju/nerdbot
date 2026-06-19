@@ -10,6 +10,7 @@ on:
 
 env:
   REGISTRY: git.nerdworks.dev
+  REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
   IMAGE_NAME: avranju/nerdbot
   IMAGE_TAG: ${{ inputs.tag }}
 
@@ -30,9 +31,9 @@ jobs:
 
       - name: Log in to Gitea container registry
         run: |
-          printf '%s' "${{ secrets.GITEA_PACKAGE_TOKEN }}" \
+          printf '%s' "${{ secrets.PACKAGE_TOKEN }}" \
             | docker login "$REGISTRY" \
-              --username "${{ gitea.actor }}" \
+              --username "$REGISTRY_USERNAME" \
               --password-stdin
 
       - name: Build Docker image

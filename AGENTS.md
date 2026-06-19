@@ -253,7 +253,7 @@ README.md          — Project documentation
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets
-- **.gitea/workflows/docker-image.yml** — manually triggered Gitea Actions workflow. It accepts a required `tag` input, builds `git.nerdworks.dev/avranju/nerdbot:<tag>` from the repository root `Dockerfile`, and pushes it to the Gitea container registry using `GITEA_PACKAGE_TOKEN`.
+- **.gitea/workflows/docker-image.yml** — manually triggered Gitea Actions workflow. It accepts a required `tag` input, builds `git.nerdworks.dev/avranju/nerdbot:<tag>` from the repository root `Dockerfile`, and pushes it to the Gitea container registry using the `REGISTRY_USERNAME` Actions variable and `PACKAGE_TOKEN` Actions secret.
 - Entrypoint: `nerdbot --config /config/config.toml`
 - **config.toml.example** — annotated example configuration covering all sections
 - **personality.md.example** — example personality/system prompt file
