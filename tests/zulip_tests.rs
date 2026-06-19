@@ -185,6 +185,7 @@ async fn test_register_queue_url_construction() {
 
     Mock::given(method("POST"))
         .and(path_regex("/api/v1/register"))
+        .and(body_string_contains("apply_markdown=false"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
             r#"{"queue_id": "abc123", "last_event_id": 0, "result": "success", "msg": ""}"#,
         ))
@@ -403,6 +404,7 @@ fn test_bot_mention_pattern_matches_bot_only() {
     assert!(pattern.is_match("@**NerdBot** hello world"));
     assert!(pattern.is_match("@**NerdBot**"));
     assert!(pattern.is_match("can @**NerdBot** help?"));
+    assert!(pattern.is_match("can @**NerdBot|13** help?"));
 
     // Should NOT match other mentions
     assert!(!pattern.is_match("@**Alice** hello"));
@@ -415,6 +417,10 @@ fn test_bot_mention_pattern_matches_bot_only() {
 fn test_bot_mention_pattern_replaces_only_bot_mention() {
     let pattern = nerdbot::zulip::bot::build_bot_mention_pattern("NerdBot").unwrap();
     let text = "can @**NerdBot** help?";
+    let result = pattern.replace(text, "").to_string();
+    assert_eq!(result, "can help?");
+
+    let text = "can @**NerdBot|13** help?";
     let result = pattern.replace(text, "").to_string();
     assert_eq!(result, "can help?");
 }
@@ -737,6 +743,10 @@ fn test_strip_bot_mention_precise() {
     let text = "can @**NerdBot** help?";
     let result = strip_bot_mention(text, "NerdBot");
     assert_eq!(result, "can help?");
+
+    let text = "can @**NerdBot|13** help?";
+    let result = strip_bot_mention(text, "NerdBot");
+    assert_eq!(result, "can help?");
 }
 
 #[test]
@@ -788,7 +798,7 @@ fn test_stream_message_with_bot_mention_anywhere_is_accepted() {
     bot.set_bot_name("NerdBot".into());
     let msg = zulip_message(
         "stream",
-        "can @**NerdBot** help with this?",
+        "can @**NerdBot|13** help with this?",
         ZulipDisplayRecipient::Stream("general".into()),
     );
 

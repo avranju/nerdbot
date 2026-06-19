@@ -19,7 +19,7 @@ const ZULIP_API_PREFIX: &str = "api/v1";
 /// Build a regex pattern to match the bot's own mention anywhere in text.
 ///
 /// Returns `None` if no bot name is configured.
-/// Pattern: `@\*\*BotName\*\*\s*`
+/// Pattern: `@\*\*BotName(|user_id)?\*\*\s*`
 pub fn build_bot_mention_pattern(bot_name: &str) -> Option<regex::Regex> {
     if bot_name.is_empty() {
         return None;
@@ -27,7 +27,7 @@ pub fn build_bot_mention_pattern(bot_name: &str) -> Option<regex::Regex> {
     // Escape special regex characters in the bot name (Zulip names shouldn't have them,
     // but be defensive)
     let escaped = regex::escape(bot_name);
-    let pattern = format!("@\\*\\*{}\\*\\*\\s*", escaped);
+    let pattern = format!("@\\*\\*{}(?:\\|\\d+)?\\*\\*\\s*", escaped);
     regex::Regex::new(&pattern).ok()
 }
 
@@ -524,6 +524,7 @@ impl ZulipBot {
             ("event_types", "[\"message\"]".to_string()),
             ("queue_id", "".to_string()), // Empty for new registration
             ("all_public_streams", "true".to_string()),
+            ("apply_markdown", "false".to_string()),
         ];
 
         debug!("registering Zulip event queue");
