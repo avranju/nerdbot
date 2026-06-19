@@ -10,7 +10,8 @@ use nerdbot::zulip::bot::{
 };
 use nerdbot::zulip::service::ZulipService;
 use nerdbot::zulip::update::{
-    resolve_zulip_address, resolve_zulip_address_for_user, resolve_zulip_private_recipient_ids,
+    addressed_zulip_content, process_zulip_message, resolve_zulip_address,
+    resolve_zulip_address_for_user, resolve_zulip_private_recipient_ids,
     resolve_zulip_private_recipient_ids_for_user, strip_bot_mention,
 };
 use std::sync::Arc;
@@ -22,6 +23,24 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 // ZulipBot adds the trailing slash internally.
 fn mock_base_url(server: &MockServer) -> String {
     server.uri()
+}
+
+fn zulip_message(
+    message_type: &str,
+    content: &str,
+    display_recipient: ZulipDisplayRecipient,
+) -> ZulipMessage {
+    ZulipMessage {
+        id: 1,
+        sender_id: 100,
+        sender_email: "alice@test.com".into(),
+        sender_full_name: "Alice".into(),
+        content: content.into(),
+        message_type: message_type.into(),
+        display_recipient,
+        subject: Some("test-topic".into()),
+        stream_id: Some(42),
+    }
 }
 
 // ── URL Construction Tests ────────────────────────────────────────
@@ -380,14 +399,13 @@ async fn test_bot_name_resolution() {
 fn test_bot_mention_pattern_matches_bot_only() {
     let pattern = nerdbot::zulip::bot::build_bot_mention_pattern("NerdBot").unwrap();
 
-    // Should match bot mention
+    // Should match bot mention anywhere in the message.
     assert!(pattern.is_match("@**NerdBot** hello world"));
     assert!(pattern.is_match("@**NerdBot**"));
+    assert!(pattern.is_match("can @**NerdBot** help?"));
 
     // Should NOT match other mentions
     assert!(!pattern.is_match("@**Alice** hello"));
-    // @**Bob** @**NerdBot** — the pattern only matches at the start, so this won't match
-    assert!(!pattern.is_match("@**Bob** @**NerdBot** hello"));
 
     // Should not match without mention syntax
     assert!(!pattern.is_match("hello world"));
@@ -396,9 +414,9 @@ fn test_bot_mention_pattern_matches_bot_only() {
 #[test]
 fn test_bot_mention_pattern_replaces_only_bot_mention() {
     let pattern = nerdbot::zulip::bot::build_bot_mention_pattern("NerdBot").unwrap();
-    let text = "@**NerdBot** hello world";
+    let text = "can @**NerdBot** help?";
     let result = pattern.replace(text, "").to_string();
-    assert_eq!(result, "hello world");
+    assert_eq!(result, "can help?");
 }
 
 #[test]
@@ -716,9 +734,9 @@ fn test_zulip_bot_detects_own_message_by_user_id_when_email_differs() {
 
 #[test]
 fn test_strip_bot_mention_precise() {
-    let text = "@**NerdBot** hello world";
+    let text = "can @**NerdBot** help?";
     let result = strip_bot_mention(text, "NerdBot");
-    assert_eq!(result, "hello world");
+    assert_eq!(result, "can help?");
 }
 
 #[test]
@@ -732,17 +750,181 @@ fn test_strip_bot_mention_no_mention() {
 fn test_strip_bot_mention_other_mention_preserved() {
     let text = "@**NerdBot** @**Alice** hello";
     let result = strip_bot_mention(text, "NerdBot");
-    // Should only strip NerdBot mention at the start, not Alice's
+    // Should only strip NerdBot mention, not Alice's
     assert_eq!(result, "@**Alice** hello");
 }
 
 #[test]
-fn test_strip_bot_mention_broad_fallback() {
-    // When bot name is empty, uses broad pattern (may strip wrong mention)
+fn test_strip_bot_mention_unknown_bot_name_preserves_text() {
     let text = "@**Alice** hello";
     let result = strip_bot_mention(text, "");
-    // Broad pattern strips any first mention
-    assert_eq!(result, "hello");
+    assert_eq!(result, text);
+}
+
+#[test]
+fn test_stream_message_without_bot_mention_is_ignored() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "stream",
+        "hello world",
+        ZulipDisplayRecipient::Stream("general".into()),
+    );
+
+    assert!(addressed_zulip_content(&msg, &bot).is_none());
+}
+
+#[test]
+fn test_stream_message_with_bot_mention_anywhere_is_accepted() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "stream",
+        "can @**NerdBot** help with this?",
+        ZulipDisplayRecipient::Stream("general".into()),
+    );
+
+    assert_eq!(
+        addressed_zulip_content(&msg, &bot).as_deref(),
+        Some("can help with this?")
+    );
+}
+
+#[test]
+fn test_one_to_one_private_message_without_bot_mention_is_accepted() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "private",
+        "hello",
+        ZulipDisplayRecipient::Private(vec![
+            ZulipPrivateRecipient {
+                id: 100,
+                email: "alice@test.com".into(),
+                full_name: "Alice".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 200,
+                email: "bot@test.com".into(),
+                full_name: "NerdBot".into(),
+            },
+        ]),
+    );
+
+    assert_eq!(
+        addressed_zulip_content(&msg, &bot).as_deref(),
+        Some("hello")
+    );
+}
+
+#[test]
+fn test_group_private_message_without_bot_mention_is_ignored() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "private",
+        "hello everyone",
+        ZulipDisplayRecipient::Private(vec![
+            ZulipPrivateRecipient {
+                id: 100,
+                email: "alice@test.com".into(),
+                full_name: "Alice".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 101,
+                email: "bob@test.com".into(),
+                full_name: "Bob".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 200,
+                email: "bot@test.com".into(),
+                full_name: "NerdBot".into(),
+            },
+        ]),
+    );
+
+    assert!(addressed_zulip_content(&msg, &bot).is_none());
+}
+
+#[test]
+fn test_group_private_message_with_bot_mention_anywhere_is_accepted() {
+    let bot = ZulipBot::new(
+        "https://test.zulipchat.com".into(),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "private",
+        "I think @**NerdBot** can answer this",
+        ZulipDisplayRecipient::Private(vec![
+            ZulipPrivateRecipient {
+                id: 100,
+                email: "alice@test.com".into(),
+                full_name: "Alice".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 101,
+                email: "bob@test.com".into(),
+                full_name: "Bob".into(),
+            },
+            ZulipPrivateRecipient {
+                id: 200,
+                email: "bot@test.com".into(),
+                full_name: "NerdBot".into(),
+            },
+        ]),
+    );
+
+    assert_eq!(
+        addressed_zulip_content(&msg, &bot).as_deref(),
+        Some("I think can answer this")
+    );
+}
+
+#[tokio::test]
+async fn test_ignored_stream_message_does_not_download_attachments() {
+    let mock_server = MockServer::start().await;
+    let upload_mock = Mock::given(method("GET"))
+        .and(path_regex(r"/user_uploads/1/99/abc/report\.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4 fake pdf content"))
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    let bot = ZulipBot::new(
+        mock_base_url(&mock_server),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("NerdBot".into());
+    let msg = zulip_message(
+        "stream",
+        "Check [report.pdf](/user_uploads/1/99/abc/report.pdf)",
+        ZulipDisplayRecipient::Stream("general".into()),
+    );
+
+    let event = process_zulip_message(&msg, &bot, 5_242_880, 32_768)
+        .await
+        .unwrap();
+
+    assert!(event.is_none());
+    assert_eq!(upload_mock.received_requests().await.len(), 0);
 }
 
 // ── URL Normalization Tests ───────────────────────────────────────

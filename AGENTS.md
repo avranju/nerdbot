@@ -186,17 +186,18 @@ README.md          — Project documentation
    - **Poll**: POST `/api/v1/register` to get queue_id, then loop GET `/api/v1/events` with `dont_block=false`; on `BAD_EVENT_QUEUE_ID`, re-register. Poll interval controlled by `[channels.zulip].poll_interval_secs` (default 2s).
    - **Webhook**: `[channels.zulip].web_hook_url` (required; public HTTPS Zulip webhook URL) — path is extracted from this URL (mirroring Telegram's pattern). The shared plain HTTP webhook server on `[webhook].host`/`port` validates `token` field against `web_hook_token_env`, queues accepted payloads, replies to Zulip with `{"response_not_required": true}`, and sends the eventual bot response asynchronously through Zulip's REST API rather than in the webhook HTTP response.
 1. Polling or webhook push receives Zulip message event
-2. Ingress handler strips bot mentions (`@**BotName** ` pattern) from message text
-3. Extracts user-upload attachments from markdown links (`[filename](/user_uploads/...)`), downloads via authenticated GET, classifies as binary (images) or text documents
+2. Ingress first decides whether the message is addressed to NerdBot before access checks, sessions, or attachment downloads. Self-sent messages are ignored; stream messages require a direct `@**BotName**` mention anywhere in the raw Zulip Markdown content; one-to-one DMs are accepted without a mention; group DMs require a direct bot mention anywhere in the message. Unknown bot names do not fall back to broad "any mention" matching, so stream/group-DM messages are ignored unless the fetched `/users/me` full name produced a precise bot mention pattern.
+3. Accepted messages have the direct bot mention removed from the prompt text when present.
 4. ChannelMessageHandler checks channel-qualified access policy
-5. Ensures channel-qualified chat session exists (creates if new)
-6. Routes: if `/command` → CommandHandler, else → agent loop
-7. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget
-8. Starts a channel typing indicator when supported (Zulip typing is direct-message-only, refreshed every 8 seconds, and stopped with a best-effort `op = "stop"` when the agent run finishes). For direct-message typing notifications, NerdBot keeps the stable conversation/session identity as sorted participant emails but caches numeric Zulip user IDs from inbound `display_recipient` payloads because `/api/v1/typing` requires `type = "direct"` and integer user IDs in the `to` array. When `/users/me` provided a current user ID, NerdBot filters that ID rather than relying only on email string equality.
-9. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text; typing refresh stops as soon as the run returns
-10. Outbound messages split at 10,000 chars via `ZulipService::send_message`
-11. Persists current user message and assistant reply → sends through ChannelRegistry
-12. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
+5. Extracts user-upload attachments from markdown links (`[filename](/user_uploads/...)`), downloads via authenticated GET, classifies as binary (images) or text documents
+6. Ensures channel-qualified chat session exists (creates if new)
+7. Routes: if `/command` → CommandHandler, else → agent loop
+8. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget
+9. Starts a channel typing indicator when supported (Zulip typing is direct-message-only, refreshed every 8 seconds, and stopped with a best-effort `op = "stop"` when the agent run finishes). For direct-message typing notifications, NerdBot keeps the stable conversation/session identity as sorted participant emails but caches numeric Zulip user IDs from inbound `display_recipient` payloads because `/api/v1/typing` requires `type = "direct"` and integer user IDs in the `to` array. When `/users/me` provided a current user ID, NerdBot filters that ID rather than relying only on email string equality.
+10. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text; typing refresh stops as soon as the run returns
+11. Outbound messages split at 10,000 chars via `ZulipService::send_message`
+12. Persists current user message and assistant reply → sends through ChannelRegistry
+13. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
 1. SchedulerService background loop detects due job

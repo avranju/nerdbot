@@ -16,10 +16,10 @@ use crate::error::AgentError;
 /// Base Zulip API version prefix.
 const ZULIP_API_PREFIX: &str = "api/v1";
 
-/// Build a regex pattern to match only the bot's own mention at the start of text.
+/// Build a regex pattern to match the bot's own mention anywhere in text.
 ///
-/// Returns `None` if no bot name is configured (falls back to broad matching).
-/// Pattern: `^@\*\*BotName\*\*\s*`
+/// Returns `None` if no bot name is configured.
+/// Pattern: `@\*\*BotName\*\*\s*`
 pub fn build_bot_mention_pattern(bot_name: &str) -> Option<regex::Regex> {
     if bot_name.is_empty() {
         return None;
@@ -27,7 +27,7 @@ pub fn build_bot_mention_pattern(bot_name: &str) -> Option<regex::Regex> {
     // Escape special regex characters in the bot name (Zulip names shouldn't have them,
     // but be defensive)
     let escaped = regex::escape(bot_name);
-    let pattern = format!("^@\\*\\*{}\\*\\*\\s*", escaped);
+    let pattern = format!("@\\*\\*{}\\*\\*\\s*", escaped);
     regex::Regex::new(&pattern).ok()
 }
 

@@ -3,9 +3,6 @@
 //! Provides shared utilities for both ingress modes: address resolution,
 //! bot mention stripping, and attachment processing helpers.
 
-use std::sync::LazyLock;
-
-use regex::Regex;
 use tracing::{debug, instrument};
 
 use crate::channel::{ChannelInboundEvent, ConversationAddress, InboundMessage, SenderIdentity};
@@ -55,10 +52,6 @@ pub trait ZulipUpdate {
     /// Retrieve the next raw Zulip message, if one is currently available.
     async fn poll(&mut self) -> Result<Option<ZulipMessage>, AgentError>;
 }
-
-/// Pattern to strip ANY mention at the start of text (fallback when bot name is unknown).
-static BROAD_MENTION_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^@\*\*.*?\*\*\s*").unwrap());
 
 /// Resolve a Zulip message to a ConversationAddress.
 ///
@@ -137,16 +130,56 @@ pub fn resolve_zulip_private_recipient_ids_for_user(
     user_ids
 }
 
-/// Strip the bot's mention from the start of a Zulip message text.
+/// Strip the bot's mention from a Zulip message text.
 ///
-/// If a bot-specific mention pattern is available, it is used for precise matching.
-/// Otherwise, a broad pattern is used (which may incorrectly strip other mentions).
+/// If the bot name is unknown, the text is returned unchanged.
 pub fn strip_bot_mention(text: &str, bot_name: &str) -> String {
     if let Some(pattern) = crate::zulip::bot::build_bot_mention_pattern(bot_name) {
         pattern.replace(text, "").to_string()
     } else {
-        BROAD_MENTION_PATTERN.replace(text, "").to_string()
+        text.to_string()
     }
+}
+
+fn is_group_private_message(msg: &ZulipMessage, bot_email: &str, bot_user_id: Option<i64>) -> bool {
+    if msg.message_type != "private" {
+        return false;
+    }
+
+    let participant_count = match &msg.display_recipient {
+        ZulipDisplayRecipient::Private(recs) => recs
+            .iter()
+            .filter(|r| Some(r.id) != bot_user_id && r.email != bot_email)
+            .count(),
+        _ => 0,
+    };
+
+    participant_count > 1
+}
+
+/// Return cleaned content if this Zulip message is addressed to the bot.
+///
+/// One-on-one DMs are always addressed to the bot. Channel messages and group
+/// DMs require a direct bot mention anywhere in the message.
+pub fn addressed_zulip_content(msg: &ZulipMessage, bot: &ZulipBot) -> Option<String> {
+    if bot.is_own_message(msg) {
+        return None;
+    }
+
+    let bot_name = bot.bot_name();
+    let directly_mentioned = crate::zulip::bot::build_bot_mention_pattern(&bot_name)
+        .map(|pattern| pattern.is_match(&msg.content))
+        .unwrap_or(false);
+
+    let addressed = match msg.message_type.as_str() {
+        "stream" => directly_mentioned,
+        "private" => {
+            !is_group_private_message(msg, bot.bot_email(), bot.user_id()) || directly_mentioned
+        }
+        _ => false,
+    };
+
+    addressed.then(|| strip_bot_mention(&msg.content, &bot_name))
 }
 
 /// Process a Zulip message into a ChannelInboundEvent.
@@ -160,23 +193,19 @@ pub async fn process_zulip_message(
     max_bytes: usize,
     max_chars: usize,
 ) -> Result<Option<ChannelInboundEvent>, AgentError> {
-    // Skip messages sent by the bot itself
-    if bot.is_own_message(msg) {
+    let Some(content) = addressed_zulip_content(msg, bot) else {
         debug!(
             message_id = msg.id,
             sender = msg.sender_email,
-            "skipping Zulip message sent by bot"
+            message_type = msg.message_type,
+            "skipping Zulip message not addressed to bot"
         );
         return Ok(None);
-    }
+    };
 
     // Process attachments
     let (clean_text, attachment_parts, attachments) =
-        process_inbound_attachments(&msg.content, bot, max_bytes, max_chars).await?;
-
-    // Strip bot mentions
-    let bot_name = bot.bot_name();
-    let clean_text = strip_bot_mention(&clean_text, &bot_name);
+        process_inbound_attachments(&content, bot, max_bytes, max_chars).await?;
 
     let address = resolve_zulip_address_for_user(msg, bot.bot_email(), bot.user_id());
     if address.thread_id.is_none() {

@@ -152,8 +152,17 @@ impl ChannelMessageHandler {
         max_attachment_bytes: usize,
         max_text_document_chars: usize,
     ) -> Result<(), AgentError> {
+        let Some(content) = crate::zulip::update::addressed_zulip_content(msg, bot) else {
+            debug!(
+                message_id = msg.id,
+                message_type = msg.message_type,
+                "skipping Zulip message not addressed to bot"
+            );
+            return Ok(());
+        };
+
         // Phase 1: Resolve address and sender without downloading attachments
-        let (address, sender_email, sender_full_name, content) =
+        let (address, sender_email, sender_full_name, _) =
             crate::zulip::update::resolve_zulip_message_for_user(msg, bot_email, bot.user_id());
         if address.thread_id.is_none() {
             bot.cache_typing_recipient_ids(
@@ -164,12 +173,6 @@ impl ChannelMessageHandler {
                     bot.user_id(),
                 ),
             );
-        }
-
-        // Skip messages sent by the authenticated Zulip account itself.
-        if bot.is_own_message(msg) {
-            debug!(message_id = msg.id, "skipping Zulip message sent by bot");
-            return Ok(());
         }
 
         let sender = SenderIdentity::new(sender_email, Some(sender_full_name));
@@ -186,10 +189,6 @@ impl ChannelMessageHandler {
                 max_text_document_chars,
             )
             .await?;
-
-        // Strip bot mentions
-        let bot_name = bot.bot_name();
-        let clean_text = crate::zulip::update::strip_bot_mention(&clean_text, &bot_name);
 
         let inbound = InboundMessage {
             text: clean_text,
