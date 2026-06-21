@@ -1,6 +1,7 @@
 /target
 .antigravitycli/
 .vscode/
+.pi/
 
 # Environment files (may contain secrets)
 .env
