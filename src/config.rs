@@ -17,6 +17,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
+    pub maintenance: MaintenanceConfig,
+    #[serde(default)]
     pub channels: ChannelConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
@@ -434,6 +436,46 @@ pub struct ExaConfig {
     pub max_text_chars: usize,
 }
 
+/// Maintenance mode configuration.
+///
+/// When `enabled` is true, NerdBot short-circuits all interactive user
+/// messages and scheduled jobs with a maintenance response instead of
+/// executing the normal agent loop.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MaintenanceConfig {
+    /// Whether maintenance mode is active.
+    #[serde(default = "default_maintenance_enabled")]
+    pub enabled: bool,
+    /// Optional human-readable reason shown to users while maintenance is active.
+    /// When empty, only the default maintenance message is returned.
+    #[serde(default)]
+    pub reason: String,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_maintenance_enabled(),
+            reason: String::new(),
+        }
+    }
+}
+
+impl MaintenanceConfig {
+    /// Build the user-facing maintenance response.
+    ///
+    /// Always returns a fixed maintenance banner. Appends a "Reason:" line
+    /// only when the configured reason is non-empty and non-whitespace.
+    pub fn message(&self) -> String {
+        let mut msg = "⚙️ **NerdBot is currently in maintenance mode.**\n\nNormal operation is temporarily suspended. Please try again later.".to_string();
+        let trimmed = self.reason.trim();
+        if !trimmed.is_empty() {
+            msg.push_str(&format!("\n\nReason: {trimmed}"));
+        }
+        msg
+    }
+}
+
 impl Default for ExaConfig {
     fn default() -> Self {
         Self {
@@ -566,6 +608,9 @@ fn default_exa_num_results() -> usize {
 fn default_exa_max_text_chars() -> usize {
     8000
 }
+fn default_maintenance_enabled() -> bool {
+    false
+}
 fn default_max_attachment_bytes() -> usize {
     5_242_880 // 5 MB
 }
@@ -607,6 +652,12 @@ impl AppConfig {
 
     /// Validate cross-field configuration constraints after TOML defaults are applied.
     pub fn validate(&self) -> Result<(), AgentError> {
+        let reason_len = self.maintenance.reason.len();
+        if reason_len > 1000 {
+            return Err(AgentError::Config(format!(
+                "maintenance.reason must not exceed 1000 characters, got {reason_len}"
+            )));
+        }
         let telegram = &self.channels.telegram;
         let telegram_webhook_enabled =
             telegram.enabled && telegram.ingress == TelegramIngress::Webhook;

@@ -12,6 +12,8 @@ NerdBot communicates with users through pluggable **communication channels**. Bo
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
+- **Maintenance mode** — temporarily disable interactive messages and scheduled jobs with a configurable reason text; authorized users see only the maintenance response
+- **Config hot reload** — NerdBot watches `config.toml` and restarts the runtime when the file changes to a valid configuration; invalid reloads are logged and the current runtime remains active
 - **Single binary, Docker-friendly** — multi-stage build, non-root runtime user, no external services required
 - **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. Supported formats: JPEG, PNG, WebP, GIF, PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
 - **Zulip attachments** — user-uploaded files embedded as markdown links in Zulip messages are extracted, downloaded via authenticated API calls, and forwarded to the LLM as base64 (images) or extracted text (documents). Supported formats: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, rs, etc.).
@@ -181,6 +183,8 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `personality_file` | Path to the personality Markdown file (default: `/config/personality.md`) |
 | | `max_tool_iterations` | Maximum tool-call loop iterations per request (default: `10`) |
 | | `default_timezone` | Default IANA timezone for agent behavior |
+| `[maintenance]` | `enabled` | Enable maintenance mode — rejects all interactive messages and scheduled jobs with a maintenance response (default: `false`) |
+| | `reason` | Optional human-readable reason shown to users (max 1000 characters; empty = no reason line) |
 | `[webhook]` | `host` | Local plain-HTTP shared webhook bind host when any channel uses webhook ingress (default: `127.0.0.1`; use a reverse proxy or tunnel for public TLS) |
 | | `port` | Local plain-HTTP shared webhook bind port when any channel uses webhook ingress (default: `24682`) |
 | `[channels.telegram]` | `enabled` | Enable the Telegram channel adapter (default: `true`) |
@@ -233,6 +237,37 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |
+
+## Maintenance Mode
+
+Set `maintenance.enabled = true` in `config.toml` to temporarily suspend all interactive user messages and scheduled jobs. While maintenance mode is active:
+
+- Authorized user messages and slash commands receive only the maintenance response (default banner with optional reason)
+- No chat sessions are created or persisted for maintenance-mode interactions
+- No LLM calls are made
+- Telegram and Zulip attachments are not downloaded
+- The scheduler does not start new job executions
+
+The maintenance response includes an optional `reason` field from the config:
+
+```toml
+[maintenance]
+enabled = true
+reason = "Database migration in progress"
+```
+
+When `reason` is empty or whitespace-only, only the default maintenance banner is returned.
+
+### Config Hot Reload
+
+NerdBot watches `config.toml` and restarts the runtime when the file changes to a valid configuration:
+
+- Editing `config.toml` with `maintenance.enabled = true` while the bot is running triggers a graceful restart; the new runtime starts in maintenance mode
+- Setting `maintenance.enabled = false` and saving the file causes a restart that restores normal behavior
+- If the new config is invalid (bad TOML, failed validation), the error is logged and the current runtime remains active — no restart occurs
+- Invalid recovery (new config fails and old config also fails to restart) causes the process to exit
+
+This means you can toggle maintenance mode on-the-fly without stopping the process.
 
 ## Channel Commands
 

@@ -171,6 +171,42 @@ fn test_default_config_scheduler_overdue_false() {
     assert!(!config.scheduler.run_overdue_one_shots_on_startup);
 }
 
+#[test]
+fn test_default_config_maintenance_disabled() {
+    let config = AppConfig::default();
+    assert!(!config.maintenance.enabled);
+    assert_eq!(config.maintenance.reason, "");
+}
+
+#[test]
+fn test_maintenance_message_without_reason() {
+    let config = AppConfig::default();
+    let msg = config.maintenance.message();
+    assert!(msg.contains("maintenance mode"));
+    assert!(!msg.contains("Reason:"));
+}
+
+#[test]
+fn test_maintenance_message_with_reason() {
+    let mut config = AppConfig::default();
+    config.maintenance.enabled = true;
+    config.maintenance.reason = "Database migration in progress".to_string();
+    let msg = config.maintenance.message();
+    assert!(msg.contains("maintenance mode"));
+    assert!(msg.contains("Database migration in progress"));
+    assert!(msg.contains("Reason:"));
+}
+
+#[test]
+fn test_maintenance_message_with_whitespace_only_reason() {
+    let mut config = AppConfig::default();
+    config.maintenance.enabled = true;
+    config.maintenance.reason = "   ".to_string();
+    let msg = config.maintenance.message();
+    assert!(msg.contains("maintenance mode"));
+    assert!(!msg.contains("Reason:"));
+}
+
 // ── TOML parsing ─────────────────────────────────────────────────────────
 
 const SAMPLE_CONFIG: &str = r#"
@@ -675,4 +711,69 @@ model = "gpt-4o"
     let config = AppConfig::from_file(&path).unwrap();
     assert!(!config.channels.zulip.presence_enabled);
     assert_eq!(config.channels.zulip.presence_ping_interval_secs, 0);
+}
+
+#[test]
+fn test_parse_maintenance_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[maintenance]
+enabled = true
+reason = "Database migration in progress"
+
+[llm]
+model = "gpt-4o"
+"#,
+    )
+    .unwrap();
+
+    let config = AppConfig::from_file(&path).unwrap();
+    assert!(config.maintenance.enabled);
+    assert_eq!(config.maintenance.reason, "Database migration in progress");
+    assert!(config.maintenance.message().contains("Database migration"));
+}
+
+#[test]
+fn test_parse_maintenance_config_default_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[llm]
+model = "gpt-4o"
+"#,
+    )
+    .unwrap();
+
+    let config = AppConfig::from_file(&path).unwrap();
+    assert!(!config.maintenance.enabled);
+    assert_eq!(config.maintenance.reason, "");
+}
+
+#[test]
+fn test_maintenance_reason_too_long_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[maintenance]
+enabled = true
+reason = "A"
+
+[llm]
+model = "gpt-4o"
+"#,
+    )
+    .unwrap();
+
+    let mut config = AppConfig::from_file(&path).unwrap();
+    // Set reason to > 1000 chars
+    config.maintenance.reason = "x".repeat(1001);
+    let err = config.validate().unwrap_err().to_string();
+    assert!(err.contains("maintenance.reason must not exceed 1000 characters"));
 }

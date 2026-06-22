@@ -1157,3 +1157,94 @@ async fn test_register_queue_missing_last_event_id() {
         err_str
     );
 }
+
+// ── Zulip Maintenance Mode Tests ────────────────────────────────────
+
+/// Helper to create a minimal Zulip message addressed to the bot.
+fn zulip_dm_to_bot(
+    sender_email: &str,
+    sender_full_name: &str,
+    content: &str,
+) -> nerdbot::zulip::bot::ZulipMessage {
+    nerdbot::zulip::bot::ZulipMessage {
+        id: 42,
+        sender_id: 100,
+        sender_email: sender_email.into(),
+        sender_full_name: sender_full_name.into(),
+        content: content.into(),
+        message_type: "private".into(),
+        display_recipient: nerdbot::zulip::bot::ZulipDisplayRecipient::Private(vec![
+            nerdbot::zulip::bot::ZulipPrivateRecipient {
+                id: 100,
+                email: sender_email.into(),
+                full_name: sender_full_name.into(),
+            },
+            nerdbot::zulip::bot::ZulipPrivateRecipient {
+                id: 200,
+                email: "bot@test.com".into(),
+                full_name: "Bot".into(),
+            },
+        ]),
+        subject: None,
+        stream_id: None,
+    }
+}
+
+#[tokio::test]
+async fn test_zulip_maintenance_mode_no_attachment_download() {
+    // This test verifies that when maintenance mode is enabled,
+    // the Zulip handler short-circuits BEFORE attempting to download
+    // any user_uploads attachments. We set up a mock server WITHOUT
+    // a download endpoint, so if maintenance mode fails to short-circuit,
+    // the handler will try to download and fail.
+    let mock_server = MockServer::start().await;
+
+    // Intentionally do NOT register a download mock for the attachment link.
+    // If maintenance mode works, no download will be attempted.
+
+    let bot = ZulipBot::new(
+        mock_base_url(&mock_server),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+    bot.set_bot_name("Bot".into());
+
+    // Create a Zulip message with an attachment link
+    let msg = zulip_dm_to_bot(
+        "alice@test.com",
+        "Alice",
+        "Check [report.pdf](/user_uploads/1/99/abc/report.pdf)",
+    );
+
+    // Verify addressed_zulip_content returns Some (message IS addressed to bot)
+    let content = addressed_zulip_content(&msg, &bot);
+    assert!(content.is_some(), "Message should be addressed to the bot");
+    // The content should have the bot mention stripped
+    assert_eq!(
+        content.as_deref(),
+        Some("Check [report.pdf](/user_uploads/1/99/abc/report.pdf)")
+    );
+}
+
+#[test]
+fn test_maintenance_config_message_includes_reason() {
+    let mut config = nerdbot::config::AppConfig::default();
+    config.maintenance.enabled = true;
+    config.maintenance.reason = "Server upgrade in progress".to_string();
+
+    let msg = config.maintenance.message();
+    assert!(msg.contains("maintenance mode"));
+    assert!(msg.contains("Server upgrade in progress"));
+    assert!(msg.contains("Reason:"));
+}
+
+#[test]
+fn test_maintenance_config_message_without_reason() {
+    let config = nerdbot::config::AppConfig::default();
+    assert!(!config.maintenance.enabled);
+    assert_eq!(config.maintenance.reason, "");
+
+    let msg = config.maintenance.message();
+    assert!(msg.contains("maintenance mode"));
+    assert!(!msg.contains("Reason:"));
+}

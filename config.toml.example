@@ -11,6 +11,16 @@ personality_file = "/config/personality.md"
 max_tool_iterations = 10
 default_timezone = "UTC"
 
+# ── Maintenance ───────────────────────────────────────────────────
+# When enabled, NerdBot rejects all interactive user messages and
+# scheduled jobs with a maintenance response instead of executing
+# the normal agent loop. Changing this file triggers a runtime
+# restart when the new config is valid.
+[maintenance]
+enabled = false
+# reason = "Database migration in progress"
+# NerdBot watches config.toml and restarts automatically on valid changes.
+
 # ── Webhook Server ─────────────────────────────────────────────────
 # Shared local plain-HTTP listener used when any channel uses webhook ingress.
 # TLS, DNS, and reverse proxy/tunnel termination are expected outside NerdBot.

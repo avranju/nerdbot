@@ -138,6 +138,21 @@ README.md          — Project documentation
 
 ### Runtime Flows
 
+**Config hot reload:**
+1. `run_supervisor` starts a `ConfigWatcher` on the config file's parent directory
+2. On a valid config change, the supervisor debounces for 250ms, drains queued events, reloads and validates the config
+3. If validation passes, the current runtime is gracefully stopped, a new runtime is started with the new config, and the old runtime's task is replaced
+4. If validation fails, the error is logged and the current runtime remains active
+5. If starting the new runtime fails after stopping the old one, the supervisor attempts recovery with the previous config; only if recovery also fails does the process exit
+6. Ctrl-C is handled centrally by the supervisor, which sends shutdown to the active runtime
+
+**Maintenance mode:**
+- When `[maintenance].enabled` is true, `build_llm` returns a `DisabledLlm` instead of requiring a configured LLM
+- `run_runtime` skips `scheduler.start()` when maintenance is enabled and logs that the scheduler is paused
+- `ChannelMessageHandler::handle_rich_message` checks `maintenance.enabled` after the allowlist check and returns the maintenance message immediately, without creating sessions, persisting messages, or calling the LLM
+- `ChannelMessageHandler::handle_zulip_message` similarly short-circuits after the allowlist check
+- Telegram dispatch (`dispatch_telegram_update`) builds a minimal `InboundMessage` from text/caption only (no attachment downloads) when maintenance mode is active
+
 **Telegram message with attachments (rich ingress):**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, configures the Telegram slash-command menu via `setMyCommands`, and registers TelegramService in ChannelRegistry under channel_id `telegram`. `[channels.telegram].ingress = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[channels.telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[channels.telegram].ingress = "webhook"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and uses the shared plain HTTP webhook server on `[webhook].host`/`port` (default `127.0.0.1:24682`) to validate `X-Telegram-Bot-Api-Secret-Token` and enqueue updates. The same server exposes `/health` and can also host Zulip webhook routes.
 1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
@@ -239,6 +254,7 @@ README.md          — Project documentation
 
 ### Key Config Sections (TOML)
 - `[agent]` — name, personality_file, max_tool_iterations, default_timezone
+- `[maintenance]` — enabled (bool, default false), reason (string, max 1000 chars)
 - `[webhook]` — host/port for the shared local webhook server used by Telegram and/or Zulip webhook ingress (default `127.0.0.1:24682`)
 - `[channels.telegram]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_token_env, poll_interval_secs (default 5; sleep after empty `getUpdates` in poll mode), HTTPS web_hook_url (required for webhook), allowed_conversations, allowed_senders, max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)
 - `[channels.zulip]` — enabled, ingress (`"poll"` default or `"webhook"`), bot_email_env (default `ZULIP_BOT_EMAIL`), api_key_env (default `ZULIP_BOT_API_KEY`), site_url (required), web_hook_token_env (default `ZULIP_WEBHOOK_TOKEN`), web_hook_url (required for webhook; public HTTPS Zulip webhook URL), poll_interval_secs (default 2), presence_enabled (default false because Zulip rejects bot-account presence requests), presence_ping_interval_secs (default 60; must be >0 when presence is enabled), allowed_conversations (ConversationAddressPattern with stream names and optional topics), allowed_senders (email addresses), max_attachment_bytes (default 5 MB), max_text_document_chars (default 32 KB)

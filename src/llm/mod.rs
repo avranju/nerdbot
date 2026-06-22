@@ -18,6 +18,7 @@ use tracing::warn;
 use crate::config::AppConfig;
 use crate::error::AgentError;
 
+pub mod disabled;
 pub mod fake;
 
 /// Trait abstracting LLM chat completion.

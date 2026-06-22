@@ -446,6 +446,15 @@ fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn 
         Value::String(answers.exa_api_key_env.clone()),
     );
 
+    // Maintenance mode — disabled by default, not prompted during onboarding.
+    let maintenance = table_mut(root, "maintenance")?;
+    maintenance
+        .entry("enabled")
+        .or_insert_with(|| Value::Boolean(false));
+    maintenance
+        .entry("reason")
+        .or_insert_with(|| Value::String(String::new()));
+
     let toml = toml::to_string_pretty(&config)?;
     fs::write(path, toml)?;
     Ok(())

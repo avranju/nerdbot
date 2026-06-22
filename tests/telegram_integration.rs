@@ -1283,3 +1283,124 @@ async fn test_send_message_long_markdown_raw_falls_back_to_plain_text() {
         assert!(body.get("parse_mode").is_none());
     }
 }
+
+// ── Maintenance Mode Tests ─────────────────────────────────────────
+
+fn make_maintenance_handler(pool: sqlx::SqlitePool, reason: &str) -> MessageHandler {
+    let mut config = make_test_config();
+    config.maintenance.enabled = true;
+    config.maintenance.reason = reason.to_string();
+
+    let mut registry = ToolRegistry::new();
+    registry.register(EchoTool);
+
+    let provider: Arc<dyn LlmExecutor> =
+        Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
+            "should not be reached",
+        )]));
+    let compaction_service = make_compaction_service(pool.clone());
+
+    MessageHandler::new(MessageHandlerInput {
+        pool,
+        llm: provider,
+        registry: Arc::new(registry),
+        config,
+        personality: Personality::from_config(&make_test_config()),
+        scheduler_notifier: None,
+        telegram_service: None,
+        compaction_service,
+    })
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_returns_maintenance_text_for_normal_message() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool, "Database migration in progress");
+
+    let response = handler
+        .handle_message(1, 1, "Hello, how are you?")
+        .await
+        .unwrap();
+
+    assert!(response.is_some());
+    let text = response.unwrap();
+    assert!(text.contains("maintenance mode"));
+    assert!(text.contains("Database migration in progress"));
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_short_circuits_commands() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool, "Scheduled maintenance");
+
+    let response = handler.handle_message(1, 1, "/help").await.unwrap();
+
+    assert!(response.is_some());
+    let text = response.unwrap();
+    assert!(text.contains("maintenance mode"));
+    assert!(!text.contains("/start"));
+    assert!(!text.contains("/help"));
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_no_session_created() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool.clone(), "Reason");
+
+    let _ = handler
+        .handle_message(999, 888, "maintenance message")
+        .await
+        .unwrap();
+
+    // Verify no session was created
+    let session = storage::sessions::get_session_for_chat(&pool, 999)
+        .await
+        .unwrap();
+    assert!(
+        session.is_none(),
+        "Expected no session to be created during maintenance mode"
+    );
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_no_message_persistence() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool.clone(), "Reason");
+
+    let _ = handler
+        .handle_message(777, 666, "persistent message")
+        .await
+        .unwrap();
+
+    // Verify no session was created, therefore no messages persisted
+    let session = storage::sessions::get_session_for_chat(&pool, 777)
+        .await
+        .unwrap();
+    assert!(session.is_none(), "No session should exist");
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_without_reason() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool, "");
+
+    let response = handler.handle_message(1, 1, "test").await.unwrap();
+
+    assert!(response.is_some());
+    let text = response.unwrap();
+    assert!(text.contains("maintenance mode"));
+    assert!(!text.contains("Reason:"));
+}
+
+#[tokio::test]
+async fn test_maintenance_mode_reason_trims_whitespace() {
+    let pool = setup_test_db().await;
+    let handler = make_maintenance_handler(pool, "   ");
+
+    let response = handler.handle_message(1, 1, "test").await.unwrap();
+
+    assert!(response.is_some());
+    let text = response.unwrap();
+    assert!(text.contains("maintenance mode"));
+    assert!(!text.contains("Reason:"));
+}

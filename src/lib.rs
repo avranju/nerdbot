@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod channel;
 pub mod config;
+pub mod config_watcher;
 pub mod context;
 pub mod diagnostics;
 pub mod error;

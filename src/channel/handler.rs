@@ -73,6 +73,15 @@ impl ChannelMessageHandler {
         }
     }
 
+    /// Return the maintenance response text when maintenance mode is active.
+    pub fn maintenance_response_text(&self) -> Option<String> {
+        if self.config.maintenance.enabled {
+            Some(self.config.maintenance.message())
+        } else {
+            None
+        }
+    }
+
     #[instrument(
         skip(self, inbound),
         fields(
@@ -92,6 +101,17 @@ impl ChannelMessageHandler {
         inbound: &InboundMessage,
     ) -> Result<Option<String>, AgentError> {
         self.check_allowlist(address, sender)?;
+
+        // Short-circuit with maintenance message when maintenance mode is active.
+        if self.config.maintenance.enabled {
+            let maintenance_text = self.config.maintenance.message();
+            debug!(
+                ?address,
+                ?sender,
+                "maintenance mode active — returning maintenance response"
+            );
+            return Ok(Some(maintenance_text));
+        }
 
         let session = self.ensure_session(address).await?;
         storage::sessions::update_session(&self.pool, &session.id).await?;
@@ -179,6 +199,19 @@ impl ChannelMessageHandler {
 
         // Phase 2: Check access policy BEFORE downloading attachments
         self.check_allowlist(&address, &sender)?;
+
+        // Short-circuit with maintenance message when maintenance mode is active.
+        if self.config.maintenance.enabled {
+            let maintenance_text = self.config.maintenance.message();
+            debug!(
+                message_id = msg.id,
+                "maintenance mode active — returning maintenance response"
+            );
+            self.channel_registry
+                .send_message(&address, OutboundMessage::markdown(maintenance_text))
+                .await?;
+            return Ok(());
+        }
 
         // Phase 3: Download and process attachments (only if access is allowed)
         let (clean_text, attachment_parts, attachments) =

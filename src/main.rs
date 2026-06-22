@@ -16,12 +16,13 @@ use nerdbot::channel::{
 use nerdbot::config::{
     AppConfig, TelegramChannelConfig, TelegramIngress, ZulipChannelConfig, ZulipIngress,
 };
+use nerdbot::config_watcher::ConfigWatcher;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
 use nerdbot::context::compaction_worker::CompactionWorker;
 use nerdbot::diagnostics::server::DiagnosticsServer;
 use nerdbot::error::AgentError;
-use nerdbot::llm::{LlmClient, LlmExecutor};
+use nerdbot::llm::{LlmClient, LlmExecutor, disabled::DisabledLlm};
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
 use nerdbot::telegram::attachment::{self, AttachmentKind};
@@ -44,7 +45,7 @@ use nerdbot::webhook::{
 use nerdbot::zulip::update::ZulipUpdate;
 use nerdbot::zulip::update::hook::ZulipWebhookPayload;
 use nerdbot::zulip::{ZulipBot, ZulipHook, ZulipPoll, ZulipService};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -116,7 +117,42 @@ async fn main() {
         return;
     }
 
-    let config = match load_config(&cli.config) {
+    run_supervisor(cli.config, cli.diagnostics_socket).await;
+}
+
+/// Helper state tracking the active runtime task and its shutdown signal.
+struct RunningRuntime {
+    shutdown_tx: watch::Sender<bool>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+/// Build and spawn one runtime instance with a shutdown channel.
+async fn start_running_runtime(
+    config: AppConfig,
+    diagnostics_socket: Option<PathBuf>,
+) -> Result<RunningRuntime, AgentError> {
+    let runtime = build_runtime(config, diagnostics_socket).await?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let handle = tokio::spawn(run_runtime_with_shutdown(runtime, shutdown_rx));
+
+    Ok(RunningRuntime {
+        shutdown_tx,
+        handle,
+    })
+}
+
+/// Gracefully stop and await one active runtime.
+async fn stop_running_runtime(running: RunningRuntime) {
+    let _ = running.shutdown_tx.send(true);
+    let _ = running.handle.await;
+}
+
+/// Supervisor loop: manages the config watcher and active runtime,
+/// handling config reloads and Ctrl-C.
+async fn run_supervisor(config_path: PathBuf, diagnostics_socket: Option<PathBuf>) {
+    // Load initial config
+    let mut config = match load_config(&config_path) {
         Ok(config) => config,
         Err(e) => {
             error!(error = %e, "invalid configuration");
@@ -124,15 +160,144 @@ async fn main() {
         }
     };
 
-    let runtime = match build_runtime(config, cli.diagnostics_socket).await {
-        Ok(runtime) => runtime,
+    // Start config watcher
+    let (_config_watcher, mut config_rx) = match ConfigWatcher::watch(config_path.clone()) {
+        Ok((w, rx)) => (w, rx),
         Err(e) => {
-            error!(error = %e, "failed to initialize runtime");
+            error!(error = %e, "failed to start config watcher");
             return;
         }
     };
 
-    run_runtime(runtime).await;
+    // Start initial runtime
+    let mut current = match start_running_runtime(config.clone(), diagnostics_socket.clone()).await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "failed to start initial runtime");
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("received Ctrl-C, shutting down...");
+                stop_running_runtime(current).await;
+                return;
+            }
+
+            _change = config_rx.recv() => {
+                // Channel closed — nothing more to reload
+                if _change.is_none() {
+                    info!("config watcher channel closed");
+                    return;
+                }
+                // Debounce: wait up to 250ms for additional events, then drain.
+                let deadline = tokio::time::Instant::now()
+                    .checked_add(tokio::time::Duration::from_millis(250))
+                    .unwrap_or_else(|| tokio::time::Instant::now() + tokio::time::Duration::from_secs(1));
+                while tokio::time::Instant::now() < deadline {
+                    if config_rx.try_recv().is_ok() {
+                        continue;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                }
+                // Drain any remaining events
+                while config_rx.try_recv().is_ok() {}
+
+                // Reload config
+                let new_config = match load_config(&config_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(error = %e, "config reload failed — keeping current runtime");
+                        continue;
+                    }
+                };
+
+                info!("reloading configuration");
+
+                // Stop current runtime
+                stop_running_runtime(current).await;
+
+                // Start new runtime
+                match start_running_runtime(new_config.clone(), diagnostics_socket.clone()).await {
+                    Ok(new_runtime) => {
+                        config = new_config;
+                        current = new_runtime;
+                        info!("configuration reloaded successfully");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "failed to start new runtime after config reload — attempting recovery");
+                        // Attempt recovery with previous config
+                        match start_running_runtime(config.clone(), diagnostics_socket.clone()).await {
+                            Ok(recovered) => {
+                                current = recovered;
+                                info!("recovered with previous configuration");
+                            }
+                            Err(re) => {
+                                error!(error = %re, "recovery also failed — exiting");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            result = &mut current.handle => {
+                // Runtime task completed unexpectedly
+                if let Err(e) = result {
+                    error!(error = %e, "runtime task panicked or failed");
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Run the runtime with a shutdown watch receiver.
+async fn run_runtime_with_shutdown(mut runtime: AppRuntime, shutdown_rx: watch::Receiver<bool>) {
+    let scheduler = runtime.scheduler.clone();
+    let _scheduler_guard = SchedulerGuard {
+        scheduler: scheduler.clone(),
+    };
+
+    if runtime.maintenance_enabled {
+        info!("Maintenance mode is active — scheduler is paused");
+    } else if let Err(e) = scheduler.start().await {
+        error!(error = %e, "Failed to start scheduler");
+        return;
+    }
+
+    // Run ingress loops; child loops observe shutdown_rx and exit cleanly.
+    // We always await the returned handles so tasks are not detached.
+    let (telegram_handle, zulip_handle) = run_channel_ingress_loops(
+        runtime.telegram,
+        runtime.zulip,
+        runtime.handler.clone(),
+        shutdown_rx.clone(),
+    )
+    .await;
+
+    // Await both handles (aborted if the loop already returned).
+    if let Some(handle) = telegram_handle {
+        let _ = handle.await;
+    }
+    if let Some(handle) = zulip_handle {
+        let _ = handle.await;
+    }
+
+    info!("Gracefully shutting down services...");
+    if let Err(e) = scheduler.stop().await {
+        error!(error = %e, "Failed to stop scheduler gracefully");
+    }
+    if let Some(server) = runtime.diagnostics_server.as_mut() {
+        server.stop().await;
+    }
+    if let Some(server) = runtime.webhook_server.as_mut() {
+        server.stop().await;
+    }
+    info!("Shutdown complete.");
 }
 
 fn init_tracing() {
@@ -194,6 +359,7 @@ struct AppRuntime {
     handler: Arc<ChannelMessageHandler>,
     telegram: Option<TelegramRuntime>,
     zulip: Option<ZulipRuntime>,
+    maintenance_enabled: bool,
 }
 
 struct TelegramRuntime {
@@ -243,6 +409,10 @@ async fn build_runtime(
     let mut zulip = zulip;
     let webhook_server = start_webhook_server(&config, telegram.as_mut(), zulip.as_mut()).await?;
     let channel_registry = build_channel_registry(&telegram, &zulip);
+
+    // Extract maintenance flag before config is moved into build_scheduler.
+    let maintenance_enabled = config.maintenance.enabled;
+
     let scheduler = build_scheduler(
         db.clone(),
         llm.clone(),
@@ -269,6 +439,7 @@ async fn build_runtime(
         handler,
         telegram,
         zulip,
+        maintenance_enabled,
     })
 }
 
@@ -361,6 +532,11 @@ fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
 }
 
 fn build_llm(config: &AppConfig) -> Result<Arc<dyn LlmExecutor>, AgentError> {
+    if config.maintenance.enabled {
+        info!("LLM client disabled (maintenance mode active)");
+        return Ok(Arc::new(DisabledLlm));
+    }
+
     if config.llm.model.is_empty() {
         return Err(AgentError::Config(
             "LLM model not configured. Set llm.model in config.toml (e.g. gpt-4o, claude-sonnet-4-5).".to_string(),
@@ -602,72 +778,55 @@ fn build_message_handler(deps: MessageHandlerDeps) -> Arc<ChannelMessageHandler>
     }))
 }
 
-async fn run_runtime(mut runtime: AppRuntime) {
-    let scheduler = runtime.scheduler.clone();
-    let _scheduler_guard = SchedulerGuard {
-        scheduler: scheduler.clone(),
-    };
-
-    if let Err(e) = scheduler.start().await {
-        error!(error = %e, "Failed to start scheduler");
-        return;
-    }
-
-    run_channel_ingress_loops(runtime.telegram, runtime.zulip, runtime.handler.clone()).await;
-
-    info!("Gracefully shutting down services...");
-    if let Err(e) = scheduler.stop().await {
-        error!(error = %e, "Failed to stop scheduler gracefully");
-    }
-    if let Some(server) = runtime.diagnostics_server.as_mut() {
-        server.stop().await;
-    }
-    if let Some(server) = runtime.webhook_server.as_mut() {
-        server.stop().await;
-    }
-    info!("Shutdown complete.");
-}
-
+/// Run channel ingress loops and return the spawned task handles.
+///
+/// Child loops observe the shutdown receiver and exit cleanly. Callers must
+/// await the returned handles so tasks are not detached.
 async fn run_channel_ingress_loops(
     telegram: Option<TelegramRuntime>,
     zulip: Option<ZulipRuntime>,
     handler: Arc<ChannelMessageHandler>,
+    shutdown_rx: watch::Receiver<bool>,
+) -> (
+    Option<tokio::task::JoinHandle<()>>,
+    Option<tokio::task::JoinHandle<()>>,
 ) {
     let telegram_handle = telegram.map(|telegram| {
         let handler = handler.clone();
+        let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            run_telegram_ingress_loop(telegram, handler).await;
+            run_telegram_ingress_loop(telegram, handler, shutdown_rx).await;
         })
     });
 
     let zulip_handle = zulip.map(|zulip| {
         let handler = handler.clone();
+        let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            run_zulip_ingress_loop(zulip, handler).await;
+            run_zulip_ingress_loop(zulip, handler, shutdown_rx).await;
         })
     });
 
-    if let Some(handle) = telegram_handle {
-        if let Some(zulip_handle) = zulip_handle {
-            tokio::select! {
-                _ = handle => {}
-                _ = zulip_handle => {}
-            }
-        } else {
-            let _ = handle.await;
-        }
-    } else if let Some(handle) = zulip_handle {
-        let _ = handle.await;
-    }
+    (telegram_handle, zulip_handle)
 }
 
-async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<ChannelMessageHandler>) {
+async fn run_telegram_ingress_loop(
+    telegram: TelegramRuntime,
+    handler: Arc<ChannelMessageHandler>,
+    shutdown_rx: watch::Receiver<bool>,
+) {
     match telegram.config.ingress {
         TelegramIngress::Poll => {
             let updates =
                 TelegramPoll::new(telegram.bot.clone(), telegram.config.poll_interval_secs);
-            if let Err(e) =
-                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
+            if let Err(e) = run_telegram_update_loop(
+                updates,
+                telegram.bot,
+                handler,
+                telegram.config,
+                shutdown_rx,
+            )
+            .await
             {
                 error!(error = %e, "Telegram polling ingress failed");
             }
@@ -685,8 +844,14 @@ async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<Chann
                 webhook.secret_token,
                 webhook.receiver,
             );
-            if let Err(e) =
-                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
+            if let Err(e) = run_telegram_update_loop(
+                updates,
+                telegram.bot,
+                handler,
+                telegram.config,
+                shutdown_rx,
+            )
+            .await
             {
                 error!(error = %e, "Telegram webhook ingress failed");
             }
@@ -694,11 +859,16 @@ async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<Chann
     }
 }
 
-async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHandler>) {
+async fn run_zulip_ingress_loop(
+    zulip: ZulipRuntime,
+    handler: Arc<ChannelMessageHandler>,
+    shutdown_rx: watch::Receiver<bool>,
+) {
     let presence_heartbeat = start_zulip_presence_heartbeat(
         zulip.bot.clone(),
         zulip.config.presence_enabled,
         zulip.config.presence_ping_interval_secs,
+        shutdown_rx.clone(),
     );
 
     match zulip.config.ingress {
@@ -708,7 +878,9 @@ async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessage
                     zulip.config.max_attachment_bytes,
                     zulip.config.max_text_document_chars,
                 );
-            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
+            if let Err(e) =
+                run_zulip_update_loop(updates, zulip.bot, handler, zulip.config, shutdown_rx).await
+            {
                 error!(error = %e, "Zulip polling ingress failed");
             }
         }
@@ -718,7 +890,9 @@ async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessage
                 return;
             };
             let updates = ZulipHook::new(webhook.receiver);
-            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
+            if let Err(e) =
+                run_zulip_update_loop(updates, zulip.bot, handler, zulip.config, shutdown_rx).await
+            {
                 error!(error = %e, "Zulip webhook ingress failed");
             }
         }
@@ -733,6 +907,7 @@ fn start_zulip_presence_heartbeat(
     bot: Arc<ZulipBot>,
     enabled: bool,
     interval_secs: u64,
+    shutdown_rx: watch::Receiver<bool>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if !enabled {
         info!("Zulip presence heartbeat disabled");
@@ -740,10 +915,12 @@ fn start_zulip_presence_heartbeat(
     }
 
     Some(tokio::spawn(async move {
+        let mut shutdown_rx = shutdown_rx;
         let interval = std::time::Duration::from_secs(interval_secs);
         info!(interval_secs, "starting Zulip active presence heartbeat");
 
         loop {
+            // Perform one presence update first.
             if let Err(e) = bot.update_presence("active", true).await {
                 if zulip_presence_rejected_for_bot(&e) {
                     warn!(
@@ -754,7 +931,15 @@ fn start_zulip_presence_heartbeat(
                 }
                 warn!(error = %e, "failed to update Zulip presence");
             }
-            tokio::time::sleep(interval).await;
+
+            // Wait for the next interval tick or shutdown signal.
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    info!("Zulip presence heartbeat stopped by shutdown");
+                    return;
+                }
+                _ = tokio::time::sleep(interval) => {}
+            }
         }
     }))
 }
@@ -770,6 +955,7 @@ async fn run_zulip_update_loop<T>(
     bot: Arc<ZulipBot>,
     handler: Arc<ChannelMessageHandler>,
     config: ZulipChannelConfig,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), AgentError>
 where
     T: ZulipUpdate,
@@ -799,16 +985,16 @@ where
                         error!(error = %e, "Zulip polling failed, retrying in 5s");
                         tokio::select! {
                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("received Ctrl-C during Zulip retry sleep, shutting down...");
+                            _ = shutdown_rx.changed() => {
+                                info!("Zulip update loop stopped by shutdown");
                                 return Ok(());
                             }
                         }
                     }
                 }
             }
-            _ = tokio::signal::ctrl_c() => {
-                info!("received Ctrl-C, shutting down Zulip...");
+            _ = shutdown_rx.changed() => {
+                info!("Zulip update loop stopped by shutdown");
                 return Ok(());
             }
         }
@@ -824,21 +1010,6 @@ fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> 
         Err(_) => Err(AgentError::Config(format!(
             "{description} environment variable {env_var} is not set"
         ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_zulip_bot_presence_rejection() {
-        let error = AgentError::Zulip(
-            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
-                .to_string(),
-        );
-
-        assert!(zulip_presence_rejected_for_bot(&error));
     }
 }
 
@@ -881,6 +1052,7 @@ async fn run_telegram_update_loop<T>(
     bot: Arc<TelegramBot>,
     handler: Arc<ChannelMessageHandler>,
     telegram_config: TelegramChannelConfig,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), AgentError>
 where
     T: TelegramUpdate,
@@ -912,22 +1084,20 @@ where
                         error!(error = %e, "Telegram update polling failed, retrying in 5s");
                         tokio::select! {
                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("received Ctrl-C during retry sleep, shutting down...");
-                                break;
+                            _ = shutdown_rx.changed() => {
+                                info!("Telegram update loop stopped by shutdown");
+                                return Ok(());
                             }
                         }
                     }
                 }
             }
-            _ = tokio::signal::ctrl_c() => {
-                info!("received Ctrl-C, shutting down...");
-                break;
+            _ = shutdown_rx.changed() => {
+                info!("Telegram update loop stopped by shutdown");
+                return Ok(());
             }
         }
     }
-
-    Ok(())
 }
 
 async fn dispatch_telegram_update(
@@ -961,6 +1131,37 @@ async fn dispatch_telegram_update(
             || telegram_config.allowed_senders.contains(&sender.sender_id));
     if !allowed {
         warn!(?address, ?sender, "skipping message: not in allowlist");
+        return;
+    }
+
+    // When maintenance mode is active, build a minimal InboundMessage from
+    // text/caption only — no attachment downloads.
+    if handler.maintenance_response_text().is_some() {
+        let text = msg
+            .caption
+            .as_deref()
+            .or(msg.text.as_deref())
+            .unwrap_or("")
+            .to_string();
+        let inbound = InboundMessage {
+            text,
+            attachment_parts: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let event = ChannelInboundEvent {
+            address,
+            sender,
+            message: inbound,
+        };
+        match handler.handle_event(event).await {
+            Ok(()) => {}
+            Err(AgentError::PermissionDenied) => {
+                error!(chat_id, user_id, "permission denied");
+            }
+            Err(e) => {
+                error!(chat_id, error = %e, "message handler error");
+            }
+        }
         return;
     }
 
@@ -1192,5 +1393,20 @@ impl Drop for SchedulerGuard {
                 info!("SchedulerGuard: scheduler background loop stopped successfully");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_zulip_bot_presence_rejection() {
+        let error = AgentError::Zulip(
+            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
+                .to_string(),
+        );
+
+        assert!(zulip_presence_rejected_for_bot(&error));
     }
 }
