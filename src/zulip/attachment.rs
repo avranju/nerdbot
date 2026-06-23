@@ -12,6 +12,7 @@ use regex::Regex;
 use tracing::warn;
 
 use super::bot::ZulipBot;
+use crate::attachments;
 use crate::channel::AttachmentInfo;
 use crate::error::AgentError;
 
@@ -122,10 +123,13 @@ pub async fn process_inbound_attachments(
             || sanitized_filename.ends_with(".rs")
             || sanitized_filename.ends_with(".sh");
 
+        // Check if this is a HEIC/HEIF image that needs conversion
+        let is_heic = mime_type == "image/heic"
+            || attachments::is_heic_filename(&sanitized_filename)
+            || attachments::inspect_heic_signature(&bytes).is_some();
+
         let is_image = mime_type.starts_with("image/");
         let is_pdf = mime_type == "application/pdf";
-
-        let mut extracted_text = None;
 
         if is_text {
             let text_val = String::from_utf8_lossy(&bytes).into_owned();
@@ -144,7 +148,81 @@ pub async fn process_inbound_attachments(
                 "--- Attachment: {sanitized_filename} ---\n{}\n--- End Attachment ---\n",
                 truncated_text
             )));
-            extracted_text = Some(truncated_text);
+
+            attachment_infos.push(AttachmentInfo {
+                display_name: sanitized_filename.clone(),
+                mime_type,
+                size_bytes,
+                downloaded: true,
+                persistence_marker: path.clone(),
+                extracted_text: Some(truncated_text),
+            });
+        } else if is_heic {
+            // Convert HEIC/HEIF to JPEG in memory
+            match attachments::convert_heic_to_jpeg(&bytes, Some(&sanitized_filename)) {
+                Ok(converted) => {
+                    // Verify converted JPEG doesn't exceed the limit
+                    if converted.bytes.len() > max_bytes {
+                        warn!(
+                            filename = sanitized_filename,
+                            converted_size = converted.bytes.len(),
+                            max_bytes,
+                            "HEIC conversion produced output exceeding limit; skipping"
+                        );
+                        attachment_infos.push(AttachmentInfo {
+                            display_name: sanitized_filename.clone(),
+                            mime_type: "image/jpeg".to_string(),
+                            size_bytes: converted.bytes.len() as u64,
+                            downloaded: true,
+                            persistence_marker: path.clone(),
+                            extracted_text: None,
+                        });
+                        attachment_parts.push(ContentPart::Text(format!(
+                            "⚠️ Attachment {sanitized_filename} converted from HEIC to JPEG, but the result ({}) exceeds the {max_bytes}-byte limit.",
+                            converted.bytes.len()
+                        )));
+                        continue;
+                    }
+
+                    let base64_data = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &converted.bytes,
+                    );
+                    attachment_parts.push(ContentPart::from_binary_base64(
+                        converted.mime_type.clone(),
+                        base64_data,
+                        converted.filename.clone(),
+                    ));
+
+                    attachment_infos.push(AttachmentInfo {
+                        display_name: sanitized_filename.clone(),
+                        mime_type: converted.mime_type,
+                        size_bytes: converted.bytes.len() as u64,
+                        downloaded: true,
+                        persistence_marker: path.clone(),
+                        extracted_text: None,
+                    });
+                }
+                Err(e) => {
+                    // Conversion failed — do not forward original HEIC bytes
+                    warn!(
+                        filename = sanitized_filename,
+                        error = %e,
+                        "HEIC to JPEG conversion failed"
+                    );
+                    attachment_infos.push(AttachmentInfo {
+                        display_name: sanitized_filename.clone(),
+                        mime_type: "image/heic".to_string(),
+                        size_bytes,
+                        downloaded: false,
+                        persistence_marker: path.clone(),
+                        extracted_text: None,
+                    });
+                    attachment_parts.push(ContentPart::Text(format!(
+                        "⚠️ Failed to process HEIC attachment {sanitized_filename}: conversion failed. The image may be corrupted or use an unsupported HEIC variant."
+                    )));
+                }
+            }
         } else if is_image {
             let base64_data =
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
@@ -153,6 +231,15 @@ pub async fn process_inbound_attachments(
                 base64_data,
                 Some(sanitized_filename.clone()),
             ));
+
+            attachment_infos.push(AttachmentInfo {
+                display_name: sanitized_filename.clone(),
+                mime_type,
+                size_bytes,
+                downloaded: true,
+                persistence_marker: path.clone(),
+                extracted_text: None,
+            });
         } else if is_pdf {
             // PDFs are forwarded as binary content parts for the LLM to process
             let base64_data =
@@ -162,23 +249,32 @@ pub async fn process_inbound_attachments(
                 base64_data,
                 Some(sanitized_filename.clone()),
             ));
+
+            attachment_infos.push(AttachmentInfo {
+                display_name: sanitized_filename.clone(),
+                mime_type,
+                size_bytes,
+                downloaded: true,
+                persistence_marker: path.clone(),
+                extracted_text: None,
+            });
         } else {
             // Unsupported binary — create a placeholder
             let kb = size_bytes / 1024;
             attachment_parts.push(ContentPart::Text(format!(
                 "⚠️ Unsupported binary attachment: {sanitized_filename} ({mime_type}, {kb} KB).\n\
-                 Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents."
+                 Supported: images (JPEG, PNG, WebP, GIF, HEIC/HEIF→JPEG), PDFs, and text documents."
             )));
-        }
 
-        attachment_infos.push(AttachmentInfo {
-            display_name: sanitized_filename.clone(),
-            mime_type,
-            size_bytes,
-            downloaded: true,
-            persistence_marker: path.clone(),
-            extracted_text,
-        });
+            attachment_infos.push(AttachmentInfo {
+                display_name: sanitized_filename.clone(),
+                mime_type,
+                size_bytes,
+                downloaded: true,
+                persistence_marker: path.clone(),
+                extracted_text: None,
+            });
+        }
     }
 
     Ok((clean_text, attachment_parts, attachment_infos))
@@ -195,9 +291,15 @@ fn sanitize_filename(name: &str) -> String {
 /// Infer MIME type from file extension and optional signature inspection.
 /// For binary formats (images, PDFs), validates magic bytes against the extension
 /// to prevent mislabeled or corrupted files from being forwarded.
+/// Also recognizes HEIC/HEIF formats.
 fn infer_mime_type(filename: &str, bytes: &[u8]) -> String {
     // Extract extension
     let ext = filename.split('.').next_back().map(|e| e.to_lowercase());
+
+    // Check for HEIC/HEIF by extension first
+    if attachments::is_heic_filename(filename) {
+        return "image/heic".to_string();
+    }
 
     // For binary formats, validate magic bytes against the extension
     if let Some(ref ext) = ext {
@@ -249,6 +351,12 @@ fn infer_mime_type(filename: &str, bytes: &[u8]) -> String {
     }
 
     // Fallback: inspect magic bytes for unrecognized extensions
+    if bytes.len() >= 12 {
+        // Check for HEIC/HEIF ftyp signature
+        if attachments::inspect_heic_signature(bytes).is_some() {
+            return "image/heic".to_string();
+        }
+    }
     if bytes.len() >= 4 {
         if bytes[0..4] == [0x89, 0x50, 0x4E, 0x47] {
             return "image/png".to_string();

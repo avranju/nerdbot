@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::attachment::{self, AttachmentKind};
+use crate::attachments;
 use crate::error::AgentError;
 
 /// Maximum message length before Telegram rejects it (4096 UTF-8 code points).
@@ -745,34 +746,46 @@ impl TelegramBot {
 
         // Early returns for unsupported types or oversized files — no download needed.
         if kind == AttachmentKind::Unsupported {
-            let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+            let display_name = sanitized_name
+                .as_ref()
+                .unwrap_or(&"file".to_string())
+                .clone();
             let mime = mime_type.unwrap_or("unknown");
             let marker = format!("[Unsupported attachment: {display_name}, type={mime}]");
 
             return Ok(attachment::ProcessedAttachment {
                 content_part: ContentPart::Text(format!(
                     "Unsupported attachment type: {mime} ({display_name}).\n\
-                        Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                        Supported: images (JPEG, PNG, WebP, GIF, HEIC/HEIF→JPEG), PDFs, and text documents (txt, md, json, csv, etc.)."
                 )),
                 persistence_marker: marker,
                 downloaded: false,
                 extracted_text: None,
+                output_mime_type: mime.to_string(),
+                output_filename: sanitized_name,
+                output_size_bytes: 0,
             });
         }
 
         // Early size check: reject before downloading
         if size_bytes > max_attachment_bytes as u64 {
-            let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+            let display_name = sanitized_name
+                .as_ref()
+                .unwrap_or(&"file".to_string())
+                .clone();
             return Ok(attachment::ProcessedAttachment {
                 content_part: ContentPart::Text(format!(
                     "⚠️ Attachment {display_name} is {size_bytes} bytes, exceeding the {max_attachment_bytes}-byte limit.\n\
-                        Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                        Supported: images (JPEG, PNG, WebP, GIF, HEIC/HEIF→JPEG), PDFs, and text documents (txt, md, json, csv, etc.)."
                 )),
                 persistence_marker: format!(
                     "[Attachment too large: {display_name}, {size_bytes} bytes]"
                 ),
                 downloaded: false,
                 extracted_text: None,
+                output_mime_type: mime_type.unwrap_or("unknown").to_string(),
+                output_filename: sanitized_name,
+                output_size_bytes: size_bytes,
             });
         }
 
@@ -788,6 +801,9 @@ impl TelegramBot {
                     persistence_marker: "[Attachment: not available]".to_string(),
                     downloaded: false,
                     extracted_text: None,
+                    output_mime_type: mime_type.unwrap_or("unknown").to_string(),
+                    output_filename: sanitized_name,
+                    output_size_bytes: size_bytes,
                 });
             }
         };
@@ -799,7 +815,89 @@ impl TelegramBot {
                     .download_file_via_path(&file_path, max_attachment_bytes)
                     .await?;
 
-                // Normalize MIME type based on signature inspection.
+                // Check if this is a HEIC/HEIF image that needs conversion.
+                // HEIC detection: MIME type, filename extension, or ftyp signature.
+                let is_heic = mime_type.map(attachments::is_heic_mime).unwrap_or(false)
+                    || sanitized_name
+                        .as_deref()
+                        .map(attachments::is_heic_filename)
+                        .unwrap_or(false)
+                    || attachments::inspect_heic_signature(&data).is_some();
+
+                if is_heic {
+                    // Convert HEIC to JPEG in memory
+                    match attachments::convert_heic_to_jpeg(&data, sanitized_name.as_deref()) {
+                        Ok(converted) => {
+                            // Verify converted JPEG doesn't exceed the limit
+                            if converted.bytes.len() > max_attachment_bytes {
+                                let display_name = sanitized_name.as_deref().unwrap_or("file");
+                                return Ok(attachment::ProcessedAttachment {
+                                    content_part: ContentPart::Text(format!(
+                                        "⚠️ Attachment {display_name} converted from HEIC to JPEG, but the result ({}) exceeds the {max_attachment_bytes}-byte limit.",
+                                        converted.bytes.len()
+                                    )),
+                                    persistence_marker: format!(
+                                        "[Attachment too large after HEIC conversion: {display_name}, {} bytes]",
+                                        converted.bytes.len()
+                                    ),
+                                    downloaded: true,
+                                    extracted_text: None,
+                                    output_mime_type: "image/jpeg".to_string(),
+                                    output_filename: converted.filename,
+                                    output_size_bytes: converted.bytes.len() as u64,
+                                });
+                            }
+
+                            let content_part = ContentPart::from_binary_base64(
+                                &converted.mime_type,
+                                &*BASE64.encode(&converted.bytes),
+                                converted.filename.clone(),
+                            );
+
+                            let output_size = converted.bytes.len() as u64;
+                            let kb = output_size / 1024;
+                            let marker = if let Some(ref name) = converted.filename {
+                                format!("[Attached JPEG (from HEIC): {name}, {kb} KB]")
+                            } else {
+                                format!("[Attached JPEG (from HEIC), {kb} KB]")
+                            };
+
+                            return Ok(attachment::ProcessedAttachment {
+                                content_part,
+                                persistence_marker: marker,
+                                downloaded: true,
+                                extracted_text: None,
+                                output_mime_type: converted.mime_type,
+                                output_filename: converted.filename,
+                                output_size_bytes: output_size,
+                            });
+                        }
+                        Err(e) => {
+                            // Conversion failed — do not forward original HEIC bytes
+                            let display_name = sanitized_name.as_deref().unwrap_or("file");
+                            warn!(
+                                error = %e,
+                                filename = display_name,
+                                "HEIC to JPEG conversion failed"
+                            );
+                            return Ok(attachment::ProcessedAttachment {
+                                content_part: ContentPart::Text(format!(
+                                    "⚠️ Failed to process HEIC attachment {display_name}: conversion failed. The image may be corrupted or use an unsupported HEIC variant."
+                                )),
+                                persistence_marker: format!(
+                                    "[HEIC conversion failed: {display_name}]"
+                                ),
+                                downloaded: true,
+                                extracted_text: None,
+                                output_mime_type: "image/heic".to_string(),
+                                output_filename: sanitized_name,
+                                output_size_bytes: data.len() as u64,
+                            });
+                        }
+                    }
+                }
+
+                // Non-HEIC binary: normalize MIME type based on signature inspection.
                 // For images: reject if no known signature is found (prevents
                 // forwarding arbitrary binary data as an image).
                 // For PDFs: reject if magic bytes don't match.
@@ -844,6 +942,9 @@ impl TelegramBot {
                     persistence_marker: marker,
                     downloaded: true,
                     extracted_text: None,
+                    output_mime_type: mime,
+                    output_filename: sanitized_name,
+                    output_size_bytes: size_bytes,
                 })
             }
 
@@ -852,6 +953,7 @@ impl TelegramBot {
                 let data = self
                     .download_file_via_path(&file_path, max_attachment_bytes)
                     .await?;
+                let data_len = data.len();
 
                 let text = match String::from_utf8(data) {
                     Ok(t) => t,
@@ -888,22 +990,31 @@ impl TelegramBot {
                     persistence_marker: marker,
                     downloaded: true,
                     extracted_text: Some(text),
+                    output_mime_type: mime_type.unwrap_or("text/plain").to_string(),
+                    output_filename: sanitized_name,
+                    output_size_bytes: data_len as u64,
                 })
             }
 
             AttachmentKind::Unsupported => {
-                let display_name = sanitized_name.unwrap_or_else(|| "file".to_string());
+                let display_name = sanitized_name
+                    .as_ref()
+                    .unwrap_or(&"file".to_string())
+                    .clone();
                 let mime = mime_type.unwrap_or("unknown");
                 let marker = format!("[Unsupported attachment: {display_name}, type={mime}]");
 
                 Ok(attachment::ProcessedAttachment {
                     content_part: ContentPart::Text(format!(
                         "Unsupported attachment type: {mime} ({display_name}).\n\
-                            Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, etc.)."
+                            Supported: images (JPEG, PNG, WebP, GIF, HEIC/HEIF→JPEG), PDFs, and text documents (txt, md, json, csv, etc.)."
                     )),
                     persistence_marker: marker,
                     downloaded: false,
                     extracted_text: None,
+                    output_mime_type: mime.to_string(),
+                    output_filename: sanitized_name,
+                    output_size_bytes: 0,
                 })
             }
         }

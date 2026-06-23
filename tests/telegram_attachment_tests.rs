@@ -724,3 +724,98 @@ async fn test_context_manager_appends_datetime_without_dropping_binary_parts() {
         genai::chat::ContentPart::Text(t) if t.contains("## Current Date/Time")
     ));
 }
+
+// ── HEIC conversion tests ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_process_attachment_heic_conversion_fails_gracefully() {
+    let server = MockServer::start().await;
+    let bot = make_mock_bot(&server).await;
+
+    // Mock getFile returning a path
+    Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(mock_path("/getFile")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"ok":true,"result":{"file_path":"documents/photo.heic"}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    // Mock download returning invalid HEIC-like data (ftyp box with heic brand but corrupt payload)
+    let invalid_heic: Vec<u8> = vec![
+        0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0, 0xFF,
+        0xD8, // Some random bytes after the ftyp box — not a valid HEIC image
+    ];
+    Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(mock_path("/documents/photo.heic")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(&invalid_heic[..]))
+        .mount(&server)
+        .await;
+
+    let processed = bot
+        .process_attachment(
+            "heic-file",
+            Some("photo.heic"),
+            Some("image/heic"),
+            invalid_heic.len() as u64,
+            10_000,
+            1024,
+        )
+        .await
+        .unwrap();
+
+    // The result should be a warning text, NOT a binary image/heic content part
+    assert!(processed.downloaded);
+    match &processed.content_part {
+        genai::chat::ContentPart::Text(text) => {
+            assert!(
+                text.contains("Failed to process HEIC") || text.contains("conversion failed"),
+                "Expected HEIC conversion failure warning, got: {text}"
+            );
+        }
+        genai::chat::ContentPart::Binary(binary) => {
+            // Should NOT contain image/heic binary data
+            assert!(
+                binary.content_type != "image/heic",
+                "Should not forward original HEIC bytes as binary"
+            );
+            assert!(
+                binary.content_type != "image/heif",
+                "Should not forward original HEIF bytes as binary"
+            );
+        }
+        _ => panic!("Unexpected content part type"),
+    }
+}
+
+#[tokio::test]
+async fn test_process_attachment_heic_filename_classifies_as_binary() {
+    // Test that .heic filenames classify as Binary even without MIME type
+    let kind = attachment::classify_attachment(None, Some("photo.heic"));
+    assert_eq!(kind, attachment::AttachmentKind::Binary);
+
+    let kind = attachment::classify_attachment(None, Some("photo.HEIF"));
+    assert_eq!(kind, attachment::AttachmentKind::Binary);
+}
+
+#[test]
+fn test_inspect_mime_signature_heic_heif() {
+    // Test ftyp brand detection for HEIC
+    let heic_data: Vec<u8> = vec![
+        0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
+    ];
+    assert_eq!(
+        attachment::inspect_mime_signature(&heic_data),
+        Some("image/heic")
+    );
+
+    // Test ftyp brand detection for HEIF
+    let heif_data: Vec<u8> = vec![
+        0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1', 0, 0, 0, 0,
+    ];
+    assert_eq!(
+        attachment::inspect_mime_signature(&heif_data),
+        Some("image/heic")
+    );
+}

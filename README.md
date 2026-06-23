@@ -13,8 +13,8 @@ NerdBot communicates with users through pluggable **communication channels**. Bo
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
 - **Single binary, Docker-friendly** — multi-stage build, non-root runtime user, no external services required
-- **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. Supported formats: JPEG, PNG, WebP, GIF, PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
-- **Zulip attachments** — user-uploaded files embedded as markdown links in Zulip messages are extracted, downloaded via authenticated API calls, and forwarded to the LLM as base64 (images) or extracted text (documents). Supported formats: images (JPEG, PNG, WebP, GIF), PDFs, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, rs, etc.).
+- **Telegram attachments** — photos, PDFs, and text documents are downloaded, validated (MIME types, magic bytes), and forwarded to the LLM as base64 or extracted text. HEIC/HEIF images are automatically converted to JPEG in memory before submission. Supported formats: JPEG, PNG, WebP, GIF, HEIC/HEIF (→JPEG), PDF, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, etc.).
+- **Zulip attachments** — user-uploaded files embedded as markdown links in Zulip messages are extracted, downloaded via authenticated API calls, and forwarded to the LLM as base64 (images) or extracted text (documents). HEIC/HEIF images are automatically converted to JPEG in memory before submission. Supported formats: images (JPEG, PNG, WebP, GIF, HEIC/HEIF→JPEG), PDFs, and text documents (txt, md, json, csv, html, xml, yaml, toml, py, js, sh, rs, etc.).
 
 ## Quickstart
 
@@ -74,6 +74,7 @@ Open Telegram, send a message to your bot, and you should get a reply.
 ### Prerequisites
 
 - A Rust toolchain for local development, or Docker and Docker Compose for deployment
+- `libheif-dev` (or equivalent) for HEIC/HEIF image conversion support during local builds
 - A Telegram bot token ([@BotFather](https://t.me/BotFather))
 - (Optional) A Zulip bot email and API key — create a bot user in your Zulip organization and generate an API key via the Zulip web UI
 - (Optional) An Exa API key for web search

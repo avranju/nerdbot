@@ -30,6 +30,8 @@ src/
   error.rs         — AgentError enum + domain-specific error types
   webhook.rs       — Shared Axum webhook server for Telegram/Zulip push ingress routes and `/health`
 
+  attachments.rs   — Shared HEIC/HEIF detection and in-memory conversion to JPEG via `libheif-rs` and `image` crates
+
   agent/
     mod.rs
     agent_loop.rs  — Core iterative tool-loop (run_agent) via genai
@@ -144,8 +146,8 @@ README.md          — Project documentation
 2. `build_inbound_message` (in main.rs) processes the update:
    a. Selects the largest photo variant (by width × height area)
    b. Downloads supported attachments via `TelegramBot::process_attachment` (which calls `get_file` plus the bounded CDN download helper; API and file base URLs are independently injectable for testing)
-   c. Classifies each attachment: binary (images, PDFs) → base64-encoded ContentPart::Binary; text documents (txt, md, json, csv, etc.) → ContentPart::Text with filename markers
-   d. Validates MIME types and inspects file signatures (PNG, JPEG, GIF, WebP, PDF magic bytes)
+   c. Classifies each attachment: binary (images, PDFs, HEIC/HEIF) → base64-encoded ContentPart::Binary (HEIC/HEIF converted to JPEG in memory via `libheif-rs`); text documents (txt, md, json, csv, etc.) → ContentPart::Text with filename markers
+   d. Validates MIME types and inspects file signatures (PNG, JPEG, GIF, WebP, PDF, HEIC/HEIF ftyp brand)
    e. Sanitizes filenames (strips path separators, null bytes, truncates to 200 chars)
    f. Builds a user prompt from `caption` (priority) → `text` → default prompt ("Please analyze the attached file(s).")
    g. Never exposes token-qualified Telegram download URLs to the LLM
@@ -189,7 +191,7 @@ README.md          — Project documentation
 2. Ingress first decides whether the message is addressed to NerdBot before access checks, sessions, or attachment downloads. Self-sent messages are ignored; stream messages require a direct `@**BotName**` or Zulip raw `@**BotName|user_id**` mention anywhere in the raw Markdown content; one-to-one DMs are accepted without a mention; group DMs require a direct bot mention anywhere in the message. Unknown bot names do not fall back to broad "any mention" matching, so stream/group-DM messages are ignored unless the fetched `/users/me` full name produced a precise bot mention pattern.
 3. Accepted messages have the direct bot mention removed from the prompt text when present.
 4. ChannelMessageHandler checks channel-qualified access policy
-5. Extracts user-upload attachments from markdown links (`[filename](/user_uploads/...)`), downloads via authenticated GET, classifies as binary (images) or text documents
+5. Extracts user-upload attachments from markdown links (`[filename](/user_uploads/...)`), downloads via authenticated GET, classifies as binary (images, PDFs, HEIC/HEIF) or text documents. HEIC/HEIF images are converted to JPEG in memory via the shared `attachments` module before being sent to the LLM.
 6. Ensures channel-qualified chat session exists (creates if new)
 7. Routes: if `/command` → CommandHandler, else → agent loop
 8. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget
@@ -252,7 +254,7 @@ README.md          — Project documentation
 - `[exa]` — api_key_env, max_results, max_text_chars
 
 ### Docker Packaging
-- **Dockerfile** — multi-stage build: `rust:1.96-slim-bookworm` for compilation, `debian:bookworm-slim` for runtime with `libsqlite3-0` and `ca-certificates`, non-root `nerdbot` user
+- **Dockerfile** — multi-stage build: `rust:1.96-slim-trixie` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0`, `libheif1` (HEIC/HEIF decoding), and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets
 - **.gitea/workflows/docker-image.yml** — manually triggered Gitea Actions workflow. It accepts a required `tag` input, builds `git.nerdworks.dev/avranju/nerdbot:<tag>` from the repository root `Dockerfile`, and pushes it to the Gitea container registry using the `REGISTRY_USERNAME` Actions variable and `PACKAGE_TOKEN` Actions secret.
 - Entrypoint: `nerdbot --config /config/config.toml`

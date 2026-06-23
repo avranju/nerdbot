@@ -49,6 +49,10 @@ const SUPPORTED_BINARY_MIME_TYPES: &[&str] = &[
     "image/png",
     "image/webp",
     "image/gif",
+    "image/heic",
+    "image/heif",
+    "image/heic-sequence",
+    "image/heif-sequence",
     "application/pdf",
 ];
 
@@ -71,6 +75,9 @@ const SUPPORTED_TEXT_EXTENSIONS: &[&str] = &[
     ".txt", ".md", ".json", ".csv", ".html", ".xml", ".js", ".ts", ".py", ".sh", ".bash", ".yaml",
     ".yml", ".toml", ".ini", ".cfg", ".conf", ".css", ".sql", ".log", ".rst", ".tex",
 ];
+
+/// HEIC/HEIF extensions recognized as binary attachments.
+const HEIC_EXTENSIONS: &[&str] = &[".heic", ".heif"];
 
 // ── Validation helpers ───────────────────────────────────────────────
 
@@ -108,12 +115,21 @@ pub fn sanitize_filename(name: &str) -> String {
 
 /// Inspect the first bytes of a buffer to infer the actual MIME type.
 ///
-/// Supports magic-byte detection for PNG, JPEG, GIF, WebP, and PDF.
+/// Supports magic-byte detection for PNG, JPEG, GIF, WebP, PDF, and HEIC/HEIF.
 /// Returns `None` when no magic bytes are recognized (pass-through).
 pub fn inspect_mime_signature(data: &[u8]) -> Option<&'static str> {
     // JPEG needs only 3 bytes; PNG/GIF need 4; WebP needs 12; PDF needs 5.
     if data.len() < 3 {
         return None;
+    }
+
+    // HEIC/HEIF: check for ftyp box with HEIC brand (needs 12 bytes)
+    if data.len() >= 12 && data[4..8] == *b"ftyp" {
+        for &brand in &[b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"] {
+            if &data[8..12] == brand {
+                return Some("image/heic");
+            }
+        }
     }
 
     // JPEG: FF D8 FF (3 bytes)
@@ -167,13 +183,24 @@ pub fn classify_attachment(mime: Option<&str>, filename: Option<&str>) -> Attach
         if is_supported_text_mime(m) {
             return AttachmentKind::Text;
         }
+        // HEIC/HEIF MIME types are binary (will be converted to JPEG)
+        if crate::attachments::is_heic_mime(m) {
+            return AttachmentKind::Binary;
+        }
     }
 
     // Fall back to filename extension
-    if let Some(f) = filename
-        && is_text_extension(f)
-    {
-        return AttachmentKind::Text;
+    if let Some(f) = filename {
+        if is_text_extension(f) {
+            return AttachmentKind::Text;
+        }
+        // HEIC/HEIF filenames are binary (will be converted to JPEG)
+        if HEIC_EXTENSIONS
+            .iter()
+            .any(|ext| f.to_lowercase().ends_with(ext))
+        {
+            return AttachmentKind::Binary;
+        }
     }
 
     AttachmentKind::Unsupported
@@ -211,6 +238,12 @@ pub struct ProcessedAttachment {
     /// Extracted text content for text documents (bounded by max_text_chars).
     /// Only populated for text-type attachments.
     pub extracted_text: Option<String>,
+    /// MIME type of the output (may differ from input for converted HEIC → JPEG).
+    pub output_mime_type: String,
+    /// Output filename (may differ from input for converted HEIC → JPEG).
+    pub output_filename: Option<String>,
+    /// Size of the output bytes (may differ from input for converted HEIC → JPEG).
+    pub output_size_bytes: u64,
 }
 
 #[cfg(test)]
@@ -228,6 +261,14 @@ mod tests {
         assert!(is_supported_binary_mime("application/pdf"));
         assert!(!is_supported_binary_mime("text/plain"));
         assert!(!is_supported_binary_mime("application/zip"));
+    }
+
+    #[test]
+    fn test_is_supported_binary_mime_heic() {
+        assert!(is_supported_binary_mime("image/heic"));
+        assert!(is_supported_binary_mime("image/heif"));
+        assert!(is_supported_binary_mime("image/heic-sequence"));
+        assert!(is_supported_binary_mime("image/heif-sequence"));
     }
 
     #[test]
@@ -299,6 +340,22 @@ mod tests {
     }
 
     #[test]
+    fn test_inspect_mime_signature_heic() {
+        let heic_header: Vec<u8> = vec![
+            0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
+        ];
+        assert_eq!(inspect_mime_signature(&heic_header), Some("image/heic"));
+    }
+
+    #[test]
+    fn test_inspect_mime_signature_hevc_brand() {
+        let data: Vec<u8> = vec![
+            0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'v', b'c', 0, 0, 0, 0,
+        ];
+        assert_eq!(inspect_mime_signature(&data), Some("image/heic"));
+    }
+
+    #[test]
     fn test_classify_binary_mime() {
         assert_eq!(
             classify_attachment(Some("image/jpeg"), None),
@@ -343,6 +400,34 @@ mod tests {
         assert_eq!(
             classify_attachment(None, Some("archive.zip")),
             AttachmentKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn test_classify_heic_mime() {
+        assert_eq!(
+            classify_attachment(Some("image/heic"), None),
+            AttachmentKind::Binary
+        );
+        assert_eq!(
+            classify_attachment(Some("image/heif"), None),
+            AttachmentKind::Binary
+        );
+    }
+
+    #[test]
+    fn test_classify_heic_filename() {
+        assert_eq!(
+            classify_attachment(None, Some("photo.heic")),
+            AttachmentKind::Binary
+        );
+        assert_eq!(
+            classify_attachment(None, Some("photo.heif")),
+            AttachmentKind::Binary
+        );
+        assert_eq!(
+            classify_attachment(None, Some("photo.HEIC")),
+            AttachmentKind::Binary
         );
     }
 

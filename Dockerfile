@@ -1,10 +1,10 @@
 # ── Stage 1: Build ────────────────────────────────────────────────
-FROM rust:1.96-slim-bookworm AS builder
+FROM rust:1.96-slim-trixie AS builder
 
-# Install SQLite dev headers (required by sqlx)
+# Install SQLite dev headers (required by sqlx) and libheif dev (for HEIC conversion)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    libsqlite3-dev pkg-config && \
+    libsqlite3-dev libheif-dev pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,12 +18,13 @@ COPY src ./src
 RUN cargo build --release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # No SQLite dev dependency at runtime — runtime libsqlite3-0 is installed below
+# libheif1 provides HEIC/HEIF decoding support at runtime
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    libsqlite3-0 ca-certificates openssh-client && \
+    libsqlite3-0 libheif1 ca-certificates openssh-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

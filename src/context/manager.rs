@@ -344,14 +344,3 @@ pub(crate) fn estimate_tokens_for_message(msg: &ChatMessage) -> usize {
 
     (total_chars / 4).max(1)
 }
-
-/// Estimate token count from message content using character heuristic.
-#[allow(dead_code)]
-fn estimate_tokens_from_content(content: &str, structured: &Option<serde_json::Value>) -> usize {
-    let total_chars = content.len()
-        + structured
-            .as_ref()
-            .map(|v| v.to_string().len())
-            .unwrap_or(0);
-    (total_chars / 4).max(1)
-}

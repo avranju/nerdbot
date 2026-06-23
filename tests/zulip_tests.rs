@@ -3,6 +3,7 @@
 //! Covers URL construction, attachment processing, address resolution,
 //! mention stripping, and bot info fetching.
 
+use genai::chat::ContentPart;
 use nerdbot::channel::{ChannelService, ConversationAddress};
 use nerdbot::zulip::attachment::process_inbound_attachments;
 use nerdbot::zulip::bot::{
@@ -905,6 +906,71 @@ fn test_group_private_message_with_bot_mention_anywhere_is_accepted() {
     assert_eq!(
         addressed_zulip_content(&msg, &bot).as_deref(),
         Some("I think can answer this")
+    );
+}
+
+// ── HEIC Conversion Tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn test_attachment_heic_conversion_fails_gracefully() {
+    let mock_server = MockServer::start().await;
+
+    // Mock a .heic user-upload with invalid HEIC data (ftyp box + corrupt payload)
+    let invalid_heic: Vec<u8> = vec![
+        0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0, 0xFF,
+        0xD8, // Random bytes after ftyp — not a valid HEIC image
+    ];
+    Mock::given(method("GET"))
+        .and(path_regex(r"/user_uploads/1/99/abc/photo\.heic"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(&invalid_heic[..]))
+        .mount(&mock_server)
+        .await;
+
+    let bot = ZulipBot::new(
+        mock_base_url(&mock_server),
+        "bot@test.com".into(),
+        "key".into(),
+    );
+
+    let raw_content = r#"Check [photo.heic](/user_uploads/1/99/abc/photo.heic)"#;
+
+    let (_clean_text, parts, infos) =
+        process_inbound_attachments(raw_content, &bot, 5_242_880, 32_768)
+            .await
+            .unwrap();
+
+    // Should have exactly one attachment part (a warning text, not a binary)
+    assert_eq!(parts.len(), 1);
+
+    // The part should be a Text warning, not a Binary image/heic
+    match &parts[0] {
+        ContentPart::Text(text) => {
+            assert!(
+                text.contains("Failed to process HEIC") || text.contains("conversion failed"),
+                "Expected HEIC conversion failure warning, got: {text}"
+            );
+        }
+        ContentPart::Binary(binary) => {
+            // Should NOT contain image/heic binary data
+            assert!(
+                binary.content_type != "image/heic",
+                "Should not forward original HEIC bytes as binary, got content_type: {}",
+                binary.content_type
+            );
+            assert!(
+                binary.content_type != "image/heif",
+                "Should not forward original HEIF bytes as binary"
+            );
+        }
+        _ => panic!("Unexpected content part type"),
+    }
+
+    // Attachment info should reflect the failure
+    assert!(!infos.is_empty());
+    assert_eq!(infos[0].mime_type, "image/heic");
+    assert!(
+        !infos[0].downloaded,
+        "should not mark as downloaded on conversion failure"
     );
 }
 

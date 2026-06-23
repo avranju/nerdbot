@@ -827,21 +827,6 @@ fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_zulip_bot_presence_rejection() {
-        let error = AgentError::Zulip(
-            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
-                .to_string(),
-        );
-
-        assert!(zulip_presence_rejected_for_bot(&error));
-    }
-}
-
 async fn run_diagnostics_command(
     socket_path: &std::path::Path,
     args: DiagnosticsArgs,
@@ -1123,12 +1108,21 @@ async fn build_inbound_message(
             {
                 Ok(processed) => {
                     attachment_parts.push(processed.content_part);
-                    let display_name =
-                        attachment::sanitize_filename(filename.unwrap_or("document"));
+                    // Use output filename when available (e.g., HEIC→JPEG conversion),
+                    // falling back to the sanitized original filename.
+                    let display_name = processed.output_filename.clone().unwrap_or_else(|| {
+                        attachment::sanitize_filename(filename.unwrap_or("document"))
+                    });
+                    // Use output metadata when available (e.g., HEIC→JPEG conversion)
+                    let output_mime = if !processed.output_mime_type.is_empty() {
+                        processed.output_mime_type
+                    } else {
+                        mime.unwrap_or("application/octet-stream").to_string()
+                    };
                     attachment_infos.push(AttachmentInfo {
                         display_name,
-                        mime_type: mime.unwrap_or("application/octet-stream").to_string(),
-                        size_bytes,
+                        mime_type: output_mime,
+                        size_bytes: processed.output_size_bytes,
                         downloaded: processed.downloaded,
                         persistence_marker: processed.persistence_marker,
                         extracted_text: processed.extracted_text,
@@ -1192,5 +1186,20 @@ impl Drop for SchedulerGuard {
                 info!("SchedulerGuard: scheduler background loop stopped successfully");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_zulip_bot_presence_rejection() {
+        let error = AgentError::Zulip(
+            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
+                .to_string(),
+        );
+
+        assert!(zulip_presence_rejected_for_bot(&error));
     }
 }
