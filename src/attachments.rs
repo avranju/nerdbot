@@ -36,9 +36,8 @@ pub fn is_heic_filename(filename: &str) -> bool {
 
 // ── HEIC signature inspection ────────────────────────────────────────
 
-/// HEIC/HEIF ftyp brand strings to look for at offset 4.
-#[allow(dead_code)]
-const HEIC_FTIPL_BRANDS: &[&[u8]] = &[b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"];
+/// HEIC/HEIF ftyp brand strings to look for at offset 8.
+const HEIC_FTYP_BRANDS: &[&[u8]] = &[b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"];
 
 /// Inspect the first bytes of a buffer to detect HEIC/HEIF format.
 ///
@@ -57,26 +56,10 @@ pub fn inspect_heic_signature(data: &[u8]) -> Option<&'static str> {
 
     // Check the brand at offset 8-11
     let brand_bytes = &data[8..12];
-    if brand_bytes == b"heic" {
-        return Some("heic");
-    }
-    if brand_bytes == b"heix" {
-        return Some("heix");
-    }
-    if brand_bytes == b"hevc" {
-        return Some("hevc");
-    }
-    if brand_bytes == b"hevx" {
-        return Some("hevx");
-    }
-    if brand_bytes == b"mif1" {
-        return Some("mif1");
-    }
-    if brand_bytes == b"msf1" {
-        return Some("msf1");
-    }
-
-    None
+    HEIC_FTYP_BRANDS
+        .iter()
+        .find(|brand| brand_bytes == **brand)
+        .and_then(|brand| std::str::from_utf8(brand).ok())
 }
 
 // ── JPEG filename generation ─────────────────────────────────────────

@@ -6,6 +6,7 @@
 
 pub mod attachment;
 pub mod bot;
+pub mod runtime;
 pub mod service;
 pub mod update;
 

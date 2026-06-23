@@ -10,8 +10,7 @@ use std::sync::Arc;
 use clap::{Args, Parser, Subcommand};
 use nerdbot::agent::personality::Personality;
 use nerdbot::channel::{
-    AttachmentInfo, ChannelInboundEvent, ChannelMessageHandler, ChannelMessageHandlerInput,
-    ChannelRegistry, ChannelService, ConversationAddress, InboundMessage, SenderIdentity,
+    ChannelMessageHandler, ChannelMessageHandlerInput, ChannelRegistry, ChannelService,
 };
 use nerdbot::config::{
     AppConfig, TelegramChannelConfig, TelegramIngress, ZulipChannelConfig, ZulipIngress,
@@ -24,12 +23,11 @@ use nerdbot::error::AgentError;
 use nerdbot::llm::{LlmClient, LlmExecutor};
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
-use nerdbot::telegram::attachment::{self, AttachmentKind};
-use nerdbot::telegram::bot::{TelegramBot, Update};
-use nerdbot::telegram::commands::TelegramCommand;
+use nerdbot::telegram::runtime::{
+    TelegramRuntime, TelegramWebhookRuntime, build_runtime as build_telegram_runtime,
+    run_ingress_loop as run_telegram_ingress_loop,
+};
 use nerdbot::telegram::service::TelegramService;
-use nerdbot::telegram::update::TelegramUpdate;
-use nerdbot::telegram::{TelegramHook, TelegramPoll};
 use nerdbot::tools::calculator::CalculatorTool;
 use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::files::{AppendFile, FileConfig, ListDirectory, ReadFile, WriteFile};
@@ -41,9 +39,11 @@ use nerdbot::tools::web::{WebFetch, WebSearch};
 use nerdbot::webhook::{
     TelegramWebhookRoute, WebhookServer, WebhookServerConfig, ZulipWebhookRoute,
 };
-use nerdbot::zulip::update::ZulipUpdate;
-use nerdbot::zulip::update::hook::ZulipWebhookPayload;
-use nerdbot::zulip::{ZulipBot, ZulipHook, ZulipPoll, ZulipService};
+use nerdbot::zulip::ZulipService;
+use nerdbot::zulip::runtime::{
+    ZulipRuntime, ZulipWebhookRuntime, build_runtime as build_zulip_runtime,
+    run_ingress_loop as run_zulip_ingress_loop,
+};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -196,27 +196,6 @@ struct AppRuntime {
     zulip: Option<ZulipRuntime>,
 }
 
-struct TelegramRuntime {
-    bot: Arc<TelegramBot>,
-    config: TelegramChannelConfig,
-    webhook: Option<TelegramWebhookRuntime>,
-}
-
-struct TelegramWebhookRuntime {
-    secret_token: String,
-    receiver: mpsc::Receiver<Update>,
-}
-
-struct ZulipRuntime {
-    bot: Arc<ZulipBot>,
-    config: ZulipChannelConfig,
-    webhook: Option<ZulipWebhookRuntime>,
-}
-
-struct ZulipWebhookRuntime {
-    receiver: mpsc::Receiver<ZulipWebhookPayload>,
-}
-
 async fn build_runtime(
     config: AppConfig,
     diagnostics_socket: Option<PathBuf>,
@@ -285,41 +264,6 @@ async fn init_storage(config: &AppConfig) -> Result<Arc<Database>, AgentError> {
     let db = Database::new(config.storage.sqlite_path.clone()).await?;
     db.init().await?;
     Ok(Arc::new(db))
-}
-
-async fn build_telegram_runtime(
-    config: &TelegramChannelConfig,
-) -> Result<Option<TelegramRuntime>, AgentError> {
-    if !config.enabled {
-        return Ok(None);
-    }
-
-    let bot_token = required_env(&config.bot_token_env, "Telegram bot token")?;
-    let bot = Arc::new(TelegramBot::new(bot_token));
-
-    match bot.get_me().await {
-        Ok(user) => {
-            info!(
-                bot_username = ?user.username,
-                bot_name = user.first_name,
-                "Telegram bot authenticated"
-            );
-        }
-        Err(e) => return Err(e),
-    }
-
-    if let Err(e) = bot.set_my_commands(&TelegramCommand::menu_commands()).await {
-        warn!(
-            error = %e,
-            "failed to configure Telegram command menu; slash commands still work when typed manually"
-        );
-    }
-
-    Ok(Some(TelegramRuntime {
-        bot,
-        config: config.clone(),
-        webhook: None,
-    }))
 }
 
 fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
@@ -415,49 +359,6 @@ async fn start_diagnostics_server(
     )
     .await
     .map(Some)
-}
-
-async fn build_zulip_runtime(
-    config: &ZulipChannelConfig,
-) -> Result<Option<ZulipRuntime>, AgentError> {
-    if !config.enabled {
-        return Ok(None);
-    }
-
-    let bot_email = required_env(&config.bot_email_env, "Zulip bot email")?;
-    let api_key = required_env(&config.api_key_env, "Zulip API key")?;
-    let bot = Arc::new(ZulipBot::new(config.site_url.clone(), bot_email, api_key));
-
-    info!(
-        site_url = config.site_url,
-        bot_email = bot.bot_email(),
-        "Zulip bot initialized"
-    );
-
-    match bot.get_me().await {
-        Ok(user_info) => {
-            bot.set_user_id(user_info.user_id);
-            bot.set_bot_name(user_info.full_name);
-            let bot_name = bot.bot_name();
-            info!(
-                bot_name = %bot_name,
-                bot_id = user_info.user_id,
-                "Zulip bot name resolved"
-            );
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                "Failed to fetch Zulip bot name; mention stripping will use broad pattern"
-            );
-        }
-    }
-
-    Ok(Some(ZulipRuntime {
-        bot,
-        config: config.clone(),
-        webhook: None,
-    }))
 }
 
 async fn start_webhook_server(
@@ -661,160 +562,6 @@ async fn run_channel_ingress_loops(
     }
 }
 
-async fn run_telegram_ingress_loop(telegram: TelegramRuntime, handler: Arc<ChannelMessageHandler>) {
-    match telegram.config.ingress {
-        TelegramIngress::Poll => {
-            let updates =
-                TelegramPoll::new(telegram.bot.clone(), telegram.config.poll_interval_secs);
-            if let Err(e) =
-                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
-            {
-                error!(error = %e, "Telegram polling ingress failed");
-            }
-        }
-        TelegramIngress::Webhook => {
-            let Some(webhook) = telegram.webhook else {
-                error!(
-                    "Telegram webhook ingress is enabled but shared webhook receiver is missing"
-                );
-                return;
-            };
-            let updates = TelegramHook::new(
-                telegram.bot.clone(),
-                telegram.config.clone(),
-                webhook.secret_token,
-                webhook.receiver,
-            );
-            if let Err(e) =
-                run_telegram_update_loop(updates, telegram.bot, handler, telegram.config).await
-            {
-                error!(error = %e, "Telegram webhook ingress failed");
-            }
-        }
-    }
-}
-
-async fn run_zulip_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHandler>) {
-    let presence_heartbeat = start_zulip_presence_heartbeat(
-        zulip.bot.clone(),
-        zulip.config.presence_enabled,
-        zulip.config.presence_ping_interval_secs,
-    );
-
-    match zulip.config.ingress {
-        ZulipIngress::Poll => {
-            let updates = ZulipPoll::new(zulip.bot.clone(), zulip.config.poll_interval_secs)
-                .with_attachment_limits(
-                    zulip.config.max_attachment_bytes,
-                    zulip.config.max_text_document_chars,
-                );
-            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
-                error!(error = %e, "Zulip polling ingress failed");
-            }
-        }
-        ZulipIngress::Webhook => {
-            let Some(webhook) = zulip.webhook else {
-                error!("Zulip webhook ingress is enabled but shared webhook receiver is missing");
-                return;
-            };
-            let updates = ZulipHook::new(webhook.receiver);
-            if let Err(e) = run_zulip_update_loop(updates, zulip.bot, handler, zulip.config).await {
-                error!(error = %e, "Zulip webhook ingress failed");
-            }
-        }
-    }
-
-    if let Some(handle) = presence_heartbeat {
-        handle.abort();
-    }
-}
-
-fn start_zulip_presence_heartbeat(
-    bot: Arc<ZulipBot>,
-    enabled: bool,
-    interval_secs: u64,
-) -> Option<tokio::task::JoinHandle<()>> {
-    if !enabled {
-        info!("Zulip presence heartbeat disabled");
-        return None;
-    }
-
-    Some(tokio::spawn(async move {
-        let interval = std::time::Duration::from_secs(interval_secs);
-        info!(interval_secs, "starting Zulip active presence heartbeat");
-
-        loop {
-            if let Err(e) = bot.update_presence("active", true).await {
-                if zulip_presence_rejected_for_bot(&e) {
-                    warn!(
-                        error = %e,
-                        "Zulip rejected presence updates for the bot account; disabling presence heartbeat"
-                    );
-                    return;
-                }
-                warn!(error = %e, "failed to update Zulip presence");
-            }
-            tokio::time::sleep(interval).await;
-        }
-    }))
-}
-
-fn zulip_presence_rejected_for_bot(error: &AgentError) -> bool {
-    error
-        .to_string()
-        .contains("This endpoint does not accept bot requests.")
-}
-
-async fn run_zulip_update_loop<T>(
-    mut updates: T,
-    bot: Arc<ZulipBot>,
-    handler: Arc<ChannelMessageHandler>,
-    config: ZulipChannelConfig,
-) -> Result<(), AgentError>
-where
-    T: ZulipUpdate,
-{
-    updates.init().await?;
-
-    loop {
-        tokio::select! {
-            res = updates.poll() => {
-                match res {
-                    Ok(Some(msg)) => {
-                        if let Err(e) = handler
-                            .handle_zulip_message(
-                                &msg,
-                                &bot,
-                                bot.bot_email(),
-                                config.max_attachment_bytes,
-                                config.max_text_document_chars,
-                            )
-                            .await
-                        {
-                            error!(error = %e, "Zulip handler error");
-                        }
-                    }
-                    Ok(None) => continue,
-                    Err(e) => {
-                        error!(error = %e, "Zulip polling failed, retrying in 5s");
-                        tokio::select! {
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("received Ctrl-C during Zulip retry sleep, shutting down...");
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                info!("received Ctrl-C, shutting down Zulip...");
-                return Ok(());
-            }
-        }
-    }
-}
-
 fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> {
     match std::env::var(env_var) {
         Ok(value) if !value.is_empty() => Ok(value),
@@ -861,313 +608,6 @@ async fn run_diagnostics_command(
     Ok(())
 }
 
-async fn run_telegram_update_loop<T>(
-    mut updates: T,
-    bot: Arc<TelegramBot>,
-    handler: Arc<ChannelMessageHandler>,
-    telegram_config: TelegramChannelConfig,
-) -> Result<(), AgentError>
-where
-    T: TelegramUpdate,
-{
-    updates.init().await?;
-
-    loop {
-        tokio::select! {
-            res = updates.poll() => {
-                match res {
-                    Ok(Some(update)) => {
-                        let bot = bot.clone();
-                        let handler = handler.clone();
-                        let telegram_config = telegram_config.clone();
-                        tokio::spawn(async move {
-                            dispatch_telegram_update(
-                                update,
-                                bot,
-                                handler,
-                                telegram_config,
-                            )
-                            .await;
-                        });
-                    }
-                    Ok(None) => {
-                        continue;
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Telegram update polling failed, retrying in 5s");
-                        tokio::select! {
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("received Ctrl-C during retry sleep, shutting down...");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                info!("received Ctrl-C, shutting down...");
-                break;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn dispatch_telegram_update(
-    update: Update,
-    bot: Arc<TelegramBot>,
-    handler: Arc<ChannelMessageHandler>,
-    telegram_config: TelegramChannelConfig,
-) {
-    let msg = match update.message {
-        Some(m) => m,
-        None => return,
-    };
-
-    let chat_id = msg.chat.id;
-    let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or(0);
-    let address = ConversationAddress::telegram_chat(chat_id);
-    let sender = SenderIdentity::new(
-        user_id.to_string(),
-        msg.from
-            .as_ref()
-            .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone())),
-    );
-
-    // Allowlist check BEFORE building/downloading attachments.
-    // This prevents untrusted users from triggering expensive downloads.
-    let allowed = (telegram_config.allowed_conversations.is_empty()
-        || telegram_config
-            .allowed_conversations
-            .contains(&address.conversation_id))
-        && (telegram_config.allowed_senders.is_empty()
-            || telegram_config.allowed_senders.contains(&sender.sender_id));
-    if !allowed {
-        warn!(?address, ?sender, "skipping message: not in allowlist");
-        return;
-    }
-
-    let (text, attachment_parts, attachment_infos) = build_inbound_message(
-        &msg,
-        bot.as_ref(),
-        telegram_config.max_attachment_bytes,
-        telegram_config.max_text_document_chars,
-    )
-    .await;
-
-    let inbound = InboundMessage {
-        text,
-        attachment_parts,
-        attachments: attachment_infos,
-    };
-
-    let event = ChannelInboundEvent {
-        address,
-        sender,
-        message: inbound,
-    };
-
-    match handler.handle_event(event).await {
-        Ok(()) => {}
-        Err(AgentError::PermissionDenied) => {
-            error!(chat_id, user_id, "permission denied");
-        }
-        Err(e) => {
-            error!(chat_id, error = %e, "message handler error");
-        }
-    }
-}
-
-/// Build an `InboundMessage` from a Telegram update.
-///
-/// Processes attachments (photos, documents) by:
-/// 1. Selecting the largest photo variant
-/// 2. Downloading supported files (bounded by config limits) via `TelegramBot::process_attachment`
-/// 3. Converting to LLM content parts (binary or text)
-/// 4. Building a user prompt from caption or text
-///
-/// Returns (user_prompt, content_parts, attachment_infos).
-async fn build_inbound_message(
-    msg: &nerdbot::telegram::bot::Message,
-    bot: &TelegramBot,
-    max_attachment_bytes: usize,
-    max_text_chars: usize,
-) -> (String, Vec<genai::chat::ContentPart>, Vec<AttachmentInfo>) {
-    let mut attachment_parts = Vec::new();
-    let mut attachment_infos = Vec::new();
-    let mut user_text = String::new();
-
-    // Extract caption first (for photo/document messages)
-    let caption = msg.caption.as_deref().unwrap_or("");
-
-    // Process photos — select the largest variant
-    if !msg.photo.is_empty()
-        && let Some(largest) = attachment::largest_photo_size(&msg.photo)
-    {
-        let file_id = &largest.file_id;
-        let size_bytes = largest.file_size.unwrap_or(0);
-
-        // Download and process as binary via TelegramBot
-        match bot
-            .process_attachment(
-                file_id,
-                None,               // Photos don't have filenames
-                Some("image/jpeg"), // Telegram photos are JPEG
-                size_bytes,
-                max_attachment_bytes,
-                max_text_chars,
-            )
-            .await
-        {
-            Ok(processed) => {
-                attachment_parts.push(processed.content_part);
-                attachment_infos.push(AttachmentInfo {
-                    display_name: format!(
-                        "photo_{}x{}",
-                        largest.width.unwrap_or(0),
-                        largest.height.unwrap_or(0)
-                    ),
-                    mime_type: "image/jpeg".to_string(),
-                    size_bytes,
-                    downloaded: processed.downloaded,
-                    persistence_marker: processed.persistence_marker,
-                    extracted_text: processed.extracted_text,
-                });
-            }
-            Err(e) => {
-                warn!(chat_id = msg.chat.id, error = %e, "failed to process photo attachment");
-                attachment_infos.push(AttachmentInfo {
-                    display_name: "photo".to_string(),
-                    mime_type: "image/jpeg".to_string(),
-                    size_bytes,
-                    downloaded: false,
-                    persistence_marker: format!("[Attachment processing failed: photo, {e}]"),
-                    extracted_text: None,
-                });
-                attachment_parts.push(genai::chat::ContentPart::Text(format!(
-                    "⚠️ Failed to process photo: {e}"
-                )));
-            }
-        }
-    }
-
-    // Track whether an unsupported warning was set (must not be overwritten).
-    let mut unsupported_warn_set = false;
-
-    // Process documents
-    if let Some(doc) = &msg.document {
-        let mime = doc.mime_type.as_deref();
-        let filename = doc.file_name.as_deref();
-        let size_bytes = doc.file_size.unwrap_or(0);
-
-        // Validate before downloading
-        let kind = attachment::classify_attachment(mime, filename);
-
-        if kind == AttachmentKind::Unsupported {
-            let display_name = attachment::sanitize_filename(filename.unwrap_or("document"));
-            let mime_str = mime.unwrap_or("unknown");
-            // For unsupported attachments, prepend the warning to the caption
-            // so the LLM receives both the warning and any user text.
-            let unsupported_msg = format!(
-                "⚠️ Unsupported attachment type: {mime_str} ({display_name}).\n\
-                 Supported: images (JPEG, PNG, WebP, GIF), PDFs, and text documents.",
-            );
-            if !caption.is_empty() {
-                user_text = format!("{unsupported_msg}\n\n{caption}");
-            } else if let Some(text) = &msg.text {
-                user_text = format!("{unsupported_msg}\n\n{text}");
-            } else {
-                user_text = unsupported_msg;
-            }
-            attachment_infos.push(AttachmentInfo {
-                display_name: display_name.clone(),
-                mime_type: mime_str.to_string(),
-                size_bytes,
-                downloaded: false,
-                persistence_marker: format!(
-                    "[Unsupported attachment: {display_name}, type={mime_str}]"
-                ),
-                extracted_text: None,
-            });
-            unsupported_warn_set = true;
-        } else {
-            // Download and process via TelegramBot
-            let file_id = &doc.file_id;
-            match bot
-                .process_attachment(
-                    file_id,
-                    filename,
-                    mime,
-                    size_bytes,
-                    max_attachment_bytes,
-                    max_text_chars,
-                )
-                .await
-            {
-                Ok(processed) => {
-                    attachment_parts.push(processed.content_part);
-                    // Use output filename when available (e.g., HEIC→JPEG conversion),
-                    // falling back to the sanitized original filename.
-                    let display_name = processed.output_filename.clone().unwrap_or_else(|| {
-                        attachment::sanitize_filename(filename.unwrap_or("document"))
-                    });
-                    // Use output metadata when available (e.g., HEIC→JPEG conversion)
-                    let output_mime = if !processed.output_mime_type.is_empty() {
-                        processed.output_mime_type
-                    } else {
-                        mime.unwrap_or("application/octet-stream").to_string()
-                    };
-                    attachment_infos.push(AttachmentInfo {
-                        display_name,
-                        mime_type: output_mime,
-                        size_bytes: processed.output_size_bytes,
-                        downloaded: processed.downloaded,
-                        persistence_marker: processed.persistence_marker,
-                        extracted_text: processed.extracted_text,
-                    });
-                }
-                Err(e) => {
-                    warn!(chat_id = msg.chat.id, error = %e, "failed to process document attachment");
-                    let display_name =
-                        attachment::sanitize_filename(filename.unwrap_or("document"));
-                    attachment_infos.push(AttachmentInfo {
-                        display_name: display_name.clone(),
-                        mime_type: mime.unwrap_or("application/octet-stream").to_string(),
-                        size_bytes,
-                        downloaded: false,
-                        persistence_marker: format!(
-                            "[Attachment processing failed: {display_name}, {e}]"
-                        ),
-                        extracted_text: None,
-                    });
-                    attachment_parts.push(genai::chat::ContentPart::Text(format!(
-                        "⚠️ Failed to process document: {e}"
-                    )));
-                }
-            }
-        }
-    }
-
-    // Determine the user prompt text only if no unsupported warning was set.
-    // Unsupported warnings already include the caption/text, so we must not
-    // overwrite them.
-    if !unsupported_warn_set {
-        // Priority: caption > message text > default prompt
-        if !caption.is_empty() {
-            user_text = caption.to_string();
-        } else if let Some(text) = &msg.text {
-            user_text = text.clone();
-        } else if !attachment_parts.is_empty() {
-            // Attachment-only message: use default prompt
-            user_text = "Please analyze the attached file(s).".to_string();
-        }
-    }
-
-    (user_text, attachment_parts, attachment_infos)
-}
-
 /// Drop guard to guarantee scheduler shutdown when the main execution exits or panics.
 struct SchedulerGuard {
     scheduler: Arc<SchedulerService>,
@@ -1186,20 +626,5 @@ impl Drop for SchedulerGuard {
                 info!("SchedulerGuard: scheduler background loop stopped successfully");
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_zulip_bot_presence_rejection() {
-        let error = AgentError::Zulip(
-            r#"Zulip presence update failed: HTTP 400 Bad Request: {"result":"error","msg":"This endpoint does not accept bot requests.","code":"BAD_REQUEST"}"#
-                .to_string(),
-        );
-
-        assert!(zulip_presence_rejected_for_bot(&error));
     }
 }

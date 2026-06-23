@@ -4,7 +4,9 @@ pub mod attachment;
 pub mod bot;
 pub mod commands;
 pub mod handler;
+pub mod inbound;
 pub mod markdown;
+pub mod runtime;
 pub mod service;
 pub mod update;
 

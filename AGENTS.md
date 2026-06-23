@@ -23,7 +23,7 @@ executes them → results fed back → repeat) → channel reply.
 ### Source Layout
 ```
 src/
-  main.rs          — CLI entry plus startup helpers: tracing/config load, runtime construction, channel registry/service wiring, scheduler/diagnostics startup, and Telegram/Zulip ingress loop dispatch
+  main.rs          — CLI entry plus startup helpers: tracing/config load, top-level runtime composition, channel registry/service wiring, shared webhook setup, scheduler/diagnostics startup, and high-level channel loop orchestration
   lib.rs           — Crate root, re-exports all modules for tests and binary crate
   config.rs        — TOML config loader (AppConfig with agent/webhook/channels/storage/workspace/llm/context/scheduler/shell/files/exa sections)
   onboarding.rs    — Interactive `config.toml` generator for first-run setup
@@ -56,7 +56,9 @@ src/
     attachment.rs  — Attachment DTOs, MIME validation, signature inspection, bounded download, LLM content conversion
     commands.rs    — Bot command parsing/handling (/help, /jobs, /run, /delete, /reset_context, /new_topic); `/jobs` lists active jobs only while `/delete` soft-deletes by disabling rows
     handler.rs     — Telegram-facing compatibility adapter over ChannelMessageHandler for Telegram-shaped callers/tests
+    inbound.rs     — Telegram inbound adapter that converts raw Telegram messages into channel-generic InboundMessage payload pieces, including photo/document attachment processing before ChannelMessageHandler dispatch
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
+    runtime.rs     — Telegram runtime startup, command-menu setup, poll/webhook ingress loop, allowlist precheck, and raw update dispatch into ChannelMessageHandler
     service.rs     — TelegramService: send_message, typing, ChannelService implementation
     update/
       mod.rs       — TelegramUpdate trait and ingress implementation exports
@@ -67,6 +69,7 @@ src/
     mod.rs         — Exports ZulipBot, ZulipService, ZulipPoll, ZulipHook
     bot.rs         — Zulip HTTP API client (Basic auth, send_message, update_presence, register_queue, get_events, download_file)
     attachment.rs  — Regex extraction of user-upload markdown links, MIME classification, bounded download, LLM content conversion
+    runtime.rs     — Zulip runtime startup, bot identity resolution, optional presence heartbeat, poll/webhook ingress loop, and raw message dispatch into ChannelMessageHandler
     service.rs     — ZulipService: send_message with 10K char splitting, typing indicators (PMs only), ChannelService implementation
     update/
       mod.rs       — Zulip ingress module entrypoint plus ZulipUpdate raw-message trait
@@ -143,7 +146,7 @@ README.md          — Project documentation
 **Telegram message with attachments (rich ingress):**
 0. TelegramBot builds production Bot API URLs as `https://api.telegram.org/bot<TOKEN>/<method>`, verifies credentials with `getMe`, configures the Telegram slash-command menu via `setMyCommands`, and registers TelegramService in ChannelRegistry under channel_id `telegram`. `[channels.telegram].ingress = "poll"` clears any existing webhook and uses `getUpdates`; after an empty `getUpdates` result, `TelegramPoll::poll` sleeps for `[channels.telegram].poll_interval_secs` (default 5) before returning `None` to the loop. `[channels.telegram].ingress = "webhook"` requires an HTTPS `web_hook_url`, generates a startup secret token, registers it with Telegram via `setWebhook`, and uses the shared plain HTTP webhook server on `[webhook].host`/`port` (default `127.0.0.1:24682`) to validate `X-Telegram-Bot-Api-Secret-Token` and enqueue updates. The same server exposes `/health` and can also host Zulip webhook routes.
 1. Polling or webhook push receives update; message may include `text`, `caption`, `photo` (array of PhotoSize), and/or `document`
-2. `build_inbound_message` (in main.rs) processes the update:
+2. `telegram::inbound::build_inbound_message` processes the update:
    a. Selects the largest photo variant (by width × height area)
    b. Downloads supported attachments via `TelegramBot::process_attachment` (which calls `get_file` plus the bounded CDN download helper; API and file base URLs are independently injectable for testing)
    c. Classifies each attachment: binary (images, PDFs, HEIC/HEIF) → base64-encoded ContentPart::Binary (HEIC/HEIF converted to JPEG in memory via `libheif-rs`); text documents (txt, md, json, csv, etc.) → ContentPart::Text with filename markers
