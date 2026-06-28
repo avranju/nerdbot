@@ -1,5 +1,6 @@
 //! Scheduling tools — schedule_job, list_jobs, delete_job, run_job_now.
 
+use serde::Serialize;
 use serde_json::json;
 
 use crate::error::AgentError;
@@ -223,6 +224,44 @@ impl Tool for ScheduleJob {
     }
 }
 
+/// Compact DTO for list_jobs tool output — omits large context fields
+/// such as creation_context_snapshot, prompt, and context_policy
+/// to prevent context bloat when the LLM calls list_jobs.
+#[derive(Serialize)]
+pub struct ListJobsJobDto {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub schedule_type: serde_json::Value,
+    pub cron_expression: Option<String>,
+    pub run_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub next_run_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_status: Option<serde_json::Value>,
+    pub timezone: Option<String>,
+    pub notify_on_completion: bool,
+    pub owner_address: crate::channel::ConversationAddress,
+}
+
+impl From<&crate::storage::jobs::StoredJob> for ListJobsJobDto {
+    fn from(job: &crate::storage::jobs::StoredJob) -> Self {
+        Self {
+            id: job.id.clone(),
+            name: job.name.clone(),
+            enabled: job.enabled,
+            schedule_type: job.schedule_type.clone(),
+            cron_expression: job.cron_expression.clone(),
+            run_at: job.run_at,
+            next_run_at: job.next_run_at,
+            last_run_at: job.last_run_at,
+            last_status: job.last_status.clone(),
+            timezone: job.timezone.clone(),
+            notify_on_completion: job.notify_on_completion,
+            owner_address: job.owner_address(),
+        }
+    }
+}
+
 pub struct ListJobs;
 
 #[async_trait::async_trait]
@@ -294,10 +333,12 @@ impl Tool for ListJobs {
             s
         };
 
+        let compact_jobs: Vec<ListJobsJobDto> = jobs.iter().map(ListJobsJobDto::from).collect();
+
         Ok(ToolOutput {
             success: true,
             summary,
-            data: json!(jobs),
+            data: json!(compact_jobs),
         })
     }
 }

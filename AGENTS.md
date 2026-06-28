@@ -235,7 +235,7 @@ README.md          — Project documentation
 ### Built-in Tools (registered in main.rs)
 - `echo` — Debug echo
 - `calculator` — Math evaluation
-- `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; list commands return active jobs by default, the `list_jobs` tool accepts `include_disabled = true` for disabled/deleted job history, and delete disables persisted jobs so they stop running but remain available for direct lookup/history
+- `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; `list_jobs` returns compact job metadata only (id, name, enabled, schedule_type, cron_expression, run_at, next_run_at, last_run_at, last_status, timezone, notify_on_completion, owner_address) and intentionally omits `creation_context_snapshot`, `prompt`, and `context_policy` to prevent context bloat. Snapshots remain persisted in the database and are available for scheduled job execution. `list_jobs` accepts `include_disabled = true` for disabled/deleted job history, and `delete_job` disables persisted jobs so they stop running but remain available for direct lookup/history.
 - `send_user_message` — Send messages to the current or explicitly targeted channel conversation. Enforces the run's channel-aware access policy against the full `ConversationAddress` (channel_id + conversation_id + thread_id), not just conversation_id alone. Same conversation ID on a different channel is rejected.
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
 - `web_search` — Exa-powered web search

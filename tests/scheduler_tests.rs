@@ -318,6 +318,96 @@ async fn test_scheduling_tools_and_wakeup_signaling() {
     assert!(!deleted_job.enabled);
 }
 
+// ── Test: list_jobs omits creation_context_snapshot and stays compact ──
+
+#[tokio::test]
+async fn test_list_jobs_tool_omits_creation_context_snapshot_and_stays_compact() {
+    let pool = setup_test_db().await;
+    let ctx = ToolContext {
+        run_mode: AgentRunMode::InteractiveReply {
+            address: nerdbot::channel::ConversationAddress::telegram_chat(123),
+            sender: nerdbot::channel::SenderIdentity::new((456).to_string(), None),
+        },
+        workspace_root: PathBuf::from("/tmp"),
+        access_policy: nerdbot::channel::ChannelAccessPolicy::default(),
+        channel_registry: None,
+        pool: Some(pool.clone()),
+        scheduler_notifier: None,
+    };
+
+    // Build a large creation_context_snapshot (hundreds of KB)
+    let large_snapshot: String = "x".repeat(500_000);
+
+    // Insert a job with the large snapshot
+    let job = storage::jobs::create_job_full(
+        &pool,
+        storage::jobs::CreateJobInput {
+            owner_address: telegram_address(123),
+            name: "Big Snapshot Job".into(),
+            prompt: "run analytics".into(),
+            schedule_type: ScheduleType::OneShot,
+            cron_expression: None,
+            run_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            timezone: None,
+            notify_on_completion: true,
+            context_policy: JobContextPolicy::IncludeCreationSnapshot,
+            creation_context_snapshot: Some(large_snapshot.clone()),
+            next_run_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Verify the stored job still has the full snapshot
+    let stored = storage::jobs::get_job(&pool, &job.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.creation_context_snapshot.as_ref().unwrap().len(),
+        500_000
+    );
+
+    // Call list_jobs tool
+    let tool = nerdbot::tools::schedule::ListJobs;
+    let result = tool.execute(serde_json::json!({}), ctx).await.unwrap();
+
+    // Assert summary still works
+    assert!(result.summary.contains("Big Snapshot Job"));
+
+    // Assert data is a JSON array with one element
+    let arr = result.data.as_array().expect("data should be an array");
+    assert_eq!(arr.len(), 1);
+
+    // Assert the first element does not contain creation_context_snapshot
+    let first = &arr[0];
+    let json_str = serde_json::to_string(first).unwrap();
+    assert!(
+        !json_str.contains("creation_context_snapshot"),
+        "list_jobs output must not contain creation_context_snapshot"
+    );
+
+    // Assert the first element does not contain the sentinel filler
+    assert!(
+        !json_str.contains("xxxxx"),
+        "list_jobs output must not contain large context content"
+    );
+
+    // Assert the first element does not contain `prompt` key
+    let obj = first.as_object().expect("data element should be an object");
+    assert!(
+        !obj.contains_key("prompt"),
+        "list_jobs output must not contain prompt"
+    );
+
+    // Assert the serialized response is compact (well under 4 KB for one job)
+    assert!(
+        json_str.len() < 4096,
+        "list_jobs response should be compact ({} bytes)",
+        json_str.len()
+    );
+}
+
 #[tokio::test]
 async fn test_list_jobs_tool_can_include_disabled_jobs() {
     let pool = setup_test_db().await;
