@@ -559,6 +559,45 @@ async fn test_handler_accepts_rich_message_with_text() {
 }
 
 #[tokio::test]
+async fn test_handler_sends_harness_fallback_for_silent_agent_completion() {
+    let pool = setup_test_db().await;
+
+    let mut registry = ToolRegistry::new();
+    registry.register(EchoTool);
+    let provider: Arc<dyn LlmExecutor> = Arc::new(FakeProvider::new(vec![FakeResponse {
+        assistant_text: None,
+        tool_calls: Vec::new(),
+        stop_reason: None,
+        token_usage: None,
+    }]));
+    let compaction_service = make_compaction_service(pool.clone());
+
+    let config = AppConfig::default();
+    let handler = MessageHandler::new(MessageHandlerInput {
+        pool,
+        llm: provider,
+        registry: Arc::new(registry),
+        config: config.clone(),
+        personality: Personality::from_config(&config),
+        scheduler_notifier: None,
+        telegram_service: None,
+        compaction_service,
+    });
+
+    let inbound = InboundMessage {
+        text: "Do the thing".to_string(),
+        attachment_parts: Vec::new(),
+        attachments: Vec::new(),
+    };
+
+    let response = handler.handle_rich_message(1, 1, &inbound).await.unwrap();
+    assert_eq!(
+        response.as_deref(),
+        Some("NerdBot: Agent run completed with no response.")
+    );
+}
+
+#[tokio::test]
 async fn test_handler_commands_override_attachments() {
     let pool = setup_test_db().await;
     let handler = make_handler(pool);

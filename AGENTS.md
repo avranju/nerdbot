@@ -161,7 +161,7 @@ README.md          — Project documentation
 6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, excludes binary payloads from token estimation, and appends the current date/time as a trailing text part on the current user message without flattening rich attachment parts. The datetime is formatted in 24-hour local time with timezone abbreviation and UTC offset.
 7. Starts a channel typing indicator when supported; Telegram refreshes `typing` every 4 seconds while the interactive agent loop runs
 8. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-9. Persists current user message and assistant reply → sends via ChannelRegistry
+9. Persists current user message and assistant reply → sends via ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **CLI onboarding:**
@@ -183,7 +183,7 @@ README.md          — Project documentation
 5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once, and adds the current date/time as trailing 24-hour timezone-qualified text in that user message to preserve cacheable prompt prefixes
 6. Starts a channel typing indicator when supported
 7. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-8. Persists current user message and assistant reply → sends through ChannelRegistry
+8. Persists current user message and assistant reply → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Interactive Zulip message:**
@@ -201,7 +201,7 @@ README.md          — Project documentation
 9. Starts a channel typing indicator when supported (Zulip typing is direct-message-only, refreshed every 8 seconds, and stopped with a best-effort `op = "stop"` when the agent run finishes). For direct-message typing notifications, NerdBot keeps the stable conversation/session identity as sorted participant emails but caches numeric Zulip user IDs from inbound `display_recipient` payloads because `/api/v1/typing` requires `type = "direct"` and integer user IDs in the `to` array. When `/users/me` provided a current user ID, NerdBot filters that ID rather than relying only on email string equality.
 10. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text; typing refresh stops as soon as the run returns
 11. Outbound messages split at 10,000 chars via `ZulipService::send_message`
-12. Persists current user message and assistant reply → sends through ChannelRegistry
+12. Persists current user message and assistant reply → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 13. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**

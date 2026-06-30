@@ -23,6 +23,8 @@ use crate::storage;
 use crate::telegram::commands::{CommandHandler, TelegramCommand};
 use crate::tools::registry::ToolRegistry;
 
+const SILENT_AGENT_FALLBACK_RESPONSE: &str = "NerdBot: Agent run completed with no response.";
+
 pub struct ChannelMessageHandler {
     pool: SqlitePool,
     llm: Arc<dyn LlmExecutor>,
@@ -327,7 +329,7 @@ impl ChannelMessageHandler {
         match result {
             Ok(agent_result) => match agent_result.outcome {
                 AgentOutcome::FinalText(text) => Ok(Some(text)),
-                AgentOutcome::Silent => Ok(None),
+                AgentOutcome::Silent => Ok(Some(SILENT_AGENT_FALLBACK_RESPONSE.to_string())),
             },
             Err(e) => {
                 error!(?address, error = %e, "agent loop failed");
