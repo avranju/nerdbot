@@ -73,7 +73,7 @@ src/
     service.rs     — ZulipService: send_message with 10K char splitting, typing indicators (PMs only), ChannelService implementation
     update/
       mod.rs       — Zulip ingress module entrypoint plus ZulipUpdate raw-message trait
-      poll.rs      — ZulipPoll: event queue registration, long-polling loop, BAD_EVENT_QUEUE_ID recovery, raw message buffering
+      poll.rs      — ZulipPoll: event queue registration, long-polling loop, BAD_EVENT_QUEUE_ID recovery (including Zulip's HTTP 400 form), raw message buffering
       hook.rs      — ZulipHook queue-backed webhook ingress; shared HTTP server validates/enqueues payloads
 
   scheduler/
@@ -188,7 +188,7 @@ README.md          — Project documentation
 
 **Interactive Zulip message:**
 0. ZulipBot authenticates via Basic auth (bot_email + api_key), normalizes site_url with trailing slash, and stores `/users/me`'s `user_id` plus `full_name`. The stored user ID is used to skip self-sent messages and to exclude the authenticated account from DM participant/typing-recipient resolution, because human/service accounts may expose event email addresses that differ from the configured login/API email. `[channels.zulip].presence_enabled` defaults to false because current Zulip servers reject `POST /api/v1/users/me/presence` for bot accounts with `This endpoint does not accept bot requests.` If presence is explicitly enabled, the Zulip runtime attempts an active-presence heartbeat with `status = "active"`, `ping_only = true`, and `new_user_input = false`; the heartbeat interval is `[channels.zulip].presence_ping_interval_secs` (default 60 seconds), the task is aborted when the Zulip ingress loop exits, and it self-disables after the bot-account rejection. Zulip supports two ingress modes:
-   - **Poll**: POST `/api/v1/register` with `apply_markdown=false` to get raw Markdown message content plus queue_id, then loop GET `/api/v1/events` with `dont_block=false`; on `BAD_EVENT_QUEUE_ID`, re-register. Poll interval controlled by `[channels.zulip].poll_interval_secs` (default 2s).
+   - **Poll**: POST `/api/v1/register` with `apply_markdown=false` to get raw Markdown message content plus queue_id, then loop GET `/api/v1/events` with `dont_block=false`; on `BAD_EVENT_QUEUE_ID` (including Zulip's HTTP 400 response), preserve the machine-readable code and re-register. Poll interval controlled by `[channels.zulip].poll_interval_secs` (default 2s).
    - **Webhook**: `[channels.zulip].web_hook_url` (required; public HTTPS Zulip webhook URL) — path is extracted from this URL (mirroring Telegram's pattern). The shared plain HTTP webhook server on `[webhook].host`/`port` validates `token` field against `web_hook_token_env`, queues accepted payloads, replies to Zulip with `{"response_not_required": true}`, and sends the eventual bot response asynchronously through Zulip's REST API rather than in the webhook HTTP response.
 1. Polling or webhook push receives Zulip message event
 2. Ingress first decides whether the message is addressed to NerdBot before access checks, sessions, or attachment downloads. Self-sent messages are ignored; stream messages require a direct `@**BotName**` or Zulip raw `@**BotName|user_id**` mention anywhere in the raw Markdown content; one-to-one DMs are accepted without a mention; group DMs require a direct bot mention anywhere in the message. Unknown bot names do not fall back to broad "any mention" matching, so stream/group-DM messages are ignored unless the fetched `/users/me` full name produced a precise bot mention pattern.

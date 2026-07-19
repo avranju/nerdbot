@@ -1031,10 +1031,10 @@ async fn test_site_url_normalization_without_trailing_slash() {
 async fn test_get_events_bad_queue_id_error() {
     let mock_server = MockServer::start().await;
 
-    // Real Zulip BAD_EVENT_QUEUE_ID error response does NOT include an "events" field.
+    // Current Zulip servers return this error as HTTP 400, not HTTP 200.
     Mock::given(method("GET"))
         .and(path_regex("/api/v1/events"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
+        .respond_with(ResponseTemplate::new(400).set_body_string(
             r#"{"result": "error", "msg": "Bad event queue id", "code": "BAD_EVENT_QUEUE_ID"}"#,
         ))
         .mount(&mock_server)
@@ -1049,8 +1049,11 @@ async fn test_get_events_bad_queue_id_error() {
     let result = bot.get_events("expired-queue", 0).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    let err_str = format!("{:?}", err);
-    assert!(err_str.contains("BAD_EVENT_QUEUE_ID"));
+    assert_eq!(
+        err.to_string(),
+        "Zulip error: BAD_EVENT_QUEUE_ID",
+        "the poller needs the machine-readable code to re-register its queue"
+    );
 }
 
 // ── Zulip API Error Response Tests (HTTP 200 with result="error") ───

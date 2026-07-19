@@ -612,6 +612,18 @@ impl ZulipBot {
             .map_err(|e| AgentError::Zulip(format!("Failed to read events response body: {e}")))?;
 
         if !status.is_success() {
+            // Zulip returns BAD_EVENT_QUEUE_ID as HTTP 400 on current servers.
+            // Preserve that machine-readable error so ZulipPoll can re-register
+            // instead of retrying the expired queue indefinitely.
+            if serde_json::from_str::<ZulipApiEmptyResponse>(&body)
+                .ok()
+                .and_then(|response| response.code)
+                .as_deref()
+                == Some("BAD_EVENT_QUEUE_ID")
+            {
+                return Err(AgentError::Zulip("BAD_EVENT_QUEUE_ID".to_string()));
+            }
+
             return Err(AgentError::Zulip(format!(
                 "Zulip events failed: HTTP {status}: {body}"
             )));
