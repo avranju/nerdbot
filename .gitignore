@@ -2,6 +2,7 @@
 .antigravitycli/
 .vscode/
 .pi/
+.pi-subagents/
 
 # Environment files (may contain secrets)
 .env
