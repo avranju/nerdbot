@@ -130,7 +130,7 @@ fn handler_with_config(
     config: AppConfig,
 ) -> ChannelMessageHandler {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(EchoTool).unwrap();
     let worker = CompactionWorker::new(provider.clone(), "fake".into(), 0.0);
     let service = Arc::new(CompactionService::new(
         pool.clone(),
@@ -795,7 +795,7 @@ async fn scheduled_snapshots_normalize_legacy_and_partial_batches_and_persist_or
             creation_context_snapshot: Some(snapshot), next_run_at: None,
         }).await.unwrap();
         let provider = Arc::new(FakeProvider::new(vec![FakeResponse::tool_calls(vec![call("new", "echo")]), FakeResponse::final_text("done")]));
-        let mut registry = ToolRegistry::new(); registry.register(EchoTool);
+        let mut registry = ToolRegistry::new(); registry.register(EchoTool).unwrap();
         nerdbot::scheduler::runner::run_scheduled_job(nerdbot::scheduler::runner::RunScheduledJobInput {
             pool: pool.clone(), llm: provider.clone(), registry: Arc::new(registry), channel_registry: Arc::new(ChannelRegistry::new(vec![])),
             loop_config: nerdbot::agent::agent_loop::AgentLoopConfig::default(), personality: "".into(),
@@ -994,7 +994,9 @@ async fn scheduled_notification_dedup_uses_current_run_even_with_old_outputs() {
         let provider = Arc::new(FakeProvider::new(responses));
         let channel = Arc::new(RecordingChannel::default());
         let mut registry = ToolRegistry::new();
-        registry.register(nerdbot::tools::messaging::SendUserMessage);
+        registry
+            .register(nerdbot::tools::messaging::SendUserMessage)
+            .unwrap();
         nerdbot::scheduler::runner::run_scheduled_job(
             nerdbot::scheduler::runner::RunScheduledJobInput {
                 pool: pool.clone(),

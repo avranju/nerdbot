@@ -12,6 +12,18 @@ pub enum AgentError {
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
 
+    #[error("MCP error: {0}")]
+    Mcp(String),
+
+    #[error(
+        "Tool name collision for {name:?}: existing provider {existing_provider}, incoming provider {incoming_provider}"
+    )]
+    ToolNameCollision {
+        name: String,
+        existing_provider: String,
+        incoming_provider: String,
+    },
+
     #[error("Invalid tool arguments: {0}")]
     InvalidToolArgs(String),
 
