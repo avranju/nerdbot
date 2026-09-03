@@ -186,3 +186,25 @@ network_access = "disabled"
 api_key_env = "EXA_API_KEY"
 max_results = 5
 max_text_chars = 8000
+
+# ── Runtime MCP Extensions ────────────────────────────────────────
+# MCP servers are trusted extensions: their enabled tools have the same
+# effective privileges as built-in tools. Version 1 supports Streamable HTTP
+# only; stdio transport is deferred. Keep bearer tokens in the environment.
+# include_tools = [] means all discovered tools. exclude_tools wins over it.
+# tool_prefix, when set, is prepended to the remote tool names.
+#
+# [[mcp.servers]]
+# name = "mail"
+# enabled = true
+# required = false
+# tool_prefix = ""
+# include_tools = ["mail_search", "mail_get"]
+# exclude_tools = []
+# connect_timeout_secs = 10
+# call_timeout_secs = 60
+#
+# [mcp.servers.transport]
+# type = "streamable_http"
+# url = "http://127.0.0.1:8090/mcp"
+# bearer_token_env = "MAILINDEX_API_TOKEN"

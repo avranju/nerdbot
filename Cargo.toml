@@ -34,6 +34,7 @@ bytes = "1"
 constant_time_eq = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 libheif-rs = { version = "2.7", default-features = false, features = ["v1_17", "image"] }
+rmcp = { version = "3.1", default-features = false, features = ["client", "server", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 
 [dev-dependencies]
 mockall = "0.13"

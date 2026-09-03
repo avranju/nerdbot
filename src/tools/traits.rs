@@ -57,10 +57,10 @@ pub struct ToolOutput {
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     /// Unique name of the tool (must match what the LLM will call).
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Human-readable description of what the tool does.
-    fn description(&self) -> &'static str;
+    fn description(&self) -> &str;
 
     /// JSON Schema describing the tool's expected input arguments.
     fn input_schema(&self) -> Value;

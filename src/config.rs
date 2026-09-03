@@ -36,6 +36,8 @@ pub struct AppConfig {
     pub files: FilesConfig,
     #[serde(default)]
     pub exa: ExaConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 /// Agent-specific configuration.
@@ -420,6 +422,43 @@ pub struct ShellConfig {
     pub network_access: String,
 }
 
+/// Runtime MCP extension configuration.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub required: bool,
+    pub transport: McpTransportConfig,
+    #[serde(default)]
+    pub tool_prefix: Option<String>,
+    #[serde(default)]
+    pub include_tools: Vec<String>,
+    #[serde(default)]
+    pub exclude_tools: Vec<String>,
+    #[serde(default = "default_mcp_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default = "default_mcp_call_timeout_secs")]
+    pub call_timeout_secs: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpTransportConfig {
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        bearer_token_env: Option<String>,
+    },
+}
+
 /// Exa web search configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ExaConfig {
@@ -566,11 +605,23 @@ fn default_exa_num_results() -> usize {
 fn default_exa_max_text_chars() -> usize {
     8000
 }
+fn default_mcp_connect_timeout_secs() -> u64 {
+    10
+}
+fn default_mcp_call_timeout_secs() -> u64 {
+    60
+}
 fn default_max_attachment_bytes() -> usize {
     5_242_880 // 5 MB
 }
 fn default_max_text_document_chars() -> usize {
     32_768 // 32 KB
+}
+
+pub const MCP_TOOL_NAME_MAX_LEN: usize = 64;
+
+pub fn is_valid_tool_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
 }
 
 fn default_false() -> bool {
@@ -736,6 +787,81 @@ impl AppConfig {
                     "webhook.port must be greater than 0 when any channel webhook ingress is enabled"
                         .into(),
                 ));
+            }
+        }
+
+        let mut mcp_names = std::collections::HashSet::new();
+        for server in &self.mcp.servers {
+            if server.name.trim().is_empty() {
+                return Err(AgentError::Config(
+                    "mcp server names must not be blank".into(),
+                ));
+            }
+            if !mcp_names.insert(server.name.clone()) {
+                return Err(AgentError::Config(format!(
+                    "duplicate mcp server name {:?}",
+                    server.name
+                )));
+            }
+            if server.connect_timeout_secs == 0 || server.call_timeout_secs == 0 {
+                return Err(AgentError::Config(format!(
+                    "mcp server {:?} timeouts must be greater than 0",
+                    server.name
+                )));
+            }
+            if let Some(prefix) = &server.tool_prefix
+                && (prefix.len() >= MCP_TOOL_NAME_MAX_LEN
+                    || !prefix.bytes().all(is_valid_tool_name_byte))
+            {
+                return Err(AgentError::Config(format!(
+                    "mcp server {:?} has an invalid tool_prefix",
+                    server.name
+                )));
+            }
+            for (kind, names) in [
+                ("include_tools", &server.include_tools),
+                ("exclude_tools", &server.exclude_tools),
+            ] {
+                if names.iter().any(|name| name.trim().is_empty()) {
+                    return Err(AgentError::Config(format!(
+                        "mcp server {:?} {kind} must not contain blank names",
+                        server.name
+                    )));
+                }
+            }
+            match &server.transport {
+                McpTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env,
+                } => {
+                    let parsed = Url::parse(url.trim()).map_err(|e| {
+                        AgentError::Config(format!(
+                            "mcp server {:?} URL is invalid: {e}",
+                            server.name
+                        ))
+                    })?;
+                    if !matches!(parsed.scheme(), "http" | "https") {
+                        return Err(AgentError::Config(format!(
+                            "mcp server {:?} URL must use http or https",
+                            server.name
+                        )));
+                    }
+                    if parsed.host_str().is_none() {
+                        return Err(AgentError::Config(format!(
+                            "mcp server {:?} URL must include a host",
+                            server.name
+                        )));
+                    }
+                    if bearer_token_env
+                        .as_deref()
+                        .is_some_and(|env| env.trim().is_empty())
+                    {
+                        return Err(AgentError::Config(format!(
+                            "mcp server {:?} bearer_token_env must not be blank",
+                            server.name
+                        )));
+                    }
+                }
             }
         }
 

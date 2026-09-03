@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use nerdbot::config::{AppConfig, TelegramIngress};
+use nerdbot::config::{AppConfig, McpServerConfig, McpTransportConfig, TelegramIngress};
 
 // ── Default values ───────────────────────────────────────────────────────
 
@@ -651,6 +651,101 @@ model = "gpt-4o"
         err.contains("channels.zulip.presence_ping_interval_secs must be greater than 0"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn test_mcp_defaults_are_empty() {
+    let config = AppConfig::default();
+    assert!(config.mcp.servers.is_empty());
+}
+
+#[test]
+fn test_parse_mcp_streamable_http_defaults() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[[mcp.servers]]
+name = "mail"
+[mcp.servers.transport]
+type = "streamable_http"
+url = "https://example.test/mcp"
+"#,
+    )
+    .unwrap();
+    let config = AppConfig::from_file(&path).unwrap();
+    let server = &config.mcp.servers[0];
+    assert!(server.enabled);
+    assert!(!server.required);
+    assert_eq!(server.connect_timeout_secs, 10);
+    assert_eq!(server.call_timeout_secs, 60);
+    assert!(server.include_tools.is_empty());
+}
+
+#[test]
+fn test_mcp_rejects_duplicate_names_and_invalid_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[[mcp.servers]]
+name = "mail"
+tool_prefix = "bad prefix"
+[mcp.servers.transport]
+type = "streamable_http"
+url = "https://example.test/mcp"
+
+[[mcp.servers]]
+name = "mail"
+[mcp.servers.transport]
+type = "streamable_http"
+url = "https://example.test/other"
+"#,
+    )
+    .unwrap();
+    assert!(AppConfig::from_file(&path).is_err());
+}
+
+#[test]
+fn test_mcp_rejects_prefix_that_cannot_fit_a_tool_name() {
+    let mut config = AppConfig::default();
+    config.mcp.servers.push(McpServerConfig {
+        name: "mail".into(),
+        enabled: true,
+        required: false,
+        transport: McpTransportConfig::StreamableHttp {
+            url: "https://example.test/mcp".into(),
+            bearer_token_env: None,
+        },
+        tool_prefix: Some("x".repeat(64)),
+        include_tools: vec![],
+        exclude_tools: vec![],
+        connect_timeout_secs: 10,
+        call_timeout_secs: 60,
+    });
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn test_mcp_rejects_zero_timeout_and_blank_token_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[[mcp.servers]]
+name = "mail"
+connect_timeout_secs = 0
+[mcp.servers.transport]
+type = "streamable_http"
+url = "https://example.test/mcp"
+bearer_token_env = "  "
+"#,
+    )
+    .unwrap();
+    assert!(AppConfig::from_file(&path).is_err());
 }
 
 #[test]

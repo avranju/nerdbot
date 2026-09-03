@@ -13,6 +13,39 @@ use genai::chat::ToolCall;
 use nerdbot::error::AgentError;
 use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::traits::{Tool, ToolContext, ToolOutput};
+use std::sync::Arc;
+
+struct RuntimeMetadataTool {
+    name: String,
+    description: String,
+}
+
+#[async_trait::async_trait]
+impl Tool for RuntimeMetadataTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, AgentError> {
+        Ok(ToolOutput {
+            success: true,
+            data: serde_json::Value::Null,
+            summary: "ok".into(),
+        })
+    }
+}
 
 // ── ToolContext ──────────────────────────────────────────────────────────
 
@@ -123,6 +156,67 @@ fn test_registry_new_is_empty() {
     let registry = ToolRegistry::new();
     assert!(registry.is_empty());
     assert_eq!(registry.len(), 0);
+}
+
+#[test]
+fn test_registry_rejects_duplicate_names_with_provider_labels() {
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(RuntimeMetadataTool {
+            name: "dynamic".into(),
+            description: "first".into(),
+        })
+        .unwrap();
+    let error = registry
+        .register_boxed_from(
+            Arc::new(RuntimeMetadataTool {
+                name: "dynamic".into(),
+                description: "second".into(),
+            }),
+            "mcp:mail",
+        )
+        .unwrap_err();
+    match error {
+        AgentError::ToolNameCollision {
+            name,
+            existing_provider,
+            incoming_provider,
+        } => {
+            assert_eq!(name, "dynamic");
+            assert_eq!(existing_provider, "builtin");
+            assert_eq!(incoming_provider, "mcp:mail");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(registry.len(), 1);
+}
+
+#[test]
+fn test_registry_batch_registration_is_atomic() {
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(RuntimeMetadataTool {
+            name: "existing".into(),
+            description: "existing".into(),
+        })
+        .unwrap();
+    let before = serde_json::to_string(&registry.specs()).unwrap();
+    let result = registry.register_batch_from(
+        vec![
+            Arc::new(RuntimeMetadataTool {
+                name: "new".into(),
+                description: "new".into(),
+            }),
+            Arc::new(RuntimeMetadataTool {
+                name: "existing".into(),
+                description: "collision".into(),
+            }),
+        ],
+        "mcp:mail",
+    );
+    assert!(result.is_err());
+    assert_eq!(registry.len(), 1);
+    assert_eq!(serde_json::to_string(&registry.specs()).unwrap(), before);
 }
 
 #[test]

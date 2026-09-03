@@ -21,6 +21,7 @@ use nerdbot::context::compaction_worker::CompactionWorker;
 use nerdbot::diagnostics::server::DiagnosticsServer;
 use nerdbot::error::AgentError;
 use nerdbot::llm::{LlmClient, LlmExecutor};
+use nerdbot::mcp::McpManager;
 use nerdbot::scheduler::service::SchedulerService;
 use nerdbot::storage::Database;
 use nerdbot::telegram::runtime::{
@@ -194,6 +195,7 @@ struct AppRuntime {
     handler: Arc<ChannelMessageHandler>,
     telegram: Option<TelegramRuntime>,
     zulip: Option<ZulipRuntime>,
+    mcp: Arc<McpManager>,
 }
 
 async fn build_runtime(
@@ -203,7 +205,7 @@ async fn build_runtime(
     ensure_channel_enabled(&config)?;
 
     let db = init_storage(&config).await?;
-    let registry = build_tool_registry(&config);
+    let (registry, mcp) = build_tool_registry(&config).await?;
     let llm = build_llm(&config)?;
     let compaction_service = build_compaction_service(&config, db.clone(), llm.clone());
     let personality = Personality::from_config(&config);
@@ -248,6 +250,7 @@ async fn build_runtime(
         handler,
         telegram,
         zulip,
+        mcp,
     })
 }
 
@@ -266,21 +269,23 @@ async fn init_storage(config: &AppConfig) -> Result<Arc<Database>, AgentError> {
     Ok(Arc::new(db))
 }
 
-fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
+async fn build_tool_registry(
+    config: &AppConfig,
+) -> Result<(Arc<ToolRegistry>, Arc<McpManager>), AgentError> {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
-    registry.register(CalculatorTool);
-    registry.register(ScheduleJob);
-    registry.register(ListJobs);
-    registry.register(DeleteJob);
-    registry.register(RunJobNow);
-    registry.register(SendUserMessage);
+    registry.register(EchoTool)?;
+    registry.register(CalculatorTool)?;
+    registry.register(ScheduleJob)?;
+    registry.register(ListJobs)?;
+    registry.register(DeleteJob)?;
+    registry.register(RunJobNow)?;
+    registry.register(SendUserMessage)?;
 
     let file_config = FileConfig::from(config.files.clone());
-    registry.register(ReadFile::new(file_config.clone()));
-    registry.register(WriteFile::new(file_config.clone()));
-    registry.register(AppendFile::new(file_config.clone()));
-    registry.register(ListDirectory::new(file_config));
+    registry.register(ReadFile::new(file_config.clone()))?;
+    registry.register(WriteFile::new(file_config.clone()))?;
+    registry.register(AppendFile::new(file_config.clone()))?;
+    registry.register(ListDirectory::new(file_config))?;
 
     let exa_api_key = std::env::var(&config.exa.api_key_env).unwrap_or_default();
     if exa_api_key.is_empty() {
@@ -289,8 +294,8 @@ fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
             "Exa API key not set — web_search and web_fetch will return errors"
         );
     }
-    registry.register(WebSearch::new(exa_api_key.clone(), config.exa.max_results));
-    registry.register(WebFetch::new(exa_api_key, config.exa.max_text_chars));
+    registry.register(WebSearch::new(exa_api_key.clone(), config.exa.max_results))?;
+    registry.register(WebFetch::new(exa_api_key, config.exa.max_text_chars))?;
 
     registry.register(ShellExecute::new(ShellConfig {
         allowed_commands: config.shell.allowed_commands.clone(),
@@ -299,9 +304,10 @@ fn build_tool_registry(config: &AppConfig) -> Arc<ToolRegistry> {
         timeout_secs: config.shell.timeout_secs,
         sandbox_mode: config.shell.sandbox_mode.clone(),
         network_access: config.shell.network_access.clone(),
-    }));
+    }))?;
 
-    Arc::new(registry)
+    let mcp = McpManager::initialize(config, &mut registry).await?;
+    Ok((Arc::new(registry), Arc::new(mcp)))
 }
 
 fn build_llm(config: &AppConfig) -> Result<Arc<dyn LlmExecutor>, AgentError> {
@@ -526,6 +532,7 @@ async fn run_runtime(mut runtime: AppRuntime) {
     if let Some(server) = runtime.webhook_server.as_mut() {
         server.stop().await;
     }
+    runtime.mcp.shutdown().await;
     info!("Shutdown complete.");
 }
 

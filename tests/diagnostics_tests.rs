@@ -453,7 +453,9 @@ async fn test_diagnostics_server_exposes_personality_summary_and_tools_when_requ
     config.agent.personality_file = personality_file;
 
     let mut registry = ToolRegistry::new();
-    registry.register(nerdbot::tools::echo::EchoTool);
+    registry
+        .register(nerdbot::tools::echo::EchoTool)
+        .expect("register echo tool");
     let registry = Arc::new(registry);
 
     let mut server = start_diagnostics_server(

@@ -11,6 +11,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod error;
 pub mod llm;
+pub mod mcp;
 pub mod onboarding;
 pub mod scheduler;
 pub mod storage;

@@ -43,6 +43,12 @@ src/
     mod.rs         — LlmExecutor trait + LlmClient wrapping genai::Client, including configurable retries for transient network/server failures
     fake.rs        — FakeProvider for testing without real LLM APIs
 
+  mcp/
+    mod.rs         — Runtime MCP extension boundary and public adapter exports
+    client.rs      — Long-lived rmcp Streamable HTTP client sessions, timeout-bounded handshakes/calls, generation-gated reconnect retry, peer metadata, and shutdown
+    manager.rs     — Startup discovery, filtering, collision-safe atomic registry population, and shutdown
+    tool_proxy.rs  — MCP tool metadata and CallToolResult conversion to ordinary ToolOutput
+
   channel/
     mod.rs         — Generic communication channel exports
     types.rs       — ConversationAddress, SenderIdentity, InboundMessage, OutboundMessage, MessageFormat, ConversationAddressPattern, ChannelAccessPolicy
@@ -86,7 +92,7 @@ src/
   tools/
     mod.rs
     traits.rs      — Tool trait + ToolContext + ToolOutput
-    registry.rs    — ToolRegistry: register, specs, execute
+    registry.rs    — ToolRegistry: fallible provider-aware registration, atomic batches, specs, execute
     calculator.rs  — Math calculator tool
     echo.rs        — Echo/debug tool
     files.rs       — read_file, write_file, append_file, list_directory
@@ -164,6 +170,13 @@ README.md          — Project documentation
 9. Persists current user message and assistant reply → sends via ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
+**Runtime MCP extensions:**
+1. Startup registers built-in tools through the fallible, provider-aware ToolRegistry API
+2. Enabled `[mcp.servers]` entries connect through rmcp Streamable HTTP, discover `tools/list` (including SDK pagination), and expose filtered/prefixed tools in configuration order
+3. MCP sessions remain alive for the runtime; calls enforce per-server timeouts and use one bounded reconnect/retry path for transport failures, guarded by connection generations so concurrent failures do not replace a newer session
+4. Optional server failures are warned and skipped atomically; required failures abort startup. Sessions are closed during graceful shutdown
+5. Version 1 supports Streamable HTTP only; stdio is explicitly deferred. Configured MCP servers are trusted extensions and normal channel access control still runs before every tool call. Connection logs include sanitized peer implementation metadata and reconnect/shutdown state changes
+
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
 2. If the config file exists, load it and use its current values as prompt defaults
@@ -233,6 +246,8 @@ README.md          — Project documentation
 5. `show_session` returns the shared context snapshot, live in-memory `CompactionState`, the effective cached personality prompt (with timezone context), the summary prompt metadata, and tool-spec count/cost. The full prompt and spec bodies are hidden by default and returned only when requested (e.g. `--show-prompts`).
 
 ### Built-in Tools (registered in main.rs)
+
+ToolRegistry registration is fallible and collision-safe. Built-ins use the `builtin` provider label; runtime providers use `mcp:<server>` and are registered atomically so a collision cannot partially expose a server.
 - `echo` — Debug echo
 - `calculator` — Math evaluation
 - `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; `list_jobs` returns compact job metadata only (id, name, enabled, schedule_type, cron_expression, run_at, next_run_at, last_run_at, last_status, timezone, notify_on_completion, owner_address) and intentionally omits `creation_context_snapshot`, `prompt`, and `context_policy` to prevent context bloat. Snapshots remain persisted in the database and are available for scheduled job execution. `list_jobs` accepts `include_disabled = true` for disabled/deleted job history, and `delete_job` disables persisted jobs so they stop running but remain available for direct lookup/history.
@@ -255,6 +270,7 @@ README.md          — Project documentation
 - `[scheduler]` — run_overdue_one_shots_on_startup
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`), network_access (`"disabled"` | `"host"`)
 - `[exa]` — api_key_env, max_results, max_text_chars
+- `[mcp]` / `[[mcp.servers]]` — trusted Streamable HTTP runtime MCP providers, optional bearer-token environment variables, prefixes, include/exclude filters, and connect/call timeouts; v1 does not support stdio
 
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-trixie` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0`, `libheif1` (HEIC/HEIF decoding), and `ca-certificates`, non-root `nerdbot` user

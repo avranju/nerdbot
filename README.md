@@ -9,6 +9,7 @@ NerdBot communicates with users through pluggable **communication channels**. Bo
 - **Communication channels** — pluggable adapters for Telegram and Zulip, each supporting long-polling and webhook ingress with channel-qualified access control
 - **Iterative tool loop** — the harness owns orchestration; the LLM proposes tool calls, Rust validates and executes them, and the loop continues until completion
 - **Built-in tools** — scheduling, user messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
+- **Runtime MCP extensions** — discover trusted tools from configured Streamable HTTP MCP servers at startup
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
 - **Automatic context compaction** — soft/hard token thresholds trigger background summarization so users never need to manually manage sessions
@@ -172,6 +173,26 @@ chown -R 1000:1000 ./run
 chmod 700 ./run
 ```
 
+## MCP extensions
+
+NerdBot can expose tools from operator-configured MCP servers through the same tool registry as built-in tools. Configured servers are **trusted extensions** with the effective privileges of built-in tools; only enable servers and tools you trust. Discovery happens at startup, and bearer tokens are read from environment variables rather than TOML.
+
+Version 1 supports Streamable HTTP only; stdio transport is intentionally deferred. Servers may be optional (`required = false`) or required, and optional connection/discovery failures are logged and skipped. `tool_prefix` is prepended to remote names, `include_tools` narrows discovery, and `exclude_tools` is applied afterward so it wins when both lists contain a name. Calls use the configured timeout and retain the MCP session for the runtime lifetime.
+
+Example (the server is generic; `mailindex` is only an example provider):
+
+```toml
+[[mcp.servers]]
+name = "mail"
+required = false
+include_tools = ["mail_search", "mail_get"]
+
+[mcp.servers.transport]
+type = "streamable_http"
+url = "http://127.0.0.1:8090/mcp"
+bearer_token_env = "MAILINDEX_API_TOKEN"
+```
+
 ## Configuration
 
 Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.example` to `config.toml` and adjust it manually. When the config file already exists, onboarding uses its current values as prompt defaults and preserves settings outside the guided flow. Pass `--config <path>` before the subcommand to generate or edit a different file, for example `cargo run -- --config config/local.toml onboard`. All secrets are read from **environment variables**, never from the config file.
@@ -232,6 +253,7 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`; `none` is direct host execution, not a security sandbox) |
 | | `network_access` | Bubblewrap network policy: `disabled` or `host` (default: `disabled`) |
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
+| `[[mcp.servers]]` | `name`, `enabled`, `required`, `transport`, filters, prefix, and timeouts | Trusted runtime MCP provider; v1 transport is Streamable HTTP |
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |
 
