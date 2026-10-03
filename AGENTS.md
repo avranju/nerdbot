@@ -265,6 +265,12 @@ README.md          — Project documentation
 - `[shell]` — allowed_commands, denied_commands, max_output_bytes, timeout_secs, sandbox_mode (`"none"` | `"bwrap"` | `"bwrap-strict"`), network_access (`"disabled"` | `"host"`)
 - `[exa]` — api_key_env, max_results, max_text_chars
 
+### Dependency Baseline
+- `Cargo.toml` specifies the latest stable releases for all 32 unique normal/dev dependencies checked against crates.io on 2026-10-03; `Cargo.lock` records the resolved versions.
+- SQLx 0.9 uses separate `runtime-tokio` and `tls-rustls-ring` features. Its SQL-string safety checks require static queries or a query builder; `storage::messages::list_messages` binds its optional row limit instead of formatting SQL.
+- TOML 1.1 parses config documents with `toml::from_str`; onboarding uses this API when preserving an existing file because `Value::from_str` now parses standalone values.
+- The upgraded `libheif-rs` 3.0 keeps default features disabled with `v1_17` and `image`, preserving compatibility with the existing system libheif requirement and Docker images.
+
 ### Docker Packaging
 - **Dockerfile** — multi-stage build: `rust:1.96-slim-trixie` for compilation, `debian:trixie-slim` for runtime with `libsqlite3-0`, `libheif1` (HEIC/HEIF decoding), and `ca-certificates`, non-root `nerdbot` user
 - **docker-compose.yml** — named volume for SQLite data, read-only config mount, writable workspace mount, environment-variable-based secrets

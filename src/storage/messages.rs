@@ -284,17 +284,20 @@ pub async fn list_messages(
     session_id: &str,
     limit: Option<usize>,
 ) -> Result<Vec<StoredMessage>, AgentError> {
-    let query = if let Some(lim) = limit {
-        format!(
-            "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT {}",
-            lim
-        )
+    let query = if limit.is_some() {
+        "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2"
     } else {
-        "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC".to_string()
+        "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC"
     };
 
-    sqlx::query_as::<_, StoredMessage>(&query)
-        .bind(session_id)
+    let mut query = sqlx::query_as::<_, StoredMessage>(query).bind(session_id);
+    if let Some(limit) = limit {
+        let limit = i64::try_from(limit)
+            .map_err(|e| AgentError::Storage(format!("Invalid message limit: {e}")))?;
+        query = query.bind(limit);
+    }
+
+    query
         .fetch_all(pool)
         .await
         .map_err(|e| AgentError::Storage(format!("Failed to list messages: {e}")))

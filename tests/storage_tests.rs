@@ -207,6 +207,23 @@ async fn test_list_messages_with_limit() {
         .await
         .unwrap();
     assert_eq!(messages.len(), 3);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Message 4", "Message 3", "Message 2"]
+    );
+
+    let messages = nerdbot::storage::messages::list_messages(pool, &session.id, Some(0))
+        .await
+        .unwrap();
+    assert!(messages.is_empty());
+
+    let messages = nerdbot::storage::messages::list_messages(pool, &session.id, Some(10))
+        .await
+        .unwrap();
+    assert_eq!(messages.len(), 5);
 }
 
 #[tokio::test]

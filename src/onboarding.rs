@@ -342,7 +342,7 @@ pub fn run(config_path: &Path) -> Result<(), Box<dyn Error>> {
 
 fn write_config(path: &Path, answers: &OnboardingAnswers) -> Result<(), Box<dyn Error>> {
     let mut config = if path.exists() {
-        fs::read_to_string(path)?.parse::<Value>()?
+        toml::from_str::<Value>(&fs::read_to_string(path)?)?
     } else {
         Value::Table(toml::map::Map::new())
     };
