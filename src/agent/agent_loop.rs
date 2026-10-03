@@ -54,7 +54,7 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
-    let mut working_messages = ctx.messages.clone();
+    let mut working_messages = crate::context::history::normalize_history(&ctx.messages);
 
     // ContextManager may have already included a summary as a system message;
     // personality is prepended before that.
@@ -233,35 +233,30 @@ pub async fn run_agent(
             }
         }
 
-        // Append tool call messages and results to working messages.
-        // genai provides ChatMessage::from(Vec<ToolCall>) for assistant tool-use messages.
+        // Replay the complete assistant content, including text, signatures,
+        // custom parts and separately returned reasoning required by genai.
+        let assistant_message = ChatMessage::assistant(response.content)
+            .with_reasoning_content(response.reasoning_content);
         let tool_calls_count = tool_calls.len();
-        working_messages.push(ChatMessage::from(tool_calls));
-
         let results_count = tool_responses.len();
-        if !tool_responses.is_empty() {
-            // Convert tool responses into a Tool-role message
-            let tool_message = ChatMessage::from(tool_responses.clone());
-            working_messages.push(tool_message.clone());
+        let tool_message = ChatMessage::from(tool_responses);
 
-            // Persist tool results to the database so callers (e.g. scheduler)
-            // can inspect them for notification deduplication.
-            if !ctx.session_id.is_empty()
-                && let Some(ref pool) = ctx.pool
-                && let Err(e) = crate::storage::messages::create_message(
-                    pool,
-                    &ctx.session_id,
-                    &tool_message,
-                    None,
-                )
-                .await
-            {
-                warn!(
-                    step = step + 1,
-                    error = %e,
-                    "failed to persist tool result messages"
-                );
-            }
+        working_messages.push(assistant_message);
+        working_messages.push(tool_message);
+        // Apply the same validation to unexpected malformed batches or reused
+        // provider IDs before persistence and before the next LLM request.
+        working_messages = crate::context::history::normalize_history(&working_messages);
+        if !ctx.session_id.is_empty()
+            && let Some(ref pool) = ctx.pool
+        {
+            let end = working_messages.len();
+            crate::storage::messages::create_tool_exchange(
+                pool,
+                &ctx.session_id,
+                &working_messages[end - 2],
+                &working_messages[end - 1],
+            )
+            .await?;
         }
 
         debug!(
@@ -302,8 +297,8 @@ pub struct AgentContext {
     pub channel_registry: Option<std::sync::Arc<crate::channel::ChannelRegistry>>,
     /// Database pool for tools needing access to storage
     pub pool: Option<sqlx::SqlitePool>,
-    /// Chat session ID for persisting tool results.
-    /// When non-empty, tool-result messages are persisted to the database.
+    /// Chat session ID for atomically persisting assistant-call/result exchanges.
+    /// Callers own the user prompt and final reply writes.
     pub session_id: String,
     /// Notifier to wake up the scheduler service loop instantly
     pub scheduler_notifier: Option<std::sync::Arc<tokio::sync::Notify>>,

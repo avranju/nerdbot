@@ -72,7 +72,10 @@ impl StoredMessage {
         fallback_content: String,
     ) -> MessageContent {
         // Old MessageContent was serialized as {"Text":...} or {"Parts":[...]}
-        if let Some(parts_array) = json.get("Parts").and_then(|v| v.as_array()) {
+        if let Some(parts_array) = json
+            .as_array()
+            .or_else(|| json.get("Parts").and_then(|v| v.as_array()))
+        {
             let converted: Vec<ContentPart> = parts_array
                 .iter()
                 .map(Self::convert_legacy_content_part)
@@ -131,7 +134,8 @@ impl StoredMessage {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown error")
                     .to_string();
-                serde_json::json!({"success": false, "error": error_msg}).to_string()
+                serde_json::json!({"success": false, "error": error_msg, "data": content_value})
+                    .to_string()
             };
 
             ContentPart::ToolResponse(ToolResponse::new(&tool_call_id, content))
@@ -140,7 +144,7 @@ impl StoredMessage {
             if let Some(text) = json.get("Text").and_then(|v| v.as_str()) {
                 ContentPart::Text(text.to_string())
             } else {
-                ContentPart::Text(String::new())
+                ContentPart::Text(format!("[Historical unrecognized content: {json}]"))
             }
         }
     }
@@ -163,6 +167,19 @@ pub async fn create_message(
     message: &ChatMessage,
     token_estimate: Option<usize>,
 ) -> Result<StoredMessage, AgentError> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|e| AgentError::Storage(format!("Failed to acquire message connection: {e}")))?;
+    insert_message(&mut connection, session_id, message, token_estimate).await
+}
+
+async fn insert_message(
+    connection: &mut sqlx::SqliteConnection,
+    session_id: &str,
+    message: &ChatMessage,
+    token_estimate: Option<usize>,
+) -> Result<StoredMessage, AgentError> {
     let (content, structured_json) = {
         // Try to join text parts for the plain content field
         let joined = message.content.joined_texts().unwrap_or_default();
@@ -172,7 +189,8 @@ pub async fn create_message(
         if parts.is_empty() || (parts.len() == 1 && matches!(&parts[0], ContentPart::Text(_))) {
             (joined, None)
         } else {
-            let json = serde_json::to_value(parts).unwrap_or(Value::Null);
+            let json = serde_json::to_value(parts)
+                .map_err(|e| AgentError::Storage(format!("Failed to serialize message: {e}")))?;
             (String::new(), Some(json))
         }
     };
@@ -193,7 +211,7 @@ pub async fn create_message(
     .bind(&structured_json)
     .bind(token_estimate.map(|t| t as i64))
     .bind(chrono::Utc::now().to_rfc3339())
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| AgentError::Storage(format!("Failed to create message: {e}")))?;
 
@@ -205,11 +223,59 @@ pub async fn create_message(
            FROM messages WHERE id = ?1"#,
     )
     .bind(&msg_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await
     .map_err(|e| AgentError::Storage(format!("Failed to retrieve inserted message: {e}")))?;
 
     Ok(stored)
+}
+
+/// Commit a complete assistant-call/result batch together. A failed insert or
+/// commit is returned to the caller; a result is never stored independently.
+pub async fn create_tool_exchange(
+    pool: &SqlitePool,
+    session_id: &str,
+    assistant: &ChatMessage,
+    results: &ChatMessage,
+) -> Result<(), AgentError> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|e| AgentError::Storage(format!("Failed to begin tool exchange: {e}")))?;
+    insert_message(&mut transaction, session_id, assistant, None).await?;
+    insert_message(&mut transaction, session_id, results, None).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|e| AgentError::Storage(format!("Failed to commit tool exchange: {e}")))
+}
+
+/// Decode snapshots produced by both legacy NerdBot and current genai types.
+pub fn deserialize_snapshot(snapshot: &str) -> Result<Vec<ChatMessage>, AgentError> {
+    let values: Vec<Value> = serde_json::from_str(snapshot)
+        .map_err(|e| AgentError::Storage(format!("Invalid history snapshot: {e}")))?;
+    values
+        .into_iter()
+        .map(|value| {
+            if let Ok(message) = serde_json::from_value::<ChatMessage>(value.clone()) {
+                return Ok(message);
+            }
+            let stored = StoredMessage {
+                id: String::new(),
+                chat_session_id: String::new(),
+                role: value.get("role").cloned().unwrap_or(Value::Null),
+                content: value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                structured_content_json: value.get("content").filter(|v| !v.is_string()).cloned(),
+                token_estimate: None,
+                created_at: chrono::Utc::now(),
+            };
+            stored.to_message()
+        })
+        .collect()
 }
 
 /// List messages for a session, ordered by creation time.
@@ -220,11 +286,11 @@ pub async fn list_messages(
 ) -> Result<Vec<StoredMessage>, AgentError> {
     let query = if let Some(lim) = limit {
         format!(
-            "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC LIMIT {}",
+            "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT {}",
             lim
         )
     } else {
-        "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC".to_string()
+        "SELECT id, chat_session_id, role, content, structured_content_json, token_estimate, created_at FROM messages WHERE chat_session_id = ?1 ORDER BY created_at DESC, rowid DESC".to_string()
     };
 
     sqlx::query_as::<_, StoredMessage>(&query)

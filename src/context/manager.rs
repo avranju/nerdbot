@@ -100,21 +100,26 @@ impl ContextManager {
             );
         }
 
-        // 3. Load recent raw messages (after summary boundary)
+        // Reserve fixed prompt costs before selecting history. Rich current
+        // content is appended once; oversized fixed prompts fail before the LLM.
+        let current_user_message =
+            append_current_datetime_to_user_message(current_user_message, timezone);
+        let fixed_tokens = messages
+            .iter()
+            .map(estimate_tokens_for_message)
+            .sum::<usize>()
+            + estimate_tokens_for_message(&current_user_message);
+        let remaining = self
+            .usable_input_budget()
+            .checked_sub(fixed_tokens)
+            .ok_or_else(|| {
+                crate::error::AgentError::Context(
+                    "Current prompt and system context exceed the usable input budget".into(),
+                )
+            })?;
         let recent = self.load_recent_messages(session_id, &summary_opt).await?;
-        let (bounded, _preserve_tokens) = self.bound_messages(recent);
-
-        // 4. Append recent messages.
-        // The bounded function already enforces the budget for recent messages.
-        messages.extend(bounded);
-
-        // 5. Append the current user message with the current date/time
-        // appended as context. This avoids introducing a system message
-        // after non-system messages, which llama.cpp's Jinja templates reject.
-        messages.push(append_current_datetime_to_user_message(
-            current_user_message,
-            timezone,
-        ));
+        messages.extend(self.bound_messages(recent, remaining)?);
+        messages.push(current_user_message);
 
         let recent_count = messages.len();
         debug!(
@@ -136,33 +141,7 @@ impl ContextManager {
     /// Binary ContentParts are excluded from token estimation since they
     /// are encoded as base64 and don't map linearly to tokens.
     pub fn estimate_tokens(&self, messages: &[ChatMessage]) -> usize {
-        let total_chars: usize = messages
-            .iter()
-            .map(|m| {
-                // Join text parts for character counting
-                m.content.joined_texts().map(|t| t.len()).unwrap_or(0)
-                    + m.content
-                        .parts()
-                        .iter()
-                        .filter_map(|p| match p {
-                            ContentPart::Text(t) => Some(t.len()),
-                            ContentPart::ToolCall(tc) => {
-                                Some(tc.fn_name.len() + tc.fn_arguments.to_string().len())
-                            }
-                            ContentPart::ToolResponse(tr) => Some(tr.content.len()),
-                            // Binary payloads are base64-encoded and don't map
-                            // linearly to tokens; exclude from estimation.
-                            ContentPart::Binary(_) => None,
-                            ContentPart::ThoughtSignature(_) => None,
-                            ContentPart::ReasoningContent(_) => None,
-                            ContentPart::Custom(_) => None,
-                        })
-                        .sum::<usize>()
-            })
-            .sum();
-
-        // Heuristic: ~4 characters per token for English text
-        (total_chars / 4).max(1)
+        messages.iter().map(estimate_tokens_for_message).sum()
     }
 
     /// Get the usable input budget in tokens.
@@ -200,109 +179,65 @@ impl ContextManager {
     ) -> Result<Vec<StoredMessage>, crate::error::AgentError> {
         let stored = crate::storage::messages::list_messages(&self.pool, session_id, None).await?;
 
-        let boundary_created_at = summary.as_ref().and_then(|s| {
-            // Find the boundary message's created_at timestamp.
+        // Use row order and the boundary ID, rather than timestamps, which
+        // can tie. An old boundary inside an exchange is safe after normalization.
+        let boundary = summary.as_ref().and_then(|summary| {
             stored
                 .iter()
-                .find(|m| m.id == s.covers_through_message_id)
-                .map(|m| m.created_at)
+                .position(|message| message.id == summary.covers_through_message_id)
         });
-
-        let messages: Vec<StoredMessage> = match boundary_created_at {
-            Some(boundary_ts) => stored
-                .into_iter()
-                .filter(|m| m.created_at > boundary_ts)
-                .collect(),
+        let messages = match boundary {
+            Some(index) => stored.into_iter().take(index).collect(),
             None => stored,
         };
 
         Ok(messages)
     }
 
-    /// Bound a list of messages to fit within the usable input budget.
-    ///
-    /// `list_messages` returns newest-first; this keeps the most recent
-    /// messages that fit within the budget and returns them chronological.
-    ///
-    /// The N most recent turns (where N = `recent_turns_to_preserve`) are
-    /// preferred, but still trimmed if they alone exceed the input budget.
-    ///
-    /// Returns `(bounded, preserve_tokens)` where `bounded` are the messages
-    /// that fit within the budget and `preserve_tokens` is the total token
-    /// count of preserved messages (for budget accounting in `assemble_messages`).
-    fn bound_messages(&self, messages: Vec<StoredMessage>) -> (Vec<ChatMessage>, usize) {
-        let budget = self.budget.usable_input_budget();
-        let preserve = self.recent_turns_to_preserve;
-
-        // list_messages returns DESC (newest first).
-        // The first `preserve` entries are the most recent — preserve them.
-        let preserve_count = messages.len().min(preserve);
-        let (to_preserve, to_bound) = messages.split_at(preserve_count);
-
-        // Keep as much of the preserve window as fits, preferring the newest
-        // messages. A large preserve window must not defeat the hard bound.
-        let mut preserve_tokens = 0usize;
-        let mut preserve_msgs: Vec<ChatMessage> = to_preserve
+    /// Select recent coherent units, never slicing an assistant call batch.
+    /// Recent rows are preferred regardless of the preserve-window cutoff; a
+    /// batch crossing that cutoff is still considered as one indivisible unit.
+    fn bound_messages(
+        &self,
+        messages: Vec<StoredMessage>,
+        budget: usize,
+    ) -> Result<Vec<ChatMessage>, crate::error::AgentError> {
+        let chronological: Vec<_> = messages
             .iter()
-            .filter_map(|m| {
-                let msg = m.to_message().ok()?;
-                let tokens = m
-                    .token_estimate
-                    .map(|t| t as usize)
-                    .unwrap_or_else(|| estimate_tokens_for_message(&msg));
-                if preserve_tokens + tokens > budget {
-                    return None;
-                }
-                preserve_tokens += tokens;
-                Some(msg)
-            })
-            .collect();
-        preserve_msgs.reverse();
-
-        // Bound the non-preserved messages using the remaining budget.
-        // to_bound is older messages in DESC order (newest first from list_messages).
-        // We want to keep the most recent ones within the remaining budget.
-        let remaining_budget = budget.saturating_sub(preserve_tokens);
-        let mut bounded: Vec<ChatMessage> = to_bound
-            .iter()
-            .rev() // reverse to get chronological (oldest first)
-            .filter_map(|m| {
-                let stored_tokens = m.token_estimate.map(|t| t as usize);
-                let msg = m.to_message().ok()?;
-                let msg_tokens = stored_tokens.unwrap_or_else(|| estimate_tokens_for_message(&msg));
-                Some((msg, msg_tokens))
-            })
-            .rev() // reverse again to get newest-first
-            .filter_map(|(msg, tokens)| {
-                if tokens > remaining_budget {
-                    return None;
-                }
-                Some((msg, tokens))
-            })
-            .scan(0usize, |accum, (msg, tokens)| {
-                if *accum + tokens > remaining_budget {
-                    None
-                } else {
-                    *accum += tokens;
-                    Some(msg)
-                }
-            })
-            .collect();
-
-        // Reverse bounded to chronological order (oldest first).
-        bounded.reverse();
-        // Combine: bounded (older, chronological) + preserved (most recent, chronological).
-        let mut result = bounded;
-        result.extend(preserve_msgs);
-
+            .rev()
+            .map(|message| message.to_message())
+            .collect::<Result<Vec<_>, _>>()?;
+        let units = crate::context::history::history_units(&chronological);
+        let mut tokens = 0;
+        let mut retained = Vec::new();
+        for unit in units.into_iter().rev() {
+            // Re-estimate normalized content: old stored estimates may omit
+            // tool payloads or the new historical labels.
+            let cost = unit
+                .messages
+                .iter()
+                .zip(unit.source.clone())
+                .map(|(message, index)| {
+                    let estimate = messages[messages.len() - 1 - index]
+                        .token_estimate
+                        .and_then(|tokens| usize::try_from(tokens).ok())
+                        .unwrap_or(0);
+                    estimate.max(estimate_tokens_for_message(message))
+                })
+                .sum::<usize>();
+            if tokens + cost <= budget {
+                tokens += cost;
+                retained.push(unit.messages);
+            }
+        }
+        let messages = retained.into_iter().rev().flatten().collect::<Vec<_>>();
         debug!(
-            message_count = result.len(),
-            preserve_tokens,
-            preserve_window = preserve_count,
-            "bounded messages with preserve window"
+            message_count = messages.len(),
+            tokens,
+            preserve_window = self.recent_turns_to_preserve,
+            "bounded coherent history units"
         );
-
-        (result, preserve_tokens)
+        Ok(messages)
     }
 }
 
@@ -331,14 +266,25 @@ pub(crate) fn estimate_tokens_for_message(msg: &ChatMessage) -> usize {
         .iter()
         .filter_map(|p| match p {
             ContentPart::Text(t) => Some(t.len()),
-            ContentPart::ToolCall(tc) => Some(tc.fn_name.len() + tc.fn_arguments.to_string().len()),
-            ContentPart::ToolResponse(tr) => Some(tr.content.len()),
+            ContentPart::ToolCall(tc) => Some(
+                tc.call_id.len()
+                    + tc.fn_name.len()
+                    + tc.fn_arguments.to_string().len()
+                    + tc.thought_signatures
+                        .as_ref()
+                        .map(|s| s.iter().map(String::len).sum::<usize>())
+                        .unwrap_or(0),
+            ),
+            ContentPart::ToolResponse(tr) => Some(tr.call_id.len() + tr.content.len()),
             // Binary payloads excluded — they're base64-encoded and don't
             // map linearly to tokens.
             ContentPart::Binary(_) => None,
-            ContentPart::ThoughtSignature(_) => None,
-            ContentPart::ReasoningContent(_) => None,
-            ContentPart::Custom(_) => None,
+            ContentPart::ThoughtSignature(text) | ContentPart::ReasoningContent(text) => {
+                Some(text.len())
+            }
+            ContentPart::Custom(value) => {
+                Some(serde_json::to_string(value).map(|v| v.len()).unwrap_or(0))
+            }
         })
         .sum();
 

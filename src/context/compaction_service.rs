@@ -108,7 +108,7 @@ impl CompactionService {
     /// Get the compaction prompt for a session.
     pub async fn get_compaction_prompt(&self, session_id: &str) -> Result<String, AgentError> {
         self.worker
-            .get_compaction_prompt(&self.pool, session_id)
+            .get_compaction_prompt(&self.pool, session_id, &self.budget)
             .await
     }
 

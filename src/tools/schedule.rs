@@ -176,12 +176,13 @@ impl Tool for ScheduleJob {
                 crate::storage::sessions::get_session_for_address(&pool, &address).await?
             {
                 let stored =
-                    crate::storage::messages::list_messages(&pool, &session.id, Some(30)).await?;
+                    crate::storage::messages::list_messages(&pool, &session.id, None).await?;
                 let messages: Vec<genai::chat::ChatMessage> = stored
                     .into_iter()
                     .rev() // DESC to ASC
                     .filter_map(|sm| sm.to_message().ok())
                     .collect();
+                let messages = crate::context::history::recent_history(&messages, 30);
                 Some(serde_json::to_string(&messages).unwrap_or_default())
             } else {
                 None

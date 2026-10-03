@@ -56,7 +56,7 @@ pub async fn run_scheduled_job(
         JobContextPolicy::Isolated => vec![],
         JobContextPolicy::IncludeCreationSnapshot => {
             if let Some(ref snapshot) = job.creation_context_snapshot {
-                serde_json::from_str::<Vec<ChatMessage>>(snapshot).map_err(|e| {
+                crate::storage::messages::deserialize_snapshot(snapshot).map_err(|e| {
                     AgentError::Scheduler(format!(
                         "Corrupted context snapshot for job {job_id}: {e}"
                     ))
@@ -78,6 +78,8 @@ pub async fn run_scheduled_job(
             msgs
         }
     };
+
+    messages = crate::context::history::normalize_history(&messages);
 
     let user_msg = ChatMessage::user(MessageContent::from_text(&job.prompt));
     let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;

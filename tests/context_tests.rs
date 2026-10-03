@@ -356,6 +356,22 @@ fn small_budget(context_window_tokens: usize, soft_compaction_threshold: f32) ->
     }
 }
 
+// Keep these history-selection tests at a 10-token history allowance while
+// budgeting separately for the system/current prompt (including datetime).
+fn budget_for_history(tokens: usize, personality: &str, current: &str) -> ContextBudget {
+    let current = nerdbot::context::manager::append_current_datetime_to_user_message(
+        ChatMessage::user(current),
+        "UTC",
+    );
+    let fixed = (current.content.joined_texts().unwrap().len() / 4).max(1)
+        + if personality.is_empty() {
+            0
+        } else {
+            (personality.len() / 4).max(1)
+        };
+    small_budget(tokens + fixed, 0.5)
+}
+
 fn msg_text(message: &ChatMessage) -> String {
     message.content.joined_texts().unwrap_or_default()
 }
@@ -516,7 +532,11 @@ async fn test_assemble_messages_budget_exceeded() {
     }
 
     // Use preserve=0 so budget bounds are actually enforced
-    let manager = ContextManager::new_with_preserve(pool, small_budget(10, 0.5), 0);
+    let manager = ContextManager::new_with_preserve(
+        pool,
+        budget_for_history(10, "personality", "current"),
+        0,
+    );
     let messages = manager
         .assemble_messages(
             &session.id,
@@ -620,7 +640,7 @@ async fn test_check_session_above_threshold() {
             0.0,
             0,
         )),
-        small_budget(100, 0.1),
+        small_budget(2000, 0.005),
         0,
     );
     service.check_session(&session.id).await.unwrap();
@@ -670,7 +690,7 @@ async fn test_compaction_state_transitions() {
 
     let worker =
         CompactionWorker::new_with_preserve(Arc::new(SlowProvider), "fake-model".into(), 0.0, 0);
-    let service = CompactionService::new(pool, Arc::new(worker), small_budget(100, 0.1), 0);
+    let service = CompactionService::new(pool, Arc::new(worker), small_budget(2000, 0.005), 0);
 
     assert_eq!(service.get_state(&session.id).await, CompactionState::Idle);
     service.check_session(&session.id).await.unwrap();
@@ -806,7 +826,7 @@ async fn test_preserve_exact_order_and_ids() {
     // So 3 of the remaining 3 (m3, m2, m1) fit (6 tokens).
     let manager = ContextManager::new_with_preserve(
         pool.clone(),
-        small_budget(10, 0.5),
+        budget_for_history(10, "personality", "current"),
         2, // preserve 2 most recent
     );
 
@@ -866,7 +886,7 @@ async fn test_preserve_window_is_trimmed_when_it_exceeds_budget() {
         set_message_created_at(&pool, &msg.id, 1_700_000_000 + i).await;
     }
 
-    let manager = ContextManager::new_with_preserve(pool, small_budget(10, 0.5), 3);
+    let manager = ContextManager::new_with_preserve(pool, budget_for_history(10, "", "current"), 3);
     let messages = manager
         .assemble_messages(
             &session.id,

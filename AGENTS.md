@@ -99,7 +99,8 @@ src/
     mod.rs
     budget.rs      — ContextBudget: token budgeting (soft/hard thresholds, usable budget)
     diagnostics.rs — Shared session context snapshot calculation for diagnostics and compaction pressure
-    manager.rs     — ContextManager: bounded context assembly (summary + recent messages) and current-turn datetime enrichment
+    manager.rs     — ContextManager: budgeted context assembly with indivisible tool exchanges, safe historical replay, and current-turn datetime enrichment
+    history.rs     — Shared provider-independent tool protocol normalization, historical text rendering, and coherent compaction boundaries
     summaries.rs   — ContextSummary struct + CRUD via storage layer
     compaction_service.rs — Monitors session pressure, triggers async compaction with per-session state tracking
     compaction_worker.rs  — Loads old history, calls LLM to produce structured summary, persists it
@@ -114,7 +115,7 @@ src/
     mod.rs
     sqlite.rs      — Database: SQLite pool, migration init, foreign keys
     sessions.rs    — Chat session CRUD
-    messages.rs    — Message persistence (role, content, token estimate)
+    messages.rs    — Message persistence (role, multipart content, token estimate), atomic assistant-call/result exchanges, legacy snapshot decoding, and deterministic row ordering
     summaries.rs   — Context summary CRUD
     jobs.rs        — Scheduled job CRUD
 
@@ -161,7 +162,7 @@ README.md          — Project documentation
 6. ContextManager assembles bounded context: loads latest summary + recent messages from DB, prefers the `recent_turns_to_preserve` window (default 30 messages) while still enforcing the request budget, excludes binary payloads from token estimation, and appends the current date/time as a trailing text part on the current user message without flattening rich attachment parts. The datetime is formatted in 24-hour local time with timezone abbreviation and UTC offset.
 7. Starts a channel typing indicator when supported; Telegram refreshes `typing` every 4 seconds while the interactive agent loop runs
 8. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-9. Persists current user message and assistant reply → sends via ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
+9. Persists assistant reply (the safe user prompt was stored before tool execution) → sends via ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **CLI onboarding:**
@@ -183,7 +184,7 @@ README.md          — Project documentation
 5. ContextManager assembles bounded context: loads latest summary + recent messages from DB, respects token budget, appends current user message once, and adds the current date/time as trailing 24-hour timezone-qualified text in that user message to preserve cacheable prompt prefixes
 6. Starts a channel typing indicator when supported
 7. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
-8. Persists current user message and assistant reply → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
+8. Persists assistant reply (the safe user prompt was stored before tool execution) → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 9. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Interactive Zulip message:**
@@ -201,7 +202,7 @@ README.md          — Project documentation
 9. Starts a channel typing indicator when supported (Zulip typing is direct-message-only, refreshed every 8 seconds, and stopped with a best-effort `op = "stop"` when the agent run finishes). For direct-message typing notifications, NerdBot keeps the stable conversation/session identity as sorted participant emails but caches numeric Zulip user IDs from inbound `display_recipient` payloads because `/api/v1/typing` requires `type = "direct"` and integer user IDs in the `to` array. When `/users/me` provided a current user ID, NerdBot filters that ID rather than relying only on email string equality.
 10. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text; typing refresh stops as soon as the run returns
 11. Outbound messages split at 10,000 chars via `ZulipService::send_message`
-12. Persists current user message and assistant reply → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
+12. Persists assistant reply (the safe user prompt was stored before tool execution) → sends through ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 13. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
 
 **Scheduled job:**
@@ -217,12 +218,20 @@ README.md          — Project documentation
 - `Personality` keeps the prompt in memory behind shared ownership, watches the configured file's parent directory with `notify`, only reacts to `Create` or content/name `Modify` events for the configured file path, hashes the file contents, and reloads the cache only when the hash changes. Access and metadata-only events are ignored so reading the file cannot trigger a reload loop.
 - If the file is missing or cannot be read, NerdBot uses the built-in default prompt and logs watcher/read failures instead of failing startup.
 
+**Persisted history and safe tool replay:**
+- `ChannelMessageHandler` assembles context before storing the current safe user prompt, then stores it before invoking `run_agent`. The rich current message appears exactly once in the LLM request; binary attachment payloads remain in memory and only existing attachment markers/extracted text are persisted. Recognized commands are stored before handling in the original session; `/reset_context` and `/new_topic` create a fresh empty session while their command/reply remain in the old session.
+- Both the interactive handler and scheduled runner own user/final-reply writes. `run_agent` owns intermediate assistant-call/result exchanges and commits both rows in one SQLite transaction after executing the batch. It preserves the full genai assistant content (text, calls, signatures, custom parts) and separately returned reasoning. Tool errors produce matching outputs. Storage failures propagate and stop the loop; no result is committed alone. Silent/error/iteration-limit interactive replies remain ordinary harness text.
+- `context::history` validates chronological replay for the manager, agent loop, creation snapshots, scheduled snapshots, and compaction. A structured batch needs unique nonempty call IDs and exactly one adjacent output per call before any ordinary message. Complete later batches may reuse response-local IDs (including genai Gemini synthetic IDs); normalization namespaces collisions and their matching outputs, preserving signatures and known function names. Missing/unmatched outputs or calls, duplicate IDs within a batch, partial batches, and mixed malformed parts become labeled ordinary historical text retaining arguments/results and conversation text. Existing database rows are untouched; no data migration or session reset is required. Both legacy and current multipart storage/snapshots are supported.
+- Context bounding prefers recent complete units, skipping oversized exchanges as a whole. It counts normalized content/metadata and reserves system, summary, and current-message costs before selecting history; an oversized fixed prompt returns a context error before the LLM call. The interactive handler catches this rejection, persists the safe user prompt, and returns a size-limit notice through the normal channel reply path without invoking the LLM. Estimates remain character-based and exclude binary payload costs. Creation snapshots include the recent 30-row window rounded outward to avoid splitting exchanges.
+- Compaction rounds its recent-row preserve window outward to keep whole exchanges, and advances boundaries by row order/ID (creation time plus SQLite rowid breaks timestamp ties). Old summary boundaries that split an exchange are handled by normalization. Summary prompts omit opaque thought signatures (which remain intact in structured replay) and retain tool arguments/outcomes as ordinary historical text, with the existing per-message length cap, and summarize only an oldest prefix of whole units that fits the usable input estimate. A prefix that cannot fit fails without calling the model or advancing the boundary. `compaction_service.rs` passes the same budget to diagnostics prompt generation. Diagnostics uses the same row-boundary ordering.
+- Persistence is transactional for each exchange, not for the entire tool-using turn: external tool side effects can succeed before a later database failure, and overlapping runs may interleave ordinary messages. Normalization protects replay; it does not undo tool effects or reconstruct lost arguments.
+
 **Context compaction (background):**
 - After each successful agent run, handler checks if total_tokens > soft_threshold
 - If above threshold: calls CompactionService, which tracks per-session state (Idle/Running/RunningAndDirty) and prevents concurrent compactions
 - CompactionService runs CompactionWorker asynchronously using the same LLM configured in `[llm]`. If no LLM model is configured, compaction is disabled (no-op).
 - CompactionService uses `ContextDiagnosticsSnapshot` to estimate uncompacted raw-history tokens from stored estimates with content-based fallback. This shared calculation reports soft/hard threshold distance and replaces the older fixed `message_count * 100` pressure heuristic.
-- CompactionWorker loads messages after the latest summary boundary, excludes the configured recent raw-message preservation window, combines eligible older messages with the existing summary, and persists a new structured summary with updated covers_through_message_id
+- CompactionWorker loads messages after the latest summary boundary, rounds the recent raw-message preservation window outward to avoid splitting tool exchanges, combines eligible older messages (including historical tool text) with the existing summary, and persists a new structured summary with updated covers_through_message_id
 - Hard threshold (default 85%): ContextManager bounds messages to fit budget
 
 **Local diagnostics socket (opt-in):**

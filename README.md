@@ -326,13 +326,17 @@ ChannelMessageHandler ──► Channel access policy ──► Session lookup
 ContextManager ──► Personality + tool specs + rolling summary + recent turns
     │
     ▼
-AgentLoop ──► LLM call ──► Tool calls? ──► Harness executes tools ──► Repeat
+Persist safe user prompt ──► AgentLoop ──► LLM call ──► Execute tools + persist complete exchange ──► Repeat
     │
     ▼
-Final text ──► Persist messages ──► Send through ChannelRegistry ──► Check compaction threshold
+Final text ──► Persist reply ──► Send through ChannelRegistry ──► Check compaction threshold
 ```
 
 The Rust harness **owns orchestration**. The LLM proposes actions through tool calls. The harness validates arguments, executes them, persists results, and feeds them back — looping until the task is complete or a stop condition fires.
+
+Tool history stores each assistant call batch (including accompanying text and provider replay metadata) and its results in one transaction. The handler and scheduler store user prompts before tool execution and final replies afterward. Tool errors remain matching results; storage failures stop the run.
+
+Older malformed history is normalized automatically when replayed: orphan results, incomplete batches, and duplicate IDs within a batch or unmatched IDs become labeled ordinary historical text. Reused IDs across complete batches are namespaced with their matching outputs, preserving provider replay metadata. Opaque thought signatures are omitted from summary text so they cannot crowd out useful tool arguments. Existing database rows are preserved; upgrades require no history migration or session reset. Context bounding and compaction keep complete exchanges together, and oversized exchanges can be omitted from bounded requests. Oversized current prompts receive a size-limit reply without an LLM call. Token budgets use character estimates and exclude binary payloads; tools may already have performed side effects if a subsequent persistence write fails.
 
 ## Project Layout
 

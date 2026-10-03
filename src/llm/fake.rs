@@ -194,13 +194,18 @@ impl LlmExecutor for FakeProvider {
             ));
         }
 
-        let content = match &response.assistant_text {
-            Some(text) if !text.is_empty() => MessageContent::from_text(text),
-            _ if !response.tool_calls.is_empty() => {
-                MessageContent::from_tool_calls(response.tool_calls.clone())
-            }
-            _ => MessageContent::default(),
-        };
+        let mut parts = Vec::new();
+        if let Some(text) = &response.assistant_text {
+            parts.push(ContentPart::Text(text.clone()));
+        }
+        parts.extend(
+            response
+                .tool_calls
+                .iter()
+                .cloned()
+                .map(ContentPart::ToolCall),
+        );
+        let content = MessageContent::from_parts(parts);
 
         let usage = if let Some((input, output)) = response.token_usage {
             Usage {

@@ -59,7 +59,7 @@ impl CompactionWorker {
         &self,
         pool: &SqlitePool,
         session_id: &str,
-        _budget: &ContextBudget,
+        budget: &ContextBudget,
     ) -> Result<String, AgentError> {
         // Load the latest summary (if any)
         let latest_summary =
@@ -72,37 +72,7 @@ impl CompactionWorker {
             return Err(AgentError::Compaction("No messages to compact".into()));
         }
 
-        // Identify messages to compact. When a summary already exists, only
-        // incorporate messages that arrived after the message covered by the
-        // latest summary.
-        let mut messages_to_compact: Vec<_> = if let Some(ref summary) = latest_summary {
-            let boundary_created_at = all_messages
-                .iter()
-                .find(|m| m.id == summary.covers_through_message_id)
-                .map(|m| m.created_at)
-                .unwrap_or(summary.created_at);
-
-            all_messages
-                .iter()
-                .filter(|m| m.created_at > boundary_created_at)
-                .collect()
-        } else {
-            all_messages.iter().collect()
-        };
-
-        // Exclude the N most recent messages (most recent from newest-first).
-        // list_messages returns DESC (newest first), so the first N entries
-        // are the most recent — preserve them from compaction.
-        let preserve = self.recent_turns_to_preserve;
-        let preserve_count = messages_to_compact.len().min(preserve);
-        // Split: first N (most recent) are preserved, rest are compacted.
-        let (_, compactable) = messages_to_compact.split_at(preserve_count);
-        messages_to_compact = compactable.to_vec();
-        debug!(
-            preserved = preserve_count,
-            compacting = messages_to_compact.len(),
-            "excluded recent turns from compaction"
-        );
+        let messages_to_compact = self.select_compactable(&all_messages, &latest_summary)?;
 
         if messages_to_compact.is_empty() {
             // Nothing to compact — all messages are within the recent window
@@ -113,7 +83,14 @@ impl CompactionWorker {
         }
 
         // Build the compaction prompt
-        let prompt = self.build_compaction_prompt(&latest_summary, &messages_to_compact);
+        let (prompt, count) =
+            self.bound_compaction_prompt(&latest_summary, &messages_to_compact, budget)?;
+        if count == 0 {
+            return Err(AgentError::Compaction(
+                "No complete history unit fits within the usable compaction input budget".into(),
+            ));
+        }
+        let messages_to_compact = &messages_to_compact[..count];
 
         // Call the LLM to produce a new summary
         let new_summary_text = self
@@ -122,8 +99,7 @@ impl CompactionWorker {
 
         // Determine the new boundary message ID (latest message being compacted)
         let new_boundary_id = messages_to_compact
-            .iter()
-            .max_by_key(|m| m.created_at)
+            .last()
             .map(|m| m.id.clone())
             .unwrap_or_default();
 
@@ -166,32 +142,84 @@ impl CompactionWorker {
         &self,
         pool: &SqlitePool,
         session_id: &str,
+        budget: &ContextBudget,
     ) -> Result<String, AgentError> {
         let latest_summary =
             crate::storage::summaries::get_latest_summary(pool, session_id).await?;
 
         let all_messages = crate::storage::messages::list_messages(pool, session_id, None).await?;
 
-        let messages_to_compact: Vec<_> = if let Some(ref summary) = latest_summary {
-            let boundary_created_at = all_messages
-                .iter()
-                .find(|m| m.id == summary.covers_through_message_id)
-                .map(|m| m.created_at)
-                .unwrap_or(summary.created_at);
+        let compactable = self.select_compactable(&all_messages, &latest_summary)?;
+        self.bound_compaction_prompt(&latest_summary, &compactable, budget)
+            .map(|(prompt, _)| prompt)
+    }
 
+    fn select_compactable<'a>(
+        &self,
+        all_messages: &'a [crate::storage::messages::StoredMessage],
+        summary: &Option<crate::storage::summaries::StoredSummary>,
+    ) -> Result<Vec<&'a crate::storage::messages::StoredMessage>, AgentError> {
+        let boundary = summary.as_ref().and_then(|summary| {
             all_messages
                 .iter()
-                .filter(|m| m.created_at > boundary_created_at)
-                .collect()
+                .position(|m| m.id == summary.covers_through_message_id)
+        });
+        let recent = &all_messages[..boundary.unwrap_or(all_messages.len())];
+        let chronological: Vec<_> = recent.iter().rev().collect();
+        // Propagate decoding errors rather than shifting source-row indices or
+        // advancing the boundary past history that was not summarized.
+        let messages = chronological
+            .iter()
+            .map(|m| m.to_message())
+            .collect::<Result<Vec<_>, _>>()?;
+        let cutoff = crate::context::history::compaction_prefix_len(
+            &messages,
+            self.recent_turns_to_preserve,
+        );
+        Ok(chronological.into_iter().take(cutoff).collect())
+    }
+
+    /// Fit an oldest prefix of whole units. Never advance a summary boundary
+    /// past omitted rows. Binary search avoids rebuilding a growing prompt for
+    /// every row; existing per-message text truncation still applies.
+    fn bound_compaction_prompt(
+        &self,
+        summary: &Option<crate::storage::summaries::StoredSummary>,
+        candidates: &[&crate::storage::messages::StoredMessage],
+        budget: &ContextBudget,
+    ) -> Result<(String, usize), AgentError> {
+        let base = self.build_compaction_prompt(summary, &[]);
+        let fits = |prompt: &str| (prompt.len() / 4).max(1) <= budget.usable_input_budget();
+        if !fits(&base) {
+            return Err(AgentError::Compaction(
+                "Summary and instructions exceed the usable compaction input budget".into(),
+            ));
+        }
+        let decoded = candidates
+            .iter()
+            .map(|m| m.to_message())
+            .collect::<Result<Vec<_>, _>>()?;
+        let units = crate::context::history::history_units(&decoded);
+        let mut low = 0;
+        let mut high = units.len();
+        while low < high {
+            let middle = (low + high).div_ceil(2);
+            let end = units[middle - 1].source.end;
+            if fits(&self.build_compaction_prompt(summary, &candidates[..end])) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        let count = if low == 0 {
+            0
         } else {
-            all_messages.iter().collect()
+            units[low - 1].source.end
         };
-
-        let preserve = self.recent_turns_to_preserve;
-        let preserve_count = messages_to_compact.len().min(preserve);
-        let (_, compactable) = messages_to_compact.split_at(preserve_count);
-
-        Ok(self.build_compaction_prompt(&latest_summary, compactable))
+        Ok((
+            self.build_compaction_prompt(summary, &candidates[..count]),
+            count,
+        ))
     }
 
     /// Build a compaction prompt for the LLM.
@@ -227,22 +255,20 @@ impl CompactionWorker {
 
         // Include the messages to compact
         prompt.push_str("Messages to incorporate into the new summary:\n\n");
-        for msg in messages {
-            let role_str = match msg.role.as_str() {
-                Some("system") => "[SYSTEM]",
-                Some("user") => "[USER]",
-                Some("assistant") => "[ASSISTANT]",
-                Some("tool") => "[TOOL RESULT]",
-                _ => "[UNKNOWN]",
+        // Summarization always uses ordinary text, including useful tool
+        // arguments/outcomes from valid and malformed legacy exchanges.
+        let decoded: Vec<_> = messages
+            .iter()
+            .filter_map(|m| m.to_message().ok())
+            .collect();
+        for msg in crate::context::history::normalize_history(&decoded) {
+            let role_str = match msg.role {
+                genai::chat::ChatRole::System => "[SYSTEM]",
+                genai::chat::ChatRole::User => "[USER]",
+                genai::chat::ChatRole::Assistant => "[ASSISTANT]",
+                genai::chat::ChatRole::Tool => "[TOOL RESULT]",
             };
-            let content = if msg.content.is_empty() {
-                msg.structured_content_json
-                    .as_ref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_default()
-            } else {
-                msg.content.clone()
-            };
+            let content = crate::context::history::summary_text(&msg);
             // Truncate very long messages at character boundaries.
             let truncated = if content.len() > 2000 {
                 format!("{}...", truncate_str(&content, 2000))

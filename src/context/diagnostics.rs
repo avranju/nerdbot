@@ -89,20 +89,14 @@ fn messages_after_summary<'a>(
     messages: &'a [StoredMessage],
     summary: Option<&crate::storage::summaries::StoredSummary>,
 ) -> Vec<&'a StoredMessage> {
-    let boundary_created_at = summary.and_then(|summary| {
+    let boundary = summary.and_then(|summary| {
         messages
             .iter()
-            .find(|message| message.id == summary.covers_through_message_id)
-            .map(|message| message.created_at)
+            .position(|message| message.id == summary.covers_through_message_id)
     });
-
-    match boundary_created_at {
-        Some(boundary) => messages
-            .iter()
-            .filter(|message| message.created_at > boundary)
-            .collect(),
-        None => messages.iter().collect(),
-    }
+    messages[..boundary.unwrap_or(messages.len())]
+        .iter()
+        .collect()
 }
 
 fn estimate_stored_message_tokens(message: &StoredMessage) -> usize {

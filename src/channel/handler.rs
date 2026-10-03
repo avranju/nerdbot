@@ -102,16 +102,11 @@ impl ChannelMessageHandler {
             .route_rich_message(address, sender, inbound, &session.id)
             .await;
 
-        let persist_text = build_persist_text(inbound);
-        let user_message = ChatMessage::user(MessageContent::from_text(&persist_text));
-        let _ =
-            storage::messages::create_message(&self.pool, &session.id, &user_message, None).await?;
-
         if let Ok(Some(ref reply_text)) = response {
             let assistant_msg = ChatMessage::assistant(MessageContent::from_text(reply_text));
             let _ =
                 storage::messages::create_message(&self.pool, &session.id, &assistant_msg, None)
-                    .await;
+                    .await?;
         }
 
         response
@@ -252,6 +247,8 @@ impl ChannelMessageHandler {
     ) -> Result<Option<String>, AgentError> {
         if let Some(command) = TelegramCommand::parse(&inbound.text) {
             debug!(?command, ?address, "handling channel command");
+            let user_message = ChatMessage::user(build_persist_text(inbound));
+            storage::messages::create_message(&self.pool, session_id, &user_message, None).await?;
             let response = CommandHandler::handle(
                 command,
                 address,
@@ -287,7 +284,7 @@ impl ChannelMessageHandler {
             .effective_prompt(&self.config.agent.default_timezone);
 
         let current_user_message = assemble_rich_user_message(inbound);
-        let messages = self
+        let assembled = self
             .context_manager
             .assemble_messages(
                 session_id,
@@ -295,7 +292,26 @@ impl ChannelMessageHandler {
                 current_user_message,
                 &self.config.agent.default_timezone,
             )
-            .await?;
+            .await;
+        let messages = match assembled {
+            Ok(messages) => messages,
+            Err(AgentError::Context(reason)) => {
+                warn!(?address, %reason, "current prompt rejected by context budget");
+                let user_message = ChatMessage::user(build_persist_text(inbound));
+                storage::messages::create_message(&self.pool, session_id, &user_message, None)
+                    .await?;
+                return Ok(Some(
+                    "⚠️ Your message and the conversation's system context exceed the input size limit. Please shorten your message or attachments. If even a short message fails, the configured prompt or summary may need to be reduced.".to_string(),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+
+        // Assemble before storing the safe prompt representation, so the rich
+        // current message occurs exactly once in the request. Store before any
+        // tool execution; binary attachment payloads never enter history.
+        let user_message = ChatMessage::user(build_persist_text(inbound));
+        storage::messages::create_message(&self.pool, session_id, &user_message, None).await?;
 
         let ctx = AgentContext {
             run_mode: AgentRunMode::InteractiveReply {
