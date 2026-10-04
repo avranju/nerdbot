@@ -491,16 +491,25 @@ async fn test_message_handler_active_reset_context() {
         .await
         .unwrap();
 
+    let old_history: Vec<_> = messages1
+        .iter()
+        .map(|message| message.to_message().unwrap())
+        .collect();
+    let new_history: Vec<_> = messages2
+        .iter()
+        .map(|message| message.to_message().unwrap())
+        .collect();
+
     assert!(
-        messages2
+        new_history
             .iter()
-            .any(|m| m.content == "new conversation starting"),
+            .any(|m| m.content.first_text() == Some("new conversation starting")),
         "Expected subsequent message to be persisted under the new session"
     );
     assert!(
-        !messages1
+        !old_history
             .iter()
-            .any(|m| m.content == "new conversation starting"),
+            .any(|m| m.content.first_text() == Some("new conversation starting")),
         "Subsequent message should not be in the old session"
     );
 }

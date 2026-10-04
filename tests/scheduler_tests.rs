@@ -671,7 +671,26 @@ async fn test_run_scheduled_job_execution() {
         .await
         .unwrap();
     assert_eq!(messages.len(), 3);
-    assert!(messages.iter().any(|m| m.content.contains("Say hello")));
+    let stored_prompt = messages
+        .iter()
+        .find(|m| m.role().unwrap() == ChatRole::User)
+        .unwrap()
+        .to_message()
+        .unwrap();
+    assert_eq!(
+        stored_prompt.content.joined_texts().unwrap(),
+        prompt_sent_to_llm
+    );
+    let request_prompt = request
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == ChatRole::User)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&stored_prompt).unwrap(),
+        serde_json::to_value(request_prompt).unwrap()
+    );
     assert!(
         messages
             .iter()

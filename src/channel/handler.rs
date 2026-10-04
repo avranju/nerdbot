@@ -10,13 +10,14 @@ use crate::agent::agent_loop::{AgentContext, AgentLoopConfig, run_agent};
 use crate::agent::outcome::AgentOutcome;
 use crate::agent::personality::Personality;
 use crate::agent::run_mode::AgentRunMode;
+use crate::agent::system_prompt::current_datetime_in_timezone;
 use crate::channel::{
     ChannelRegistry, ConversationAddress, InboundMessage, OutboundMessage, SenderIdentity,
 };
 use crate::config::AppConfig;
 use crate::context::budget::ContextBudget;
 use crate::context::compaction_service::CompactionService;
-use crate::context::manager::ContextManager;
+use crate::context::manager::{ContextManager, append_datetime_to_user_message};
 use crate::error::AgentError;
 use crate::llm::LlmExecutor;
 use crate::storage;
@@ -283,21 +284,21 @@ impl ChannelMessageHandler {
             .personality
             .effective_prompt(&self.config.agent.default_timezone);
 
-        let current_user_message = assemble_rich_user_message(inbound);
+        let datetime_text = current_datetime_in_timezone(&self.config.agent.default_timezone);
+        let current_user_message =
+            append_datetime_to_user_message(assemble_rich_user_message(inbound), &datetime_text);
+        let user_message = append_datetime_to_user_message(
+            ChatMessage::user(build_persist_text(inbound)),
+            &datetime_text,
+        );
         let assembled = self
             .context_manager
-            .assemble_messages(
-                session_id,
-                &personality,
-                current_user_message,
-                &self.config.agent.default_timezone,
-            )
+            .assemble_prepared_messages(session_id, &personality, current_user_message)
             .await;
         let messages = match assembled {
             Ok(messages) => messages,
             Err(AgentError::Context(reason)) => {
                 warn!(?address, %reason, "current prompt rejected by context budget");
-                let user_message = ChatMessage::user(build_persist_text(inbound));
                 storage::messages::create_message(&self.pool, session_id, &user_message, None)
                     .await?;
                 return Ok(Some(
@@ -309,8 +310,8 @@ impl ChannelMessageHandler {
 
         // Assemble before storing the safe prompt representation, so the rich
         // current message occurs exactly once in the request. Store before any
-        // tool execution; binary attachment payloads never enter history.
-        let user_message = ChatMessage::user(build_persist_text(inbound));
+        // tool execution, retaining the exact datetime sent to the model;
+        // binary attachment payloads never enter history.
         storage::messages::create_message(&self.pool, session_id, &user_message, None).await?;
 
         let ctx = AgentContext {

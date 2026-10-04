@@ -79,6 +79,25 @@ impl ContextManager {
         current_user_message: ChatMessage,
         timezone: &str,
     ) -> Result<Vec<ChatMessage>, crate::error::AgentError> {
+        self.assemble_prepared_messages(
+            session_id,
+            personality,
+            append_current_datetime_to_user_message(current_user_message, timezone),
+        )
+        .await
+    }
+
+    /// Assemble context with a current message whose datetime is already prepared.
+    ///
+    /// Callers that persist a safe representation must enrich both messages with
+    /// the same datetime before calling this method. History is replayed unchanged,
+    /// and budgeting includes the prepared current message's datetime text.
+    pub async fn assemble_prepared_messages(
+        &self,
+        session_id: &str,
+        personality: &str,
+        current_user_message: ChatMessage,
+    ) -> Result<Vec<ChatMessage>, crate::error::AgentError> {
         let mut messages = Vec::new();
 
         // 1. Personality as system message
@@ -102,8 +121,6 @@ impl ContextManager {
 
         // Reserve fixed prompt costs before selecting history. Rich current
         // content is appended once; oversized fixed prompts fail before the LLM.
-        let current_user_message =
-            append_current_datetime_to_user_message(current_user_message, timezone);
         let fixed_tokens = messages
             .iter()
             .map(estimate_tokens_for_message)
@@ -251,6 +268,15 @@ pub fn append_current_datetime_to_user_message(
     timezone: &str,
 ) -> ChatMessage {
     let datetime_text = current_datetime_in_timezone(timezone);
+    append_datetime_to_user_message(current_user_message, &datetime_text)
+}
+
+/// Append a supplied datetime value, allowing rich and safe messages to share
+/// the exact same enrichment and tests to supply a deterministic timestamp.
+pub fn append_datetime_to_user_message(
+    current_user_message: ChatMessage,
+    datetime_text: &str,
+) -> ChatMessage {
     let mut parts = current_user_message.content.parts().clone();
     parts.push(ContentPart::Text(format!(
         "\n\n[Current date/time: {datetime_text}]"

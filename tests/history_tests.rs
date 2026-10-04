@@ -8,14 +8,16 @@ use genai::chat::{
     ToolCall, ToolResponse,
 };
 use nerdbot::agent::personality::Personality;
-use nerdbot::channel::handler::{ChannelMessageHandler, ChannelMessageHandlerInput};
+use nerdbot::channel::handler::{
+    ChannelMessageHandler, ChannelMessageHandlerInput, build_persist_text,
+};
 use nerdbot::channel::{ChannelRegistry, ConversationAddress, InboundMessage, SenderIdentity};
 use nerdbot::config::AppConfig;
 use nerdbot::context::budget::ContextBudget;
 use nerdbot::context::compaction_service::CompactionService;
 use nerdbot::context::compaction_worker::CompactionWorker;
 use nerdbot::context::history::{compaction_prefix_len, normalize_history};
-use nerdbot::context::manager::ContextManager;
+use nerdbot::context::manager::{ContextManager, append_datetime_to_user_message};
 use nerdbot::error::AgentError;
 use nerdbot::llm::LlmExecutor;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
@@ -171,7 +173,10 @@ async fn session(pool: &SqlitePool) -> String {
 }
 
 /// Inject replay metadata that FakeResponse intentionally does not model.
-struct WithMetadata(Arc<FakeProvider>);
+struct WithMetadata {
+    provider: Arc<FakeProvider>,
+    requests: std::sync::Mutex<Vec<ChatRequest>>,
+}
 #[async_trait::async_trait]
 impl LlmExecutor for WithMetadata {
     async fn complete(
@@ -180,7 +185,8 @@ impl LlmExecutor for WithMetadata {
         request: ChatRequest,
         options: ChatOptions,
     ) -> Result<ChatResponse, AgentError> {
-        let mut response = self.0.complete(model, request, options).await?;
+        self.requests.lock().unwrap().push(request.clone());
+        let mut response = self.provider.complete(model, request, options).await?;
         if !response.tool_calls().is_empty() {
             response
                 .content
@@ -208,7 +214,11 @@ async fn interactive_history_replays_complete_batches_in_order_on_next_turn() {
         FakeResponse::final_text("done"),
         FakeResponse::final_text("next reply"),
     ]));
-    let handler = handler(pool.clone(), Arc::new(WithMetadata(provider.clone())), 5);
+    let recorder = Arc::new(WithMetadata {
+        provider: provider.clone(),
+        requests: Default::default(),
+    });
+    let handler = handler(pool.clone(), recorder.clone(), 5);
     assert_eq!(
         turn(&handler, "first prompt").await.unwrap().as_deref(),
         Some("done")
@@ -226,10 +236,28 @@ async fn interactive_history_replays_complete_batches_in_order_on_next_turn() {
             ChatRole::Assistant
         ]
     );
+    let original_user = recorder.requests.lock().unwrap()[0]
+        .messages
+        .last()
+        .unwrap()
+        .clone();
+    assert!(text(std::slice::from_ref(&original_user)).contains("[Current date/time:"));
     assert_eq!(
-        stored[0].content.joined_texts().as_deref(),
-        Some("first prompt")
+        serde_json::to_value(&stored[0]).unwrap(),
+        serde_json::to_value(&original_user).unwrap()
     );
+    for request in recorder.requests.lock().unwrap().iter() {
+        let users: Vec<_> = request
+            .messages
+            .iter()
+            .filter(|m| m.role == ChatRole::User)
+            .collect();
+        assert_eq!(users.len(), 1);
+        assert_eq!(
+            serde_json::to_value(users[0]).unwrap(),
+            serde_json::to_value(&original_user).unwrap()
+        );
+    }
     assert!(text(&stored).contains("I will check both."));
     assert_protocol(&stored);
     assert!(stored[2].content.parts().iter().any(|part| matches!(part, ContentPart::ToolResponse(r) if r.content.contains("\"success\":false"))));
@@ -257,6 +285,15 @@ async fn interactive_history_replays_complete_batches_in_order_on_next_turn() {
     turn(&handler, "second prompt").await.unwrap();
     let request = provider.last_request().unwrap();
     assert_protocol(&request.messages);
+    let replayed_user = request
+        .messages
+        .iter()
+        .find(|m| m.role == ChatRole::User)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(replayed_user).unwrap(),
+        serde_json::to_value(&original_user).unwrap()
+    );
     assert_eq!(text(&request.messages).matches("first prompt").count(), 1);
     assert_eq!(text(&request.messages).matches("second prompt").count(), 1);
     assert_eq!(
@@ -388,6 +425,112 @@ fn budget(tokens: usize) -> ContextBudget {
         reserved_tool_loop_tokens: 0,
         ..ContextBudget::default()
     }
+}
+
+#[tokio::test]
+async fn fixed_datetime_turn_replays_exact_prompt_prefix_and_keeps_legacy_text() {
+    let pool = pool().await;
+    let session = storage::sessions::create_session(&pool, 1).await.unwrap();
+    let legacy = ChatMessage::user("legacy message without a timestamp");
+    messages::create_message(&pool, &session.id, &legacy, None)
+        .await
+        .unwrap();
+    let manager = ContextManager::new(pool.clone(), ContextBudget::default());
+    let inbound = InboundMessage {
+        text: "turn A".into(),
+        attachments: vec![],
+        attachment_parts: vec![],
+    };
+    let datetime_a =
+        "## Current Date/Time in UTC timezone: Saturday, 03-October-2026 01:02:03 UTC (+00:00).";
+    let current_a = append_datetime_to_user_message(ChatMessage::user(&inbound.text), datetime_a);
+    let request_a = manager
+        .assemble_prepared_messages(&session.id, "stable personality", current_a.clone())
+        .await
+        .unwrap();
+    let safe_a = append_datetime_to_user_message(
+        ChatMessage::user(build_persist_text(&inbound)),
+        datetime_a,
+    );
+    messages::create_message(&pool, &session.id, &safe_a, None)
+        .await
+        .unwrap();
+    messages::create_message(
+        &pool,
+        &session.id,
+        &ChatMessage::assistant("reply to A"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let datetime_b = "## Current Date/Time in Asia/Kolkata timezone: Sunday, 04-October-2026 16:17:18 IST (+05:30).";
+    let current_b = append_datetime_to_user_message(ChatMessage::user("turn B"), datetime_b);
+    let request_b = manager
+        .assemble_prepared_messages(&session.id, "stable personality", current_b.clone())
+        .await
+        .unwrap();
+    assert_eq!(request_a.len(), 3);
+    assert_eq!(request_b.len(), 5);
+    assert_eq!(
+        serde_json::to_value(&request_b[..request_a.len()]).unwrap(),
+        serde_json::to_value(&request_a).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&request_b[1]).unwrap(),
+        serde_json::to_value(&legacy).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&request_b[2]).unwrap(),
+        serde_json::to_value(&current_a).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(request_b.last().unwrap()).unwrap(),
+        serde_json::to_value(&current_b).unwrap()
+    );
+    assert_eq!(text(&request_b).matches("[Current date/time:").count(), 2);
+    assert_eq!(text(&request_b).matches(datetime_a).count(), 1);
+    assert_eq!(text(&request_b).matches(datetime_b).count(), 1);
+    assert_eq!(text(&request_b).matches("turn A").count(), 1);
+    assert_eq!(text(&request_b).matches("turn B").count(), 1);
+}
+
+#[tokio::test]
+async fn budgeting_counts_persisted_and_current_datetime_enrichment() {
+    let pool = pool().await;
+    let session = storage::sessions::create_session(&pool, 1).await.unwrap();
+    let datetime =
+        "## Current Date/Time in UTC timezone: Saturday, 03-October-2026 01:02:03 UTC (+00:00).";
+    let historical = append_datetime_to_user_message(ChatMessage::user("turn A"), datetime);
+    messages::create_message(&pool, &session.id, &historical, None)
+        .await
+        .unwrap();
+    let current = append_datetime_to_user_message(ChatMessage::user("turn B"), datetime);
+    let manager = ContextManager::new(pool.clone(), ContextBudget::default());
+    let required = manager.estimate_tokens(&[historical.clone(), current.clone()]);
+    for (limit, expected_count) in [(required, 2), (required - 1, 1)] {
+        let manager = ContextManager::new(pool.clone(), budget(limit));
+        let request = manager
+            .assemble_prepared_messages(&session.id, "", current.clone())
+            .await
+            .unwrap();
+        assert_eq!(request.len(), expected_count);
+        assert!(manager.estimate_tokens(&request) <= limit);
+        assert_eq!(
+            serde_json::to_value(request.last().unwrap()).unwrap(),
+            serde_json::to_value(&current).unwrap()
+        );
+    }
+    let manager = ContextManager::new(
+        pool,
+        budget(manager.estimate_tokens(std::slice::from_ref(&current)) - 1),
+    );
+    assert!(matches!(
+        manager
+            .assemble_prepared_messages(&session.id, "", current)
+            .await,
+        Err(AgentError::Context(_))
+    ));
 }
 
 #[tokio::test]
@@ -665,30 +808,48 @@ async fn scheduled_snapshots_normalize_legacy_and_partial_batches_and_persist_or
         let all = history(&pool, &session(&pool).await).await;
         assert_protocol(&all);
         assert_eq!(all.iter().map(|m| m.role.clone()).collect::<Vec<_>>(), vec![ChatRole::User, ChatRole::Assistant, ChatRole::Tool, ChatRole::Assistant]);
+        let original = input.messages.iter().find(|m| m.role == ChatRole::User && text(std::slice::from_ref(m)).starts_with("scheduled prompt")).unwrap();
+        assert_eq!(serde_json::to_value(&all[0]).unwrap(), serde_json::to_value(original).unwrap());
+        let replay = ContextManager::new(pool.clone(), ContextBudget::default())
+            .assemble_messages(&session(&pool).await, "", ChatMessage::user("next turn"), "Asia/Kolkata")
+            .await.unwrap();
+        assert_eq!(serde_json::to_value(&replay[0]).unwrap(), serde_json::to_value(original).unwrap());
     }
 }
 
 #[tokio::test]
 async fn rich_current_message_keeps_binary_once_and_persists_only_safe_markers() {
     let pool = pool().await;
-    let provider = Arc::new(FakeProvider::new(vec![FakeResponse::final_text("done")]));
+    let provider = Arc::new(FakeProvider::new(vec![
+        FakeResponse::final_text("done"),
+        FakeResponse::final_text("next reply"),
+    ]));
     let handler = handler(pool.clone(), provider.clone(), 3);
     let payload = "BASE64_PAYLOAD_SHOULD_NOT_BE_PERSISTED";
     let inbound = InboundMessage {
         text: "analyze attachment".into(),
-        attachments: vec![nerdbot::channel::AttachmentInfo {
-            display_name: "test.png".into(),
-            mime_type: "image/png".into(),
-            size_bytes: 100,
-            downloaded: true,
-            persistence_marker: "[Image: test.png]".into(),
-            extracted_text: None,
-        }],
-        attachment_parts: vec![ContentPart::from_binary_base64(
-            "image/png",
-            payload,
-            Some("test.png".into()),
-        )],
+        attachments: vec![
+            nerdbot::channel::AttachmentInfo {
+                display_name: "test.png".into(),
+                mime_type: "image/png".into(),
+                size_bytes: 100,
+                downloaded: true,
+                persistence_marker: "[Image: test.png]".into(),
+                extracted_text: None,
+            },
+            nerdbot::channel::AttachmentInfo {
+                display_name: "notes.txt".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 20,
+                downloaded: true,
+                persistence_marker: "[Document: notes.txt]".into(),
+                extracted_text: Some("safe extracted text".into()),
+            },
+        ],
+        attachment_parts: vec![
+            ContentPart::from_binary_base64("image/png", payload, Some("test.png".into())),
+            ContentPart::Text("safe extracted text".into()),
+        ],
     };
     handler
         .handle_rich_message(
@@ -717,6 +878,37 @@ async fn rich_current_message_keeps_binary_once_and_persists_only_safe_markers()
     let persisted = history(&pool, &session(&pool).await).await;
     assert!(!serde_json::to_string(&persisted).unwrap().contains(payload));
     assert!(text(&persisted).contains("[Image: test.png]"));
+    assert!(text(&persisted).contains("[Document: notes.txt]"));
+    assert!(text(&persisted).contains("safe extracted text"));
+    let original_datetime = request
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .parts()
+        .last()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(persisted[0].content.parts().last().unwrap()).unwrap(),
+        serde_json::to_value(original_datetime).unwrap()
+    );
+    assert_eq!(text(&persisted).matches("[Current date/time:").count(), 1);
+    turn(&handler, "next turn").await.unwrap();
+    let replay = provider.last_request().unwrap();
+    assert!(
+        !serde_json::to_string(&replay.messages)
+            .unwrap()
+            .contains(payload)
+    );
+    let replayed = replay
+        .messages
+        .iter()
+        .find(|m| m.role == ChatRole::User)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(replayed).unwrap(),
+        serde_json::to_value(&persisted[0]).unwrap()
+    );
 }
 
 #[test]
@@ -1102,7 +1294,17 @@ async fn oversized_prompts_return_size_notice_without_calling_llm() {
         let persisted = history(&pool, &session(&pool).await).await;
         assert_eq!(persisted.len(), 2);
         assert_eq!(persisted[0].role, ChatRole::User);
-        assert_eq!(persisted[0].content.joined_texts().unwrap(), prompt);
+        assert!(
+            persisted[0]
+                .content
+                .joined_texts()
+                .unwrap()
+                .starts_with(&prompt)
+        );
+        assert_eq!(
+            text(&persisted[..1]).matches("[Current date/time:").count(),
+            1
+        );
         assert_eq!(persisted[1].role, ChatRole::Assistant);
         assert_eq!(persisted[1].content.joined_texts().unwrap(), reply);
         assert_protocol(&persisted);

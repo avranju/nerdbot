@@ -81,11 +81,12 @@ pub async fn run_scheduled_job(
 
     messages = crate::context::history::normalize_history(&messages);
 
-    let user_msg = ChatMessage::user(MessageContent::from_text(&job.prompt));
-    let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;
-    messages.push(
-        crate::context::manager::append_current_datetime_to_user_message(user_msg, &timezone),
+    let user_msg = crate::context::manager::append_current_datetime_to_user_message(
+        ChatMessage::user(MessageContent::from_text(&job.prompt)),
+        &timezone,
     );
+    let _ = crate::storage::messages::create_message(&pool, &session.id, &user_msg, None).await?;
+    messages.push(user_msg);
 
     let agent_ctx = crate::agent::agent_loop::AgentContext {
         run_mode: crate::agent::run_mode::AgentRunMode::ScheduledJob {
