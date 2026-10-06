@@ -5,19 +5,26 @@ use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceError, ServiceExt};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, watch};
+use tokio::time::Instant;
 
 use crate::error::AgentError;
 
-/// A long-lived Streamable HTTP MCP client session.
+use super::http::{McpHttpClient, sanitize_error};
+
+type Session = RunningService<RoleClient, ()>;
+
+/// A long-lived Streamable HTTP MCP client session. Calls are never replayed:
+/// a lost response does not tell us whether the server executed the tool.
 pub struct McpClientHandle {
     pub(crate) server_name: String,
     url: String,
     bearer_token: Option<String>,
     connect_timeout: Duration,
     call_timeout: Duration,
-    connection: Mutex<Option<McpConnection>>,
-    reconnect_gate: Mutex<()>,
+    http: McpHttpClient,
+    connection: Mutex<Option<Session>>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl McpClientHandle {
@@ -28,27 +35,19 @@ impl McpClientHandle {
         connect_timeout: Duration,
         call_timeout: Duration,
     ) -> Result<Arc<Self>, AgentError> {
+        let http = McpHttpClient::new(connect_timeout, call_timeout, bearer_token.clone())?;
         let handle = Arc::new(Self {
             server_name: server_name.into(),
-            url: url.into(),
+            url: url.into().trim().to_owned(),
             bearer_token,
             connect_timeout,
             call_timeout,
+            http,
             connection: Mutex::new(None),
-            reconnect_gate: Mutex::new(()),
+            shutdown: watch::channel(false).0,
         });
-        let service = tokio::time::timeout(connect_timeout, handle.open())
-            .await
-            .map_err(|_| {
-                AgentError::Mcp(format!(
-                    "server {} connection timed out",
-                    handle.server_name
-                ))
-            })??;
-        *handle.connection.lock().await = Some(McpConnection {
-            generation: 0,
-            service,
-        });
+        let service = handle.open(Instant::now() + connect_timeout).await?;
+        *handle.connection.lock().await = Some(service);
         tracing::info!(
             server = %handle.server_name,
             implementation = ?handle.peer_implementation(),
@@ -57,176 +56,141 @@ impl McpClientHandle {
         Ok(handle)
     }
 
-    async fn open(&self) -> Result<RunningService<RoleClient, ()>, AgentError> {
+    fn error(&self, operation: &str, detail: &str) -> AgentError {
+        AgentError::Mcp(sanitize_error(
+            &format!("server {} {operation}: {detail}", self.server_name),
+            self.bearer_token.as_deref(),
+        ))
+    }
+
+    async fn open(&self, deadline: Instant) -> Result<Session, AgentError> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(self.url.clone())
-            .reinit_on_expired_session(true);
+            // Session renewal also replays the outstanding tools/call. Recover on the next
+            // independent call instead, regardless of tool annotations.
+            .reinit_on_expired_session(false);
         if let Some(token) = &self.bearer_token {
             config = config.auth_header(token.clone());
         }
-        ().serve(StreamableHttpClientTransport::from_config(config))
-            .await
-            .map_err(|e| {
-                AgentError::Mcp(format!("server {} handshake failed: {e}", self.server_name))
-            })
+        let mut shutdown = self.shutdown.subscribe();
+        let deadline = deadline.min(Instant::now() + self.connect_timeout);
+        tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|closed| *closed) => Err(self.error("connection", "shut down")),
+            result = tokio::time::timeout_at(deadline, ().serve(
+                StreamableHttpClientTransport::with_client(self.http.clone(), config),
+            )) => match result {
+                Ok(Ok(service)) => Ok(service),
+                Ok(Err(error)) => Err(self.error("handshake failed", &error.to_string())),
+                Err(_) => Err(self.error("connection", "timed out")),
+            }
+        }
     }
 
-    async fn connection(&self) -> Result<MutexGuard<'_, Option<McpConnection>>, AgentError> {
-        let guard = self.connection.lock().await;
-        if guard.is_none() {
-            return Err(AgentError::Mcp(format!(
-                "server {} is disconnected",
-                self.server_name
-            )));
+    async fn connection(&self, deadline: Instant) -> Result<SessionLease<'_>, AgentError> {
+        let mut shutdown = self.shutdown.subscribe();
+        let guard = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|closed| *closed) => return Err(self.error("connection", "shut down")),
+            result = tokio::time::timeout_at(deadline, self.connection.lock()) => {
+                result.map_err(|_| self.error("waiting for connection", "timed out"))?
+            }
+        };
+        if Instant::now() >= deadline {
+            return Err(self.error("waiting for connection", "timed out"));
         }
-        Ok(guard)
+        let mut lease = SessionLease {
+            guard,
+            discard: false,
+        };
+        // This lock also serializes recovery: queued callers share one successful handshake.
+        if lease.guard.is_none() {
+            tracing::info!(server = %self.server_name, "reconnecting MCP session before a new call");
+            *lease.guard = Some(self.open(deadline).await?);
+        }
+        // A shutdown can arrive as the handshake completes. Never publish a usable session
+        // after closure, even when both select branches became ready at the same time.
+        if *self.shutdown.borrow() {
+            lease.discard = true;
+            return Err(self.error("connection", "shut down"));
+        }
+        if Instant::now() >= deadline {
+            return Err(self.error("connection", "timed out"));
+        }
+        Ok(lease)
     }
 
     pub async fn list_tools(&self, timeout: Duration) -> Result<Vec<Tool>, AgentError> {
-        let guard = self.connection().await?;
-        tokio::time::timeout(timeout, guard.as_ref().unwrap().service.list_all_tools())
-            .await
-            .map_err(|_| {
-                AgentError::Mcp(format!("server {} tools/list timed out", self.server_name))
-            })?
-            .map_err(|e| {
-                AgentError::Mcp(format!(
-                    "server {} tools/list failed: {e}",
-                    self.server_name
-                ))
-            })
+        let deadline = Instant::now() + timeout;
+        let mut lease = self.connection(deadline).await?;
+        let mut shutdown = self.shutdown.subscribe();
+        lease.discard = true;
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|closed| *closed) => return Err(self.error("tools/list", "shut down")),
+            result = tokio::time::timeout_at(deadline, lease.guard.as_ref().unwrap().list_all_tools()) => result,
+        };
+        match result {
+            Ok(result) => {
+                lease.discard = result.as_ref().is_err_and(is_connection_error);
+                result.map_err(|error| self.error("tools/list failed", &error.to_string()))
+            }
+            Err(_) => Err(self.error("tools/list", "timed out")),
+        }
     }
 
     pub async fn call_tool(
         &self,
         params: CallToolRequestParams,
     ) -> Result<CallToolResult, AgentError> {
-        let first = {
-            let guard = self.connection().await?;
-            let generation = guard.as_ref().unwrap().generation;
-            let result = tokio::time::timeout(
-                self.call_timeout,
-                guard.as_ref().unwrap().service.call_tool(params.clone()),
-            )
-            .await;
-            (generation, result)
+        let deadline = Instant::now() + self.call_timeout;
+        let mut lease = self.connection(deadline).await?;
+        let mut shutdown = self.shutdown.subscribe();
+        // Discard on timeout, shutdown, or cancellation of the caller's future. That prevents
+        // a still-pending HTTP request from blocking the next call on this transport.
+        lease.discard = true;
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|closed| *closed) => return Err(self.error("tools/call", "shut down")),
+            result = tokio::time::timeout_at(deadline, lease.guard.as_ref().unwrap().call_tool(params)) => result,
         };
-        match first {
-            (_, Ok(Ok(result))) => Ok(result),
-            (
-                generation,
-                Ok(Err(error @ (ServiceError::TransportSend(_) | ServiceError::TransportClosed))),
-            ) => {
-                // A single reconnect-and-retry path is intentionally bounded and only applies to
-                // transport failures, never MCP-declared or protocol-level failures.
-                self.reconnect(generation).await?;
-                let guard = self.connection().await?;
-                tokio::time::timeout(
-                    self.call_timeout,
-                    guard.as_ref().unwrap().service.call_tool(params),
-                )
-                .await
-                .map_err(|_| {
-                    AgentError::Mcp(format!("server {} tools/call timed out", self.server_name))
-                })?
-                .map_err(|e| {
-                    AgentError::Mcp(format!(
-                        "server {} tools/call failed after reconnect: {e} (initial: {error})",
-                        self.server_name
-                    ))
+        match result {
+            Ok(result) => {
+                lease.discard = result.as_ref().is_err_and(is_connection_error);
+                result.map_err(|error| {
+                    self.error(
+                        "tools/call failed (not retried; execution may have completed)",
+                        &error.to_string(),
+                    )
                 })
             }
-            (_, Ok(Err(error))) => Err(AgentError::Mcp(format!(
-                "server {} tools/call failed: {error}",
-                self.server_name
-            ))),
-            (_, Err(_)) => Err(AgentError::Mcp(format!(
-                "server {} tools/call timed out",
-                self.server_name
-            ))),
+            Err(_) => Err(self.error(
+                "tools/call",
+                "timed out; not retried, execution may have completed",
+            )),
         }
-    }
-
-    async fn reconnect(&self, failed_generation: u64) -> Result<(), AgentError> {
-        let _gate = self.reconnect_gate.lock().await;
-        {
-            let connection = self.connection.lock().await;
-            if connection
-                .as_ref()
-                .is_some_and(|current| current.generation != failed_generation)
-            {
-                // Another caller already replaced the connection for this failed generation.
-                return Ok(());
-            }
-        }
-
-        tracing::warn!(
-            server = %self.server_name,
-            generation = failed_generation,
-            "MCP connection lost; reconnecting"
-        );
-
-        // Keep the old connection in place until the replacement handshake succeeds. This
-        // ensures a failed reconnect does not strand the handle in a disconnected state, and
-        // callers arriving while the handshake is in progress can wait for the gate and retry
-        // the recovery themselves if necessary.
-        let service = tokio::time::timeout(self.connect_timeout, self.open())
-            .await
-            .map_err(|_| {
-                AgentError::Mcp(format!("server {} reconnect timed out", self.server_name))
-            })??;
-        let next_generation = failed_generation.saturating_add(1);
-        let old = {
-            let mut connection = self.connection.lock().await;
-            if connection
-                .as_ref()
-                .is_some_and(|current| current.generation != failed_generation)
-            {
-                drop(connection);
-                let mut service = service;
-                let _ = service.close_with_timeout(Duration::from_secs(1)).await;
-                return Ok(());
-            }
-            connection.replace(McpConnection {
-                generation: next_generation,
-                service,
-            })
-        };
-        if let Some(mut old) = old {
-            let _ = old.service.close_with_timeout(Duration::from_secs(1)).await;
-        }
-        tracing::info!(
-            server = %self.server_name,
-            generation = next_generation,
-            implementation = ?self.peer_implementation(),
-            "MCP connection re-established"
-        );
-        Ok(())
     }
 
     pub async fn shutdown(&self) {
-        if let Some(mut connection) = self.connection.lock().await.take() {
+        // Signal before waiting for the session lock, so active calls and handshakes stop.
+        // send_replace retains the terminal value even when no receiver is subscribed.
+        self.shutdown.send_replace(true);
+        let connection = self.connection.lock().await.take();
+        if let Some(mut service) = connection {
             tracing::info!(server = %self.server_name, "closing MCP connection");
-            let _ = connection
-                .service
-                .close_with_timeout(Duration::from_secs(5))
-                .await;
+            let _ = service.close_with_timeout(Duration::from_secs(5)).await;
         }
     }
 
     /// Return the sanitized implementation identity reported by the handshake.
     pub fn peer_implementation(&self) -> Option<(String, String)> {
-        self.connection
-            .try_lock()
-            .ok()
-            .and_then(|connection| connection.as_ref()?.service.peer_info())
-            .and_then(|info| {
-                info.server_info.as_ref().map(|implementation| {
-                    (
-                        sanitize_peer_field(&implementation.name),
-                        sanitize_peer_field(&implementation.version),
-                    )
-                })
-            })
+        self.connection.try_lock().ok().and_then(|connection| {
+            let info = connection.as_ref()?.peer_info()?;
+            let implementation = info.server_info.as_ref()?;
+            Some((
+                sanitize_peer_field(&implementation.name, self.bearer_token.as_deref()),
+                sanitize_peer_field(&implementation.version, self.bearer_token.as_deref()),
+            ))
+        })
     }
 
     pub fn server_name(&self) -> &str {
@@ -234,15 +198,33 @@ impl McpClientHandle {
     }
 }
 
-struct McpConnection {
-    generation: u64,
-    service: RunningService<RoleClient, ()>,
+fn is_connection_error(error: &ServiceError) -> bool {
+    matches!(
+        error,
+        ServiceError::TransportSend(_)
+            | ServiceError::TransportClosed
+            | ServiceError::Timeout { .. }
+    )
 }
 
-fn sanitize_peer_field(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(128)
-        .collect()
+/// Cancelling a request future must retire its transport as well as release the mutex.
+struct SessionLease<'a> {
+    guard: MutexGuard<'a, Option<Session>>,
+    discard: bool,
+}
+
+impl Drop for SessionLease<'_> {
+    fn drop(&mut self) {
+        if self.discard
+            && let Some(mut service) = self.guard.take()
+        {
+            tokio::spawn(async move {
+                let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+            });
+        }
+    }
+}
+
+fn sanitize_peer_field(value: &str, token: Option<&str>) -> String {
+    sanitize_error(value, token).chars().take(128).collect()
 }

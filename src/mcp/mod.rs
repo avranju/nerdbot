@@ -1,6 +1,7 @@
 //! Runtime MCP tool providers.
 
 mod client;
+mod http;
 mod manager;
 mod tool_proxy;
 

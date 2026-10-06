@@ -683,29 +683,56 @@ url = "https://example.test/mcp"
     assert!(server.include_tools.is_empty());
 }
 
-#[test]
-fn test_mcp_rejects_duplicate_names_and_invalid_prefix() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("config.toml");
-    fs::write(
-        &path,
-        r#"
-[[mcp.servers]]
-name = "mail"
-tool_prefix = "bad prefix"
-[mcp.servers.transport]
-type = "streamable_http"
-url = "https://example.test/mcp"
+fn mcp_config_for_validation() -> AppConfig {
+    let mut config = AppConfig::default();
+    config.mcp.servers.push(McpServerConfig {
+        name: "mail".into(),
+        enabled: true,
+        required: false,
+        transport: McpTransportConfig::StreamableHttp {
+            url: "https://example.test/mcp".into(),
+            bearer_token_env: None,
+        },
+        tool_prefix: None,
+        include_tools: vec![],
+        exclude_tools: vec![],
+        connect_timeout_secs: 10,
+        call_timeout_secs: 60,
+    });
+    config
+}
 
-[[mcp.servers]]
-name = "mail"
-[mcp.servers.transport]
-type = "streamable_http"
-url = "https://example.test/other"
-"#,
-    )
-    .unwrap();
-    assert!(AppConfig::from_file(&path).is_err());
+#[test]
+fn test_mcp_rejects_duplicate_names() {
+    let mut config = mcp_config_for_validation();
+    config.mcp.servers.push(config.mcp.servers[0].clone());
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("duplicate mcp server name"));
+}
+
+#[test]
+fn test_mcp_rejects_invalid_prefix() {
+    let mut config = mcp_config_for_validation();
+    config.mcp.servers[0].tool_prefix = Some("bad prefix".into());
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("invalid tool_prefix")
+    );
+}
+
+#[test]
+fn test_mcp_rejects_invalid_urls() {
+    for url in ["ftp://example.test/mcp", "example.test/mcp", "http://"] {
+        let mut config = mcp_config_for_validation();
+        config.mcp.servers[0].transport = McpTransportConfig::StreamableHttp {
+            url: url.into(),
+            bearer_token_env: None,
+        };
+        assert!(config.validate().is_err(), "unexpectedly accepted {url:?}");
+    }
 }
 
 #[test]
@@ -729,23 +756,38 @@ fn test_mcp_rejects_prefix_that_cannot_fit_a_tool_name() {
 }
 
 #[test]
-fn test_mcp_rejects_zero_timeout_and_blank_token_env() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("config.toml");
-    fs::write(
-        &path,
-        r#"
-[[mcp.servers]]
-name = "mail"
-connect_timeout_secs = 0
-[mcp.servers.transport]
-type = "streamable_http"
-url = "https://example.test/mcp"
-bearer_token_env = "  "
-"#,
-    )
-    .unwrap();
-    assert!(AppConfig::from_file(&path).is_err());
+fn test_mcp_rejects_zero_timeouts() {
+    for connect in [true, false] {
+        let mut config = mcp_config_for_validation();
+        if connect {
+            config.mcp.servers[0].connect_timeout_secs = 0;
+        } else {
+            config.mcp.servers[0].call_timeout_secs = 0;
+        }
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("timeouts must be greater than 0")
+        );
+    }
+}
+
+#[test]
+fn test_mcp_rejects_blank_token_env() {
+    let mut config = mcp_config_for_validation();
+    let McpTransportConfig::StreamableHttp {
+        bearer_token_env, ..
+    } = &mut config.mcp.servers[0].transport;
+    *bearer_token_env = Some("  ".into());
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("bearer_token_env must not be blank")
+    );
 }
 
 #[test]

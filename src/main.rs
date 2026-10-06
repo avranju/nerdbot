@@ -45,7 +45,8 @@ use nerdbot::zulip::runtime::{
     ZulipRuntime, ZulipWebhookRuntime, build_runtime as build_zulip_runtime,
     run_ingress_loop as run_zulip_ingress_loop,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -541,31 +542,35 @@ async fn run_channel_ingress_loops(
     zulip: Option<ZulipRuntime>,
     handler: Arc<ChannelMessageHandler>,
 ) {
-    let telegram_handle = telegram.map(|telegram| {
+    let (shutdown, _) = watch::channel(false);
+    let mut loops = JoinSet::new();
+    if let Some(telegram) = telegram {
         let handler = handler.clone();
-        tokio::spawn(async move {
-            run_telegram_ingress_loop(telegram, handler).await;
-        })
-    });
+        let shutdown = shutdown.subscribe();
+        loops.spawn(async move {
+            run_telegram_ingress_loop(telegram, handler, shutdown).await;
+        });
+    }
+    if let Some(zulip) = zulip {
+        let shutdown = shutdown.subscribe();
+        loops.spawn(async move {
+            run_zulip_ingress_loop(zulip, handler, shutdown).await;
+        });
+    }
+    stop_and_drain_ingress(&mut loops, &shutdown).await;
+}
 
-    let zulip_handle = zulip.map(|zulip| {
-        let handler = handler.clone();
-        tokio::spawn(async move {
-            run_zulip_ingress_loop(zulip, handler).await;
-        })
-    });
-
-    if let Some(handle) = telegram_handle {
-        if let Some(zulip_handle) = zulip_handle {
-            tokio::select! {
-                _ = handle => {}
-                _ = zulip_handle => {}
-            }
-        } else {
-            let _ = handle.await;
+async fn stop_and_drain_ingress(loops: &mut JoinSet<()>, shutdown: &watch::Sender<bool>) {
+    if let Some(Err(error)) = loops.join_next().await {
+        error!(%error, "Channel ingress task failed");
+    }
+    // One channel may stop on an error while another is still polling. Signal all
+    // remaining loops and await them rather than detaching their JoinHandles.
+    shutdown.send_replace(true);
+    while let Some(result) = loops.join_next().await {
+        if let Err(error) = result {
+            error!(%error, "Channel ingress task failed during shutdown");
         }
-    } else if let Some(handle) = zulip_handle {
-        let _ = handle.await;
     }
 }
 
@@ -633,5 +638,39 @@ impl Drop for SchedulerGuard {
                 info!("SchedulerGuard: scheduler background loop stopped successfully");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ingress_shutdown_signals_and_drains_the_other_channel() {
+        let (shutdown, _) = watch::channel(false);
+        let mut receiver = shutdown.subscribe();
+        let (stopping, stopped) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let mut loops = JoinSet::new();
+        loops.spawn(async {});
+        loops.spawn(async move {
+            let _ = receiver.wait_for(|closed| *closed).await.unwrap();
+            stopping.send(()).unwrap();
+            released.await.unwrap();
+        });
+        let drain = tokio::spawn(async move {
+            stop_and_drain_ingress(&mut loops, &shutdown).await;
+            assert!(loops.is_empty());
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), stopped)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !drain.is_finished(),
+            "the accepted work must finish before ingress shutdown returns"
+        );
+        release.send(()).unwrap();
+        drain.await.unwrap();
     }
 }

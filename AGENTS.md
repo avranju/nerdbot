@@ -45,7 +45,8 @@ src/
 
   mcp/
     mod.rs         — Runtime MCP extension boundary and public adapter exports
-    client.rs      — Long-lived rmcp Streamable HTTP client sessions, timeout-bounded handshakes/calls, generation-gated reconnect retry, peer metadata, and shutdown
+    client.rs      — Long-lived rmcp Streamable HTTP sessions, overall call deadlines, serialized recovery for later independent calls, cancellation-safe session retirement, sanitized peer metadata, and terminal shutdown
+    http.rs        — SDK HTTP adapter with bounded requests, long-lived GET streams, sanitized transport errors, and bounded credential-redacted diagnostics
     manager.rs     — Startup discovery, filtering, collision-safe atomic registry population, and shutdown
     tool_proxy.rs  — MCP tool metadata and CallToolResult conversion to ordinary ToolOutput
 
@@ -64,7 +65,7 @@ src/
     handler.rs     — Telegram-facing compatibility adapter over ChannelMessageHandler for Telegram-shaped callers/tests
     inbound.rs     — Telegram inbound adapter that converts raw Telegram messages into channel-generic InboundMessage payload pieces, including photo/document attachment processing before ChannelMessageHandler dispatch
     markdown.rs    — Markdown parser and converter for escaping Telegram's MarkdownV2 format safely
-    runtime.rs     — Telegram runtime startup, command-menu setup, poll/webhook ingress loop, allowlist precheck, and raw update dispatch into ChannelMessageHandler
+    runtime.rs     — Telegram runtime startup, command-menu setup, poll/webhook ingress loop, allowlist precheck, tracked raw update dispatch into ChannelMessageHandler, and draining accepted handlers during shutdown
     service.rs     — TelegramService: send_message, typing, ChannelService implementation
     update/
       mod.rs       — TelegramUpdate trait and ingress implementation exports
@@ -173,10 +174,10 @@ README.md          — Project documentation
 
 **Runtime MCP extensions:**
 1. Startup registers built-in tools through the fallible, provider-aware ToolRegistry API
-2. Enabled `[mcp.servers]` entries connect through rmcp Streamable HTTP, discover `tools/list` (including SDK pagination), and expose filtered/prefixed tools in configuration order
-3. MCP sessions remain alive for the runtime; calls enforce per-server timeouts and use one bounded reconnect/retry path for transport failures, guarded by connection generations so concurrent failures do not replace a newer session
-4. Optional server failures are warned and skipped atomically; required failures abort startup. Sessions are closed during graceful shutdown
-5. Version 1 supports Streamable HTTP only; stdio is explicitly deferred. Configured MCP servers are trusted extensions and normal channel access control still runs before every tool call. Connection logs include sanitized peer implementation metadata and reconnect/shutdown state changes
+2. Enabled `[mcp.servers]` entries connect through rmcp Streamable HTTP, discover `tools/list` (including SDK pagination), and register servers in configuration order with filtered/prefixed tools sorted by exposed name within each server
+3. Successful calls retain their MCP session. Per-server calls are serialized under one session lock, and each call has an overall deadline covering queue wait, reconnect, and execution. Failed/timed-out tools are never replayed, including by SDK expired-session renewal. Transport failures, timeouts, and cancelled futures retire the session; the next independent call performs a serialized, timeout-bounded handshake before dispatch
+4. Optional server failures are warned and skipped atomically; required failures abort startup. Rejected sessions are explicitly closed. Shutdown coordinates both ingress loops, drains Telegram handlers and scheduled jobs, then permanently closes sessions; closing a handle interrupts active calls/handshakes and prevents reconnect from restoring it
+5. Version 1 supports Streamable HTTP only; stdio is deferred in `docs/runtime-mcp-stdio-follow-up.md`. Configured servers are trusted extensions and normal channel access control still runs before every tool call. HTTP error bodies are omitted before SDK error logging; request-helper raw traces are suppressed, JSON-RPC error messages are sanitized and their diagnostic data omitted before SDK tracing, stream errors are normalized, and NerdBot errors redact the configured token, remove control characters, and cap text at 512 characters. Connection logs include sanitized peer metadata and reconnect/shutdown state changes
 
 **CLI onboarding:**
 1. Run `nerdbot onboard` (optionally with `--config <path>`)
@@ -303,7 +304,7 @@ ToolRegistry registration is fallible and collision-safe. Built-ins use the `bui
 
 ### Error Types
 `AgentError` covers: LlmProvider, ToolExecution, ToolNotFound, InvalidToolArgs,
-Telegram, Zulip, Storage, Config, MaxToolIterationsExceeded, Context, Scheduler, WebSearch,
+Telegram, Zulip, Storage, Config, Mcp, ToolNameCollision, MaxToolIterationsExceeded, Context, Scheduler, WebSearch,
 WebFetch, FileIo, SandboxViolation, TokenEstimation, Compaction, PermissionDenied,
 Timeout, Generic.
 

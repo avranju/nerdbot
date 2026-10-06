@@ -31,6 +31,7 @@ impl McpManager {
             let result = manager.initialize_server(server_config, registry).await;
             if let Err(error) = result {
                 if server_config.required {
+                    manager.shutdown().await;
                     return Err(error);
                 }
                 tracing::warn!(
@@ -76,38 +77,49 @@ impl McpManager {
             Duration::from_secs(server_config.call_timeout_secs),
         )
         .await?;
-        let tools = server
-            .list_tools(Duration::from_secs(server_config.connect_timeout_secs))
-            .await?;
-        let discovered_count = tools.len();
-        let include = &server_config.include_tools;
-        let exclude = &server_config.exclude_tools;
-        let prefix = server_config.tool_prefix.as_deref().unwrap_or("");
-        let mut proxies: Vec<Arc<dyn Tool>> = Vec::new();
+        let discovery = async {
+            let tools = server
+                .list_tools(Duration::from_secs(server_config.connect_timeout_secs))
+                .await?;
+            let discovered_count = tools.len();
+            let include = &server_config.include_tools;
+            let exclude = &server_config.exclude_tools;
+            let prefix = server_config.tool_prefix.as_deref().unwrap_or("");
+            let mut proxies: Vec<Arc<dyn Tool>> = Vec::new();
 
-        for remote in tools {
-            let remote_name = remote.name.as_ref();
-            if !include.is_empty() && !include.iter().any(|name| name == remote_name) {
-                continue;
+            for remote in tools {
+                let remote_name = remote.name.as_ref();
+                if !include.is_empty() && !include.iter().any(|name| name == remote_name) {
+                    continue;
+                }
+                if exclude.iter().any(|name| name == remote_name) {
+                    continue;
+                }
+                let exposed_name = format!("{prefix}{remote_name}");
+                validate_exposed_tool_name(&exposed_name).map_err(|error| {
+                    AgentError::Mcp(format!("server {}: {error}", server_config.name))
+                })?;
+                proxies.push(Arc::new(McpToolProxy::new(
+                    server.clone(),
+                    remote,
+                    exposed_name,
+                )?));
             }
-            if exclude.iter().any(|name| name == remote_name) {
-                continue;
-            }
-            let exposed_name = format!("{prefix}{remote_name}");
-            validate_exposed_tool_name(&exposed_name).map_err(|error| {
-                AgentError::Mcp(format!("server {}: {error}", server_config.name))
-            })?;
-            proxies.push(Arc::new(McpToolProxy::new(
-                server.clone(),
-                remote,
-                exposed_name,
-            )?));
+            proxies.sort_by(|left, right| left.name().cmp(right.name()));
+            let exposed_count = proxies.len();
+            let exposed_names: Vec<String> =
+                proxies.iter().map(|tool| tool.name().to_string()).collect();
+            registry.register_batch_from(proxies, format!("mcp:{}", server_config.name))?;
+            Ok::<_, AgentError>((discovered_count, exposed_count, exposed_names))
         }
-        proxies.sort_by(|left, right| left.name().cmp(right.name()));
-        let exposed_count = proxies.len();
-        let exposed_names: Vec<String> =
-            proxies.iter().map(|tool| tool.name().to_string()).collect();
-        registry.register_batch_from(proxies, format!("mcp:{}", server_config.name))?;
+        .await;
+        let (discovered_count, exposed_count, exposed_names) = match discovery {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                server.shutdown().await;
+                return Err(error);
+            }
+        };
         tracing::info!(
             server = %server_config.name,
             transport = "streamable_http",

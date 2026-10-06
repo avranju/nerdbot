@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use super::bot::{TelegramBot, Update};
@@ -64,12 +65,18 @@ pub async fn build_runtime(
     }))
 }
 
-pub async fn run_ingress_loop(telegram: TelegramRuntime, handler: Arc<ChannelMessageHandler>) {
+pub async fn run_ingress_loop(
+    telegram: TelegramRuntime,
+    handler: Arc<ChannelMessageHandler>,
+    shutdown: watch::Receiver<bool>,
+) {
     match telegram.config.ingress {
         TelegramIngress::Poll => {
             let updates =
                 TelegramPoll::new(telegram.bot.clone(), telegram.config.poll_interval_secs);
-            if let Err(e) = run_update_loop(updates, telegram.bot, handler, telegram.config).await {
+            if let Err(e) =
+                run_update_loop(updates, telegram.bot, handler, telegram.config, shutdown).await
+            {
                 error!(error = %e, "Telegram polling ingress failed");
             }
         }
@@ -86,7 +93,9 @@ pub async fn run_ingress_loop(telegram: TelegramRuntime, handler: Arc<ChannelMes
                 webhook.secret_token,
                 webhook.receiver,
             );
-            if let Err(e) = run_update_loop(updates, telegram.bot, handler, telegram.config).await {
+            if let Err(e) =
+                run_update_loop(updates, telegram.bot, handler, telegram.config, shutdown).await
+            {
                 error!(error = %e, "Telegram webhook ingress failed");
             }
         }
@@ -98,21 +107,30 @@ async fn run_update_loop<T>(
     bot: Arc<TelegramBot>,
     handler: Arc<ChannelMessageHandler>,
     telegram_config: TelegramChannelConfig,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), AgentError>
 where
     T: TelegramUpdate,
 {
     updates.init().await?;
+    let mut handlers = JoinSet::new();
 
     loop {
         tokio::select! {
+            biased;
+            _ = async { let _ = shutdown.wait_for(|closed| *closed).await; } => break,
+            result = handlers.join_next(), if !handlers.is_empty() => {
+                if let Some(Err(error)) = result {
+                    error!(%error, "Telegram message handler task failed");
+                }
+            }
             res = updates.poll() => {
                 match res {
                     Ok(Some(update)) => {
                         let bot = bot.clone();
                         let handler = handler.clone();
                         let telegram_config = telegram_config.clone();
-                        tokio::spawn(async move {
+                        handlers.spawn(async move {
                             dispatch_update(
                                 update,
                                 bot,
@@ -128,6 +146,7 @@ where
                     Err(e) => {
                         error!(error = %e, "Telegram update polling failed, retrying in 5s");
                         tokio::select! {
+                            _ = async { let _ = shutdown.wait_for(|closed| *closed).await; } => break,
                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                             _ = tokio::signal::ctrl_c() => {
                                 info!("received Ctrl-C during retry sleep, shutting down...");
@@ -144,6 +163,12 @@ where
         }
     }
 
+    // Stop accepting updates, then finish accepted messages before MCP sessions close.
+    while let Some(result) = handlers.join_next().await {
+        if let Err(error) = result {
+            error!(%error, "Telegram message handler task failed during shutdown");
+        }
+    }
     Ok(())
 }
 
@@ -221,5 +246,130 @@ fn required_env(env_var: &str, description: &str) -> Result<String, AgentError> 
         Err(_) => Err(AgentError::Config(format!(
             "{description} environment variable {env_var} is not set"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::agent::personality::Personality;
+    use crate::channel::handler::ChannelMessageHandlerInput;
+    use crate::channel::{ChannelRegistry, ChannelService, OutboundMessage};
+    use crate::config::AppConfig;
+    use crate::context::budget::ContextBudget;
+    use crate::context::compaction_service::CompactionService;
+    use crate::context::compaction_worker::CompactionWorker;
+    use crate::llm::fake::FakeProvider;
+    use crate::tools::registry::ToolRegistry;
+
+    struct OneUpdate(Option<Update>);
+
+    #[async_trait::async_trait]
+    impl TelegramUpdate for OneUpdate {
+        async fn init(&mut self) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        async fn poll(&mut self) -> Result<Option<Update>, AgentError> {
+            match self.0.take() {
+                Some(update) => Ok(Some(update)),
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct GatedReply {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        completed: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelService for GatedReply {
+        fn channel_id(&self) -> &str {
+            "telegram"
+        }
+
+        async fn send_message(
+            &self,
+            _: &ConversationAddress,
+            _: OutboundMessage,
+        ) -> Result<(), AgentError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.completed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_an_accepted_telegram_message() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .in_memory(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let reply = Arc::new(GatedReply::default());
+        let provider = Arc::new(FakeProvider::new(vec![]));
+        let worker = CompactionWorker::new(provider.clone(), "fake".into(), 0.0);
+        let compaction = Arc::new(CompactionService::new(
+            pool.clone(),
+            Arc::new(worker),
+            ContextBudget::default(),
+            30,
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.agent.personality_file = directory.path().join("personality.md");
+        std::fs::write(&config.agent.personality_file, "test personality").unwrap();
+        let handler = Arc::new(ChannelMessageHandler::new(ChannelMessageHandlerInput {
+            pool,
+            llm: provider,
+            registry: Arc::new(ToolRegistry::new()),
+            channel_registry: Arc::new(ChannelRegistry::new(vec![reply.clone()])),
+            personality: Personality::from_config(&config),
+            config: config.clone(),
+            scheduler_notifier: None,
+            compaction_service: compaction,
+        }));
+        let update = serde_json::from_value(serde_json::json!({
+            "update_id": 1,
+            "message": {"message_id": 1, "chat": {"id": 123, "type": "private"},
+                "from": {"id": 456, "is_bot": false, "first_name": "tester"}, "text": "/help"}
+        }))
+        .unwrap();
+        let (shutdown, receiver) = watch::channel(false);
+        let task = tokio::spawn(run_update_loop(
+            OneUpdate(Some(update)),
+            Arc::new(TelegramBot::new("unused-test-token".into())),
+            handler,
+            config.channels.telegram,
+            receiver,
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(1), reply.entered.notified())
+            .await
+            .unwrap();
+        shutdown.send_replace(true);
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "accepted handlers must be drained before ingress returns"
+        );
+        reply.release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(reply.completed.load(Ordering::SeqCst));
     }
 }

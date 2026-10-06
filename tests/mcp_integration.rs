@@ -29,6 +29,7 @@ use serde_json::json;
 struct LocalMcpServer {
     handshake_count: Arc<AtomicUsize>,
     initialize_delay: Duration,
+    call_count: Arc<AtomicUsize>,
 }
 
 impl LocalMcpServer {
@@ -36,6 +37,7 @@ impl LocalMcpServer {
         Self {
             handshake_count,
             initialize_delay,
+            call_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -85,6 +87,7 @@ impl ServerHandler for LocalMcpServer {
         request: CallToolRequestParams,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
         let arguments = request.arguments.unwrap_or_default();
         match request.name.as_ref() {
             "echo_mcp" => Ok(CallToolResult::structured(json!({
@@ -92,6 +95,13 @@ impl ServerHandler for LocalMcpServer {
                 "arguments": arguments,
             }))
             .into()),
+            "protocol_error_mcp" => Err(ErrorData::invalid_params(
+                format!(
+                    "invalid credential test-secret-token {}",
+                    "detail".repeat(8192)
+                ),
+                Some(json!({"sensitive-body": "test-secret-token", "detail": "x".repeat(65536)})),
+            )),
             "fail_mcp" => {
                 Ok(CallToolResult::error(vec![ContentBlock::text("remote failure")]).into())
             }
@@ -273,7 +283,7 @@ async fn stalled_handshake_is_bounded_by_connect_timeout() {
 }
 
 #[tokio::test]
-async fn transport_loss_reconnects_once_and_retries_the_call() {
+async fn transport_loss_recovers_before_the_next_independent_call() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let handshake_count = Arc::new(AtomicUsize::new(0));
@@ -293,8 +303,7 @@ async fn transport_loss_reconnects_once_and_retries_the_call() {
     stop();
     task.await.unwrap();
 
-    // The first recovery attempt happens while the endpoint is unavailable. The old connection
-    // must remain usable as the recovery marker so a later call can retry recovery.
+    // The failed call is not replayed. A later, independent call reconnects before dispatch.
     assert!(
         client
             .call_tool(CallToolRequestParams::new("echo_mcp"))
@@ -309,8 +318,7 @@ async fn transport_loss_reconnects_once_and_retries_the_call() {
         Duration::from_millis(100),
     )
     .await;
-    // Both callers arrive while the replacement handshake is in progress. The generation gate
-    // must make them share one reconnect and both retry against the new session.
+    // Concurrent independent calls share one replacement handshake under the session lock.
     let (first, second) = tokio::join!(
         client.call_tool(CallToolRequestParams::new("echo_mcp")),
         client.call_tool(CallToolRequestParams::new("echo_mcp")),
@@ -493,4 +501,483 @@ async fn optional_collision_does_not_partially_register_tools() {
     assert_eq!(registry.len(), 1);
     manager.shutdown().await;
     stop();
+}
+
+#[derive(Clone, Copy)]
+enum HttpFault {
+    LoseFirstReply,
+    ExpireFirstCall,
+    StallSlowCall,
+    CredentialError,
+    CredentialContentType,
+}
+
+struct FaultServer {
+    url: String,
+    calls: Arc<AtomicUsize>,
+    handshakes: Arc<AtomicUsize>,
+    received_calls: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FaultServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn fault_server(fault: HttpFault, initialize_delay: Duration) -> FaultServer {
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
+    use axum::middleware::Next;
+    use axum::response::IntoResponse;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handshakes = Arc::new(AtomicUsize::new(0));
+    let server = LocalMcpServer::new(handshakes.clone(), initialize_delay);
+    let calls = server.call_count.clone();
+    let service: StreamableHttpService<LocalMcpServer, LocalSessionManager> =
+        StreamableHttpService::new(
+            move || Ok(server.clone()),
+            Default::default(),
+            StreamableHttpServerConfig::default().with_sse_keep_alive(None),
+        );
+    let seen = Arc::new(AtomicUsize::new(0));
+    let received_calls = seen.clone();
+    let router =
+        axum::Router::new()
+            .nest_service("/mcp", service)
+            .layer(axum::middleware::from_fn(
+                move |request: Request<Body>, next: Next| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, body) = request.into_parts();
+                        let body = to_bytes(body, usize::MAX).await.unwrap();
+                        let json =
+                            serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default();
+                        let is_call = json["method"] == "tools/call";
+                        let first_call = is_call && seen.fetch_add(1, Ordering::SeqCst) == 0;
+                        match fault {
+                            HttpFault::CredentialError => {
+                                let token = parts
+                                    .headers
+                                    .get("authorization")
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap();
+                                return (
+                                    StatusCode::UNAUTHORIZED,
+                                    format!(
+                                        "invalid credentials: {token}\n{}",
+                                        "sensitive-body".repeat(8192)
+                                    ),
+                                )
+                                    .into_response();
+                            }
+                            HttpFault::CredentialContentType => {
+                                return (
+                                    [("content-type", "text/test-secret-token")],
+                                    "sensitive-body",
+                                )
+                                    .into_response();
+                            }
+                            HttpFault::ExpireFirstCall if first_call => {
+                                return StatusCode::NOT_FOUND.into_response();
+                            }
+                            HttpFault::StallSlowCall
+                                if is_call && json["params"]["name"] == "slow_mcp" =>
+                            {
+                                return std::future::pending().await;
+                            }
+                            _ => {}
+                        }
+                        let response = next.run(Request::from_parts(parts, Body::from(body))).await;
+                        if matches!(fault, HttpFault::LoseFirstReply) && first_call {
+                            // The upstream action has finished, but a proxy loses the successful reply.
+                            to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                            return (StatusCode::BAD_GATEWAY, "upstream response lost")
+                                .into_response();
+                        }
+                        response
+                    }
+                },
+            ));
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    FaultServer {
+        url: format!("http://{address}/mcp"),
+        calls,
+        handshakes,
+        received_calls,
+        task,
+    }
+}
+
+async fn fault_client(server: &FaultServer, timeout: Duration) -> Arc<McpClientHandle> {
+    McpClientHandle::connect(
+        "fault-test",
+        server.url.clone(),
+        None,
+        Duration::from_secs(1),
+        timeout,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn lost_response_does_not_replay_a_completed_tool() {
+    let server = fault_server(HttpFault::LoseFirstReply, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_secs(1)).await;
+    let error = client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not retried"));
+    assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 1);
+    // A new caller may reconnect, but it performs its own action, not a replay.
+    client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    assert_eq!(server.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn expired_session_does_not_trigger_sdk_tool_replay() {
+    let server = fault_server(HttpFault::ExpireFirstCall, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_secs(1)).await;
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    assert_eq!(server.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 1);
+    client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn hung_post_is_retired_and_the_next_call_recovers() {
+    let server = fault_server(HttpFault::StallSlowCall, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_millis(100)).await;
+    let error = client
+        .call_tool(CallToolRequestParams::new("slow_mcp"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    let result = client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    assert_eq!(result.structured_content.unwrap()["remote"], "echo_mcp");
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+    assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_calls_share_an_overall_deadline() {
+    let server = fault_server(HttpFault::StallSlowCall, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_millis(100)).await;
+    let start = std::time::Instant::now();
+    let results = futures::future::join_all(
+        (0..8).map(|_| client.call_tool(CallToolRequestParams::new("slow_mcp"))),
+    )
+    .await;
+    assert!(results.iter().all(Result::is_err));
+    // The previous implementation took eight serial 100ms timeouts. Allow ample
+    // scheduling tolerance while proving that queue wait is inside the deadline.
+    assert!(
+        start.elapsed() < Duration::from_millis(400),
+        "elapsed: {:?}",
+        start.elapsed()
+    );
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 1);
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn reconnect_is_inside_the_new_calls_deadline() {
+    let server = fault_server(HttpFault::LoseFirstReply, Duration::from_millis(250)).await;
+    let client = fault_client(&server, Duration::from_millis(100)).await;
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    let start = std::time::Instant::now();
+    let error = client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(start.elapsed() < Duration::from_millis(200));
+    assert_eq!(
+        server.calls.load(Ordering::SeqCst),
+        1,
+        "expired calls must not dispatch a tool"
+    );
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_interrupts_reconnect_and_remains_terminal() {
+    let server = fault_server(HttpFault::LoseFirstReply, Duration::from_millis(150)).await;
+    let client = fault_client(&server, Duration::from_secs(1)).await;
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    let calling_client = client.clone();
+    let call = tokio::spawn(async move {
+        calling_client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while server.handshakes.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    client.shutdown().await;
+    assert!(
+        call.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("shut down")
+    );
+    assert!(client.list_tools(Duration::from_secs(1)).await.is_err());
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    client.shutdown().await;
+    assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn shutdown_interrupts_a_stalled_call() {
+    let server = fault_server(HttpFault::StallSlowCall, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_secs(1)).await;
+    let calling_client = client.clone();
+    let call = tokio::spawn(async move {
+        calling_client
+            .call_tool(CallToolRequestParams::new("slow_mcp"))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while server.received_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    client.shutdown().await;
+    assert!(call.await.unwrap().is_err());
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn missing_token_skips_optional_servers_and_fails_required_servers() {
+    let env = format!("NERDBOT_MCP_MISSING_{}", uuid::Uuid::new_v4().simple());
+    assert!(std::env::var(&env).is_err());
+    for required in [false, true] {
+        let mut server = server_config("http://127.0.0.1:9/mcp".into());
+        server.required = required;
+        let McpTransportConfig::StreamableHttp {
+            bearer_token_env, ..
+        } = &mut server.transport;
+        *bearer_token_env = Some(env.clone());
+        let mut config = AppConfig::default();
+        config.mcp.servers = vec![server];
+        let mut registry = ToolRegistry::new();
+        match McpManager::initialize(&config, &mut registry).await {
+            Ok(manager) => {
+                assert!(!required);
+                manager.shutdown().await;
+            }
+            Err(error) => {
+                assert!(required);
+                assert!(
+                    error
+                        .to_string()
+                        .contains("environment variable is missing")
+                );
+            }
+        }
+        assert!(registry.is_empty());
+    }
+}
+
+#[derive(Clone)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn http_errors_omit_response_bodies_and_configured_credentials_from_logs() {
+    use tracing::instrument::WithSubscriber;
+    for fault in [HttpFault::CredentialError, HttpFault::CredentialContentType] {
+        let server = fault_server(fault, Duration::ZERO).await;
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = CapturedLogs(buffer.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+        let error = async {
+            let error = match McpClientHandle::connect(
+                "credentials",
+                server.url.clone(),
+                Some("test-secret-token".into()),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+            {
+                Ok(_) => panic!("unexpectedly connected"),
+                Err(error) => error.to_string(),
+            };
+            // Exercise the same logging boundary as optional-server startup failures.
+            tracing::warn!(%error, "startup failure");
+            error
+        }
+        .with_subscriber(subscriber)
+        .await;
+        if matches!(fault, HttpFault::CredentialError) {
+            assert!(error.contains("401"));
+        }
+        assert!(!error.contains("test-secret-token"));
+        assert!(!error.contains("sensitive-body"));
+        assert!(error.len() < 2048);
+        let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("startup failure"));
+        assert!(
+            !logs.contains("test-secret-token"),
+            "credential leaked: {logs}"
+        );
+        assert!(!logs.contains("sensitive-body"));
+    }
+}
+
+#[tokio::test]
+async fn protocol_errors_are_redacted_and_do_not_replace_healthy_sessions() {
+    let server = fault_server(HttpFault::LoseFirstReply, Duration::ZERO).await;
+    let client = McpClientHandle::connect(
+        "protocol-test",
+        server.url.clone(),
+        Some("test-secret-token".into()),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    // First fault retires the initial session. Recover with an independent call.
+    assert!(
+        client
+            .call_tool(CallToolRequestParams::new("echo_mcp"))
+            .await
+            .is_err()
+    );
+    client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    use tracing::instrument::WithSubscriber;
+    let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = CapturedLogs(buffer.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    let error = async {
+        let error = client
+            .call_tool(CallToolRequestParams::new("protocol_error_mcp"))
+            .await
+            .unwrap_err()
+            .to_string();
+        tracing::warn!(%error, "protocol failure");
+        error
+    }
+    .with_subscriber(subscriber)
+    .await;
+    assert!(error.contains("[redacted]"));
+    assert!(!error.contains("test-secret-token"));
+    assert!(error.len() < 2048);
+    let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("protocol failure"));
+    assert!(!logs.contains("test-secret-token"));
+    assert!(!logs.contains("sensitive-body"));
+    assert!(!logs.contains(&"detail".repeat(1000)));
+    client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelling_the_caller_retires_a_pending_transport() {
+    let server = fault_server(HttpFault::StallSlowCall, Duration::ZERO).await;
+    let client = fault_client(&server, Duration::from_secs(1)).await;
+    let calling_client = client.clone();
+    let call = tokio::spawn(async move {
+        calling_client
+            .call_tool(CallToolRequestParams::new("slow_mcp"))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while server.received_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    client
+        .call_tool(CallToolRequestParams::new("echo_mcp"))
+        .await
+        .unwrap();
+    assert_eq!(server.handshakes.load(Ordering::SeqCst), 2);
+    assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+    client.shutdown().await;
 }

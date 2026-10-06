@@ -193,6 +193,9 @@ max_text_chars = 8000
 # only; stdio transport is deferred. Keep bearer tokens in the environment.
 # include_tools = [] means all discovered tools. exclude_tools wins over it.
 # tool_prefix, when set, is prepended to the remote tool names.
+# Calls are serialized per server. call_timeout_secs covers waiting, recovery,
+# and execution. Failed/timed-out calls are not replayed; their remote action
+# may have completed. Later independent calls reconnect after transport failure.
 #
 # [[mcp.servers]]
 # name = "mail"

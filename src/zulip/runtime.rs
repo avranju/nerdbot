@@ -5,7 +5,7 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
 use super::bot::ZulipBot;
@@ -115,7 +115,11 @@ where
     unreachable!("positive retry attempts always return from the loop")
 }
 
-pub async fn run_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHandler>) {
+pub async fn run_ingress_loop(
+    zulip: ZulipRuntime,
+    handler: Arc<ChannelMessageHandler>,
+    shutdown: watch::Receiver<bool>,
+) {
     let presence_heartbeat = start_presence_heartbeat(
         zulip.bot.clone(),
         zulip.config.presence_enabled,
@@ -129,7 +133,9 @@ pub async fn run_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHa
                     zulip.config.max_attachment_bytes,
                     zulip.config.max_text_document_chars,
                 );
-            if let Err(e) = run_update_loop(updates, zulip.bot, handler, zulip.config).await {
+            if let Err(e) =
+                run_update_loop(updates, zulip.bot, handler, zulip.config, shutdown).await
+            {
                 error!(error = %e, "Zulip polling ingress failed");
             }
         }
@@ -139,7 +145,9 @@ pub async fn run_ingress_loop(zulip: ZulipRuntime, handler: Arc<ChannelMessageHa
                 return;
             };
             let updates = ZulipHook::new(webhook.receiver);
-            if let Err(e) = run_update_loop(updates, zulip.bot, handler, zulip.config).await {
+            if let Err(e) =
+                run_update_loop(updates, zulip.bot, handler, zulip.config, shutdown).await
+            {
                 error!(error = %e, "Zulip webhook ingress failed");
             }
         }
@@ -191,6 +199,7 @@ async fn run_update_loop<T>(
     bot: Arc<ZulipBot>,
     handler: Arc<ChannelMessageHandler>,
     config: ZulipChannelConfig,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), AgentError>
 where
     T: ZulipUpdate,
@@ -199,6 +208,8 @@ where
 
     loop {
         tokio::select! {
+            biased;
+            _ = async { let _ = shutdown.wait_for(|closed| *closed).await; } => return Ok(()),
             res = updates.poll() => {
                 match res {
                     Ok(Some(msg)) => {
@@ -219,6 +230,7 @@ where
                     Err(e) => {
                         error!(error = %e, "Zulip polling failed, retrying in 5s");
                         tokio::select! {
+                            _ = async { let _ = shutdown.wait_for(|closed| *closed).await; } => return Ok(()),
                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                             _ = tokio::signal::ctrl_c() => {
                                 info!("received Ctrl-C during Zulip retry sleep, shutting down...");

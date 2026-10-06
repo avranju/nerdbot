@@ -177,7 +177,9 @@ chmod 700 ./run
 
 NerdBot can expose tools from operator-configured MCP servers through the same tool registry as built-in tools. Configured servers are **trusted extensions** with the effective privileges of built-in tools; only enable servers and tools you trust. Discovery happens at startup, and bearer tokens are read from environment variables rather than TOML.
 
-Version 1 supports Streamable HTTP only; stdio transport is intentionally deferred. Servers may be optional (`required = false`) or required, and optional connection/discovery failures are logged and skipped. `tool_prefix` is prepended to remote names, `include_tools` narrows discovery, and `exclude_tools` is applied afterward so it wins when both lists contain a name. Calls use the configured timeout and retain the MCP session for the runtime lifetime.
+Version 1 supports Streamable HTTP only; stdio transport is deferred in the [stdio follow-up plan](docs/runtime-mcp-stdio-follow-up.md). Servers may be optional (`required = false`) or required, and optional connection/discovery failures are logged and skipped. `tool_prefix` is prepended to remote names, `include_tools` narrows discovery, and `exclude_tools` is applied afterward so it wins when both lists contain a name. Servers are registered in configuration order, with tools sorted by exposed name within each server. Calls to a server are serialized; `call_timeout_secs` covers queueing, reconnecting, and execution. Sessions are retained across successful calls.
+
+Failed or timed-out calls are never automatically replayed, including after an expired session: the remote action may already have completed. Transport failures, timeouts, and cancelled calls retire the session; the next independent call reconnects before dispatch. MCP errors are bounded and redact the configured bearer token; raw HTTP error bodies are omitted. Shutdown stops both channel loops, drains accepted message handlers and scheduled jobs, and permanently closes MCP sessions.
 
 Example (the server is generic; `mailindex` is only an example provider):
 
@@ -253,9 +255,9 @@ Run `cargo run -- onboard` for an interactive setup flow, or copy `config.toml.e
 | | `sandbox_mode` | Isolation mode: `none`, `bwrap`, or `bwrap-strict` (default: `none`; `none` is direct host execution, not a security sandbox) |
 | | `network_access` | Bubblewrap network policy: `disabled` or `host` (default: `disabled`) |
 | `[exa]` | `api_key_env` | Environment variable for Exa API key |
-| `[[mcp.servers]]` | `name`, `enabled`, `required`, `transport`, filters, prefix, and timeouts | Trusted runtime MCP provider; v1 transport is Streamable HTTP |
 | | `max_results` | Max web search results (default: `5`) |
 | | `max_text_chars` | Max characters per fetched page (default: `8000`) |
+| `[[mcp.servers]]` | `name`, `enabled`, `required`, `transport`, filters, prefix, and timeouts | Trusted runtime MCP provider; v1 transport is Streamable HTTP |
 
 ## Channel Commands
 
