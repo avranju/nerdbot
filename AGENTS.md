@@ -35,13 +35,13 @@ src/
   agent/
     mod.rs
     agent_loop.rs  — Core iterative tool-loop (run_agent) via genai
-    outcome.rs     — AgentOutcome enum (FinalText, Silent, Cancelled)
+    outcome.rs     — AgentOutcome enum (FinalText, Silent), RunTokenUsage with provider cache-read/write subtotals and independent reporting coverage
     personality.rs — Personality prompt cache: loads `[agent].personality_file`, watches its directory, filters create/content-modify/name-modify events for that file, and hot-reloads changed contents in memory
     run_mode.rs    — AgentRunMode (InteractiveReply, ScheduledJob, Internal)
 
   llm/
     mod.rs         — LlmExecutor trait + LlmClient wrapping genai::Client, including configurable retries for transient network/server failures
-    fake.rs        — FakeProvider for testing without real LLM APIs
+    fake.rs        — FakeProvider for testing without real LLM APIs; FakeResponse supports input/output counts and normalized prompt-token details, including explicit zeros
 
   mcp/
     mod.rs         — Runtime MCP extension boundary and public adapter exports
@@ -171,6 +171,11 @@ README.md          — Project documentation
 8. Agent loop: cached `Personality` contents + configured timezone runtime context + bounded context → iterative tool loop → final text (with token tracking from genai response); typing refresh stops as soon as the run returns
 9. Persists assistant reply (the safe user prompt was stored before tool execution) → sends via ChannelRegistry. If the agent loop returns `AgentOutcome::Silent` after completing tools with no final assistant text, ChannelMessageHandler sends the harness fallback `NerdBot: Agent run completed with no response.` so users can distinguish a harness-generated completion notice from LLM output.
 10. After successful run: checks if token usage exceeds soft threshold → calls CompactionService for async compaction if needed
+
+**Provider-reported cache usage (issue #2):**
+- `agent::outcome::RunTokenUsage` retains input/output/total semantics and adds optional `cached_input_tokens` and `cache_creation_input_tokens` subtotals. Each has an independent `*_reported_calls` count; compare it with `RunMetadata::iterations` to assess coverage. Missing counters and negative cache counters are unavailable, not confirmed zero; explicit nonnegative counters, including zero, count as reported. Cache reads/writes never increase existing totals, and no cache-hit ratio is inferred.
+- `agent_loop.rs` emits `info` events for each successful model call (`LLM call token usage`, with model, iteration, numeric counters and reporting booleans) and completed runs (`agent run token usage`, with totals and reporting-call counts), including final-text and silent paths. Usage events contain no prompt or response bodies. Earlier successful calls remain observable if a later call fails.
+- Pinned `genai` 0.6.5 can normalize JSON zero cache counters to `None` or omit empty details. NerdBot preserves zeros only when they survive normalization; missing proxy/provider data cannot be recovered. `tests/cache_usage_tests.rs` covers full/partial/missing reporting, independent reads/writes, explicit and deserialized zeros, negative values, unchanged totals, and a mock OpenAI-compatible endpoint. `tests/cache_usage_tracing_tests.rs` isolates structured tracing capture from concurrent unsubscribed tests.
 
 **Runtime MCP extensions:**
 1. Startup registers built-in tools through the fallible, provider-aware ToolRegistry API

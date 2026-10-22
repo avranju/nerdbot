@@ -193,6 +193,7 @@ fn test_run_metadata_with_values() {
             input_tokens: 100,
             output_tokens: 50,
             total_tokens: 150,
+            ..RunTokenUsage::default()
         },
         sent_user_message: true,
     };

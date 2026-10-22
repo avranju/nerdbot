@@ -569,6 +569,7 @@ async fn test_handler_sends_harness_fallback_for_silent_agent_completion() {
         tool_calls: Vec::new(),
         stop_reason: None,
         token_usage: None,
+        prompt_tokens_details: None,
     }]));
     let compaction_service = make_compaction_service(pool.clone());
 

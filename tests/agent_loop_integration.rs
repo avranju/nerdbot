@@ -938,6 +938,7 @@ async fn test_agent_loop_tracks_tokens() {
         tool_calls: Vec::new(),
         stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: Some((100, 50)),
+        prompt_tokens_details: None,
     }]);
 
     let ctx = test_context();
@@ -963,6 +964,7 @@ async fn test_silent_completion_when_no_text_and_no_tools() {
         tool_calls: Vec::new(),
         stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: None,
+        prompt_tokens_details: None,
     }]);
 
     let ctx = test_context();
@@ -987,6 +989,7 @@ async fn test_silent_completion_with_empty_text() {
         tool_calls: Vec::new(),
         stop_reason: Some(StopReason::Completed("stop".to_string())),
         token_usage: None,
+        prompt_tokens_details: None,
     }]);
 
     let ctx = test_context();

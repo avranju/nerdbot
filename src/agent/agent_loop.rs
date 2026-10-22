@@ -65,8 +65,7 @@ pub async fn run_agent(
         );
     }
 
-    let mut total_input_tokens: usize = 0;
-    let mut total_output_tokens: usize = 0;
+    let mut token_usage = RunTokenUsage::default();
     let mut sent_user_message = false;
 
     debug!(
@@ -96,13 +95,21 @@ pub async fn run_agent(
             .complete(&config.llm_model, request, chat_options)
             .await?;
 
-        // Track token usage from genai response
-        if let Some(input) = response.usage.prompt_tokens {
-            total_input_tokens += input.max(0) as usize;
-        }
-        if let Some(output) = response.usage.completion_tokens {
-            total_output_tokens += output.max(0) as usize;
-        }
+        let call_usage = RunTokenUsage::from_call(&response.usage);
+        token_usage.accumulate(&call_usage);
+        info!(
+            requested_model = %config.llm_model,
+            model = %response.provider_model_iden.model_name,
+            iteration = iterations,
+            input_tokens = call_usage.input_tokens,
+            output_tokens = call_usage.output_tokens,
+            total_tokens = call_usage.total_tokens,
+            cached_input_tokens = call_usage.cached_input_tokens,
+            cached_input_reported = call_usage.cached_input_tokens.is_some(),
+            cache_creation_input_tokens = call_usage.cache_creation_input_tokens,
+            cache_creation_reported = call_usage.cache_creation_input_tokens.is_some(),
+            "LLM call token usage"
+        );
 
         let tool_calls: Vec<genai::chat::ToolCall> =
             response.tool_calls().into_iter().cloned().collect();
@@ -120,6 +127,19 @@ pub async fn run_agent(
 
         // Check if the model returned final text (no tool calls)
         if tool_calls.is_empty() {
+            info!(
+                requested_model = %config.llm_model,
+                model = %response.provider_model_iden.model_name,
+                iterations,
+                input_tokens = token_usage.input_tokens,
+                output_tokens = token_usage.output_tokens,
+                total_tokens = token_usage.total_tokens,
+                cached_input_tokens = token_usage.cached_input_tokens,
+                cached_input_reported_calls = token_usage.cached_input_reported_calls,
+                cache_creation_input_tokens = token_usage.cache_creation_input_tokens,
+                cache_creation_reported_calls = token_usage.cache_creation_reported_calls,
+                "agent run token usage"
+            );
             match &final_text {
                 Some(text) if !text.is_empty() => {
                     info!(
@@ -132,11 +152,7 @@ pub async fn run_agent(
                         outcome: AgentOutcome::FinalText(text.clone()),
                         metadata: RunMetadata {
                             iterations,
-                            token_usage: RunTokenUsage {
-                                input_tokens: total_input_tokens,
-                                output_tokens: total_output_tokens,
-                                total_tokens: total_input_tokens + total_output_tokens,
-                            },
+                            token_usage,
                             sent_user_message,
                         },
                     });
@@ -152,11 +168,7 @@ pub async fn run_agent(
                         outcome: AgentOutcome::Silent,
                         metadata: RunMetadata {
                             iterations,
-                            token_usage: RunTokenUsage {
-                                input_tokens: total_input_tokens,
-                                output_tokens: total_output_tokens,
-                                total_tokens: total_input_tokens + total_output_tokens,
-                            },
+                            token_usage,
                             sent_user_message,
                         },
                     });

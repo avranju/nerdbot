@@ -416,6 +416,34 @@ your-project/
 
 Any provider-specific API keys should also be set as environment variables and referenced via `api_key_env` in the config.
 
+### Provider Cache Usage
+
+At `info` level, `LLM call token usage` events expose the requested and returned model,
+iteration, input/output/total tokens, and available `cached_input_tokens` (cache reads)
+and `cache_creation_input_tokens` (cache writes). The corresponding `*_reported`
+booleans distinguish unavailable counts from reported zeros. These events contain
+usage metadata, without prompt or response bodies.
+
+Completed runs, including silent completions, emit `agent run token usage` with the
+same totals plus `cached_input_reported_calls` and `cache_creation_reported_calls`.
+These fields are also available on `AgentResult.metadata.token_usage`. Compare each
+coverage count with `metadata.iterations` (or the log's `iterations`): a subtotal
+reported by 2 of 3 calls covers only those 2 calls. `None` means no valid count was
+available; `Some(0)` means an explicit zero reached NerdBot. Negative cache counters
+are treated as unavailable, independently for reads and writes.
+
+The pinned `genai` 0.6.5 dependency normalizes some zero-valued cache counters to
+`None` during deserialization, and adapters can omit empty details. NerdBot cannot
+recover those zeros or infer cache misses from missing details. Proxies must forward
+cache usage for it to be visible here; `openai-api-server-via-codex` v0.2.0 drops it
+in its Chat Completions conversion.
+
+Existing input/output totals retain their normalized provider values (with negative
+values clamped to zero), and total tokens remain input plus output. Cache counts are
+separate breakdowns and are never added again. No cache-hit ratio or billing estimate
+is calculated because provider accounting and reporting coverage can differ. This
+observability does not enable provider caching or change cache/session configuration.
+
 ### Health Checks
 
 For basic liveness, you can check the container status:

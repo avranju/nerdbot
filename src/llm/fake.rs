@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 
 use genai::chat::{
-    ChatOptions, ChatRequest, ChatResponse, ChatRole, ContentPart, MessageContent, StopReason,
-    ToolCall, Usage,
+    ChatOptions, ChatRequest, ChatResponse, ChatRole, ContentPart, MessageContent,
+    PromptTokensDetails, StopReason, ToolCall, Usage,
 };
 
 use crate::error::AgentError;
@@ -25,6 +25,8 @@ pub struct FakeResponse {
     pub stop_reason: Option<StopReason>,
     /// Optional token usage metadata.
     pub token_usage: Option<(i32, i32)>, // (input, output)
+    /// Normalized provider details. Direct construction preserves explicit zeros.
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 impl FakeResponse {
@@ -35,6 +37,7 @@ impl FakeResponse {
             tool_calls: Vec::new(),
             stop_reason: Some(StopReason::Completed("stop".to_string())),
             token_usage: None,
+            prompt_tokens_details: None,
         }
     }
 
@@ -50,6 +53,7 @@ impl FakeResponse {
             }],
             stop_reason: Some(StopReason::ToolCall("function_call".to_string())),
             token_usage: None,
+            prompt_tokens_details: None,
         }
     }
 
@@ -60,6 +64,7 @@ impl FakeResponse {
             tool_calls: calls,
             stop_reason: Some(StopReason::ToolCall("function_call".to_string())),
             token_usage: None,
+            prompt_tokens_details: None,
         }
     }
 
@@ -70,7 +75,20 @@ impl FakeResponse {
             tool_calls: Vec::new(),
             stop_reason: Some(StopReason::Other("error".to_string())),
             token_usage: None,
+            prompt_tokens_details: None,
         }
+    }
+
+    /// Attach input/output counts without changing the response content.
+    pub fn with_token_usage(mut self, input: i32, output: i32) -> Self {
+        self.token_usage = Some((input, output));
+        self
+    }
+
+    /// Attach already normalized prompt details, independently of input/output counts.
+    pub fn with_prompt_tokens_details(mut self, details: PromptTokensDetails) -> Self {
+        self.prompt_tokens_details = Some(details);
+        self
     }
 }
 
@@ -207,7 +225,7 @@ impl LlmExecutor for FakeProvider {
         );
         let content = MessageContent::from_parts(parts);
 
-        let usage = if let Some((input, output)) = response.token_usage {
+        let mut usage = if let Some((input, output)) = response.token_usage {
             Usage {
                 prompt_tokens: Some(input),
                 completion_tokens: Some(output),
@@ -218,6 +236,7 @@ impl LlmExecutor for FakeProvider {
         } else {
             Usage::default()
         };
+        usage.prompt_tokens_details = response.prompt_tokens_details;
 
         Ok(ChatResponse {
             content,
