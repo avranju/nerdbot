@@ -395,7 +395,7 @@ src/
   telegram/            — Telegram bot, commands, service adapter, ingress, and attachments
   zulip/               — Zulip bot, service adapter, attachment processing, ingress (poll + webhook)
   scheduler/           — Cron/one-shot job service
-  tools/               — Built-in tools (echo, calculator, files, web, shell, etc.)
+  tools/               — Built-in tools (todos, scheduling, messaging, files, web, shell)
   context/             — Context budgeting, compaction service & worker
   storage/             — SQLite persistence (sessions, messages, summaries, jobs)
   web/                 — Web fetcher with SSRF protection, search backend

@@ -29,8 +29,6 @@ use nerdbot::telegram::runtime::{
     run_ingress_loop as run_telegram_ingress_loop,
 };
 use nerdbot::telegram::service::TelegramService;
-use nerdbot::tools::calculator::CalculatorTool;
-use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::files::{AppendFile, FileConfig, ListDirectory, ReadFile, WriteFile};
 use nerdbot::tools::messaging::SendUserMessage;
 use nerdbot::tools::registry::ToolRegistry;
@@ -277,8 +275,6 @@ async fn build_tool_registry(
     config: &AppConfig,
 ) -> Result<(Arc<ToolRegistry>, Arc<McpManager>), AgentError> {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool)?;
-    registry.register(CalculatorTool)?;
     registry.register(ScheduleJob)?;
     registry.register(ListJobs)?;
     registry.register(DeleteJob)?;
@@ -653,6 +649,19 @@ impl Drop for SchedulerGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn runtime_registry_excludes_removed_debug_tools() {
+        let (registry, mcp) = build_tool_registry(&AppConfig::default()).await.unwrap();
+        let specs = registry.specs();
+        assert!(
+            !specs
+                .iter()
+                .any(|spec| matches!(spec.name.as_str(), "echo" | "calculator"))
+        );
+        assert!(specs.iter().any(|spec| spec.name.as_str() == "todo_add"));
+        mcp.shutdown().await;
+    }
 
     #[tokio::test]
     async fn ingress_shutdown_signals_and_drains_the_other_channel() {

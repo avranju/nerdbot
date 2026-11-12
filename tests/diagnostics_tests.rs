@@ -454,8 +454,8 @@ async fn test_diagnostics_server_exposes_personality_summary_and_tools_when_requ
 
     let mut registry = ToolRegistry::new();
     registry
-        .register(nerdbot::tools::echo::EchoTool)
-        .expect("register echo tool");
+        .register(nerdbot::tools::todo::TodoAdd)
+        .expect("register todo tool");
     let registry = Arc::new(registry);
 
     let mut server = start_diagnostics_server(
@@ -504,7 +504,7 @@ async fn test_diagnostics_server_exposes_personality_summary_and_tools_when_requ
             assert_eq!(tool_spec.count, 1);
             let specs = tool_spec.specs.unwrap();
             assert_eq!(specs.len(), 1);
-            assert_eq!(specs[0]["name"], "echo");
+            assert_eq!(specs[0]["name"], "todo_add");
         }
         other => panic!("unexpected response: {other:?}"),
     }

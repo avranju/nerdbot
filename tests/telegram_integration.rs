@@ -34,8 +34,8 @@ use nerdbot::telegram::bot::BotCommand;
 use nerdbot::telegram::commands::{CommandHandler, TelegramCommand};
 use nerdbot::telegram::handler::{MessageHandler, MessageHandlerInput};
 use nerdbot::telegram::service::TelegramService;
-use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
+use nerdbot::tools::todo::TodoAdd;
 
 fn addr(chat_id: i64) -> nerdbot::channel::ConversationAddress {
     nerdbot::channel::ConversationAddress::telegram_chat(chat_id)
@@ -360,7 +360,7 @@ fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
 
 fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
 
     let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
@@ -522,7 +522,7 @@ async fn test_message_handler_allowlist_blocks_chat() {
     config.channels.telegram.allowed_conversations = vec!["100".to_string()]; // Only chat 100 allowed
 
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
 
     let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
@@ -555,7 +555,7 @@ async fn test_message_handler_allowlist_blocks_user() {
     config.channels.telegram.allowed_senders = vec!["100".to_string()]; // Only user 100 allowed
 
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
 
     let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(

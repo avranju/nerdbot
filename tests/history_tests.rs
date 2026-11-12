@@ -22,10 +22,11 @@ use nerdbot::error::AgentError;
 use nerdbot::llm::LlmExecutor;
 use nerdbot::llm::fake::{FakeProvider, FakeResponse};
 use nerdbot::storage::{self, messages};
-use nerdbot::tools::echo::EchoTool;
+mod support;
 use nerdbot::tools::registry::ToolRegistry;
 use serde_json::json;
 use sqlx::SqlitePool;
+use support::EchoTool;
 
 async fn pool() -> SqlitePool {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()

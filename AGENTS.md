@@ -94,8 +94,6 @@ src/
     mod.rs
     traits.rs      — Tool trait + ToolContext + ToolOutput
     registry.rs    — ToolRegistry: internally synchronized shared append-only registry, fallible provider-aware atomic batches, per-run snapshots, specs, execute (no lock across tool I/O)
-    calculator.rs  — Math calculator tool
-    echo.rs        — Echo/debug tool
     files.rs       — read_file, write_file, append_file, list_directory
     schedule.rs    — schedule_job, list_jobs, delete_job, run_job_now
     todo.rs        — todo_add, todo_list_all, todo_list_pending, todo_complete, todo_update, todo_delete; validated JSON inputs and structured results for the shared instance-wide todo list
@@ -266,9 +264,7 @@ README.md          — Project documentation
 
 ### Built-in Tools (registered in main.rs)
 
-ToolRegistry registration is fallible and collision-safe. Built-ins use the `builtin` provider label; runtime providers use `mcp:<server>` and are registered atomically so a collision cannot partially expose a server.
-- `echo` — Debug echo
-- `calculator` — Math evaluation
+ToolRegistry registration is fallible and collision-safe. Built-ins use the `builtin` provider label; runtime providers use `mcp:<server>` and are registered atomically so a collision cannot partially expose a server. Echo and Calculator are removed from the runtime and public tool modules. `tests/support/mod.rs` provides a test-only echo fixture for agent-loop and persisted-history regression tests; failure-output coverage uses a test-only failure tool, while Telegram/diagnostics tests use the real todo tool. A binary unit test verifies the runtime registry excludes both removed tools.
 - `todo_add` / `todo_list_all` / `todo_list_pending` / `todo_complete` / `todo_update` / `todo_delete` — Manage the persistent shared instance-wide todo list using stable, positive integer IDs (never reused); text-only updates preserve completion state
 - `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; `list_jobs` returns compact job metadata only (id, name, enabled, schedule_type, cron_expression, run_at, next_run_at, last_run_at, last_status, timezone, notify_on_completion, owner_address) and intentionally omits `creation_context_snapshot`, `prompt`, and `context_policy` to prevent context bloat. Snapshots remain persisted in the database and are available for scheduled job execution. `list_jobs` accepts `include_disabled = true` for disabled/deleted job history, and `delete_job` disables persisted jobs so they stop running but remain available for direct lookup/history.
 - `send_user_message` — Send messages to the current or explicitly targeted channel conversation. Enforces the run's channel-aware access policy against the full `ConversationAddress` (channel_id + conversation_id + thread_id), not just conversation_id alone. Same conversation ID on a different channel is rejected.

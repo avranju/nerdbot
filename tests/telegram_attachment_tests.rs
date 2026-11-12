@@ -38,8 +38,8 @@ use nerdbot::telegram::bot::{Document, Message, PhotoSize, TelegramBot};
 use nerdbot::telegram::handler::{
     AttachmentInfo, InboundMessage, MessageHandler, MessageHandlerInput, build_persist_text,
 };
-use nerdbot::tools::echo::EchoTool;
 use nerdbot::tools::registry::ToolRegistry;
+use nerdbot::tools::todo::TodoAdd;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ fn make_compaction_service(pool: sqlx::SqlitePool) -> Arc<CompactionService> {
 
 fn make_handler(pool: sqlx::SqlitePool) -> MessageHandler {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
 
     let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
@@ -563,7 +563,7 @@ async fn test_handler_sends_harness_fallback_for_silent_agent_completion() {
     let pool = setup_test_db().await;
 
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
     let provider: Arc<dyn LlmExecutor> = Arc::new(FakeProvider::new(vec![FakeResponse {
         assistant_text: None,
         tool_calls: Vec::new(),
@@ -637,7 +637,7 @@ async fn test_handler_blocks_unauthorized_chat() {
     config.channels.telegram.allowed_conversations = vec!["100".to_string()];
 
     let mut registry = ToolRegistry::new();
-    registry.register(EchoTool);
+    registry.register(TodoAdd).unwrap();
     let provider: Arc<dyn LlmExecutor> =
         Arc::new(FakeProvider::new(vec![FakeResponse::final_text(
             "should not be reached",
