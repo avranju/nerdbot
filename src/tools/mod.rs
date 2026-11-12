@@ -14,4 +14,5 @@ pub use shell::bwrap_available;
 pub mod files;
 pub mod messaging;
 pub mod schedule;
+pub mod todo;
 pub mod web;

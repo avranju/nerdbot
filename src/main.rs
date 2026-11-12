@@ -36,6 +36,9 @@ use nerdbot::tools::messaging::SendUserMessage;
 use nerdbot::tools::registry::ToolRegistry;
 use nerdbot::tools::schedule::{DeleteJob, ListJobs, RunJobNow, ScheduleJob};
 use nerdbot::tools::shell::{ShellConfig, ShellExecute};
+use nerdbot::tools::todo::{
+    TodoAdd, TodoComplete, TodoDelete, TodoListAll, TodoListPending, TodoUpdate,
+};
 use nerdbot::tools::web::{WebFetch, WebSearch};
 use nerdbot::webhook::{
     TelegramWebhookRoute, WebhookServer, WebhookServerConfig, ZulipWebhookRoute,
@@ -281,6 +284,12 @@ async fn build_tool_registry(
     registry.register(DeleteJob)?;
     registry.register(RunJobNow)?;
     registry.register(SendUserMessage)?;
+    registry.register(TodoAdd)?;
+    registry.register(TodoListAll)?;
+    registry.register(TodoListPending)?;
+    registry.register(TodoComplete)?;
+    registry.register(TodoUpdate)?;
+    registry.register(TodoDelete)?;
 
     let file_config = FileConfig::from(config.files.clone());
     registry.register(ReadFile::new(file_config.clone()))?;

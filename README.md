@@ -8,7 +8,7 @@ NerdBot communicates with users through pluggable **communication channels**. Bo
 
 - **Communication channels** — pluggable adapters for Telegram and Zulip, each supporting long-polling and webhook ingress with channel-qualified access control
 - **Iterative tool loop** — the harness owns orchestration; the LLM proposes tool calls, Rust validates and executes them, and the loop continues until completion
-- **Built-in tools** — scheduling, user messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
+- **Built-in tools** — todo management, scheduling, user messaging, file I/O (sandboxed), web search (Exa), web fetch (with SSRF protection), shell execution (sandboxed)
 - **Runtime MCP extensions** — discover trusted tools from configured Streamable HTTP MCP servers at startup
 - **Multiple LLM providers** — OpenAI, Anthropic, Gemini, OpenRouter, and arbitrary OpenAI-compatible endpoints via the `genai` crate
 - **Scheduled & recurring jobs** — one-shot and cron-based tasks with configurable context policies
@@ -172,6 +172,23 @@ mkdir -p ./run
 chown -R 1000:1000 ./run
 chmod 700 ./run
 ```
+
+## Todo list
+
+NerdBot includes one persistent todo list per instance, shared across channels, conversations, and sessions (not a private list per user). Anyone authorized to use the bot can manage that list. Ask naturally, for example: “Add buy milk to my todos”, “Show pending todos”, or “Mark todo 3 done”. No extra configuration is required.
+
+| Tool | Arguments | Behavior |
+|------|-----------|----------|
+| `todo_add` | `{"text": "Buy milk"}` | Add a pending todo and return its ID |
+| `todo_list_all` | `{}` | List pending and completed todos |
+| `todo_list_pending` | `{}` | List only pending todos |
+| `todo_complete` | `{"id": 3}` | Mark an item done; repeating completion succeeds |
+| `todo_update` | `{"id": 3, "text": "Buy oat milk"}` | Replace the text without changing its ID or completion state |
+| `todo_delete` | `{"id": 3}` | Permanently delete an item |
+
+Each item contains `id`, `text`, and `completed`. Lists are sorted by ascending ID. IDs are small, positive, monotonically increasing SQLite integers, not list positions: updates and deletions never renumber other items, and deleted IDs are never reused, even after clearing the list or restarting NerdBot. Gaps in IDs are normal.
+
+Todos live in the configured SQLite database and survive session resets and restarts. An automatic migration adds the todo table to existing databases. Text must not be blank; operations on a nonexistent ID report that the item was not found rather than claiming success.
 
 ## MCP extensions
 

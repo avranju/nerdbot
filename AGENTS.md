@@ -98,6 +98,7 @@ src/
     echo.rs        — Echo/debug tool
     files.rs       — read_file, write_file, append_file, list_directory
     schedule.rs    — schedule_job, list_jobs, delete_job, run_job_now
+    todo.rs        — todo_add, todo_list_all, todo_list_pending, todo_complete, todo_update, todo_delete; validated JSON inputs and structured results for the shared instance-wide todo list
     shell.rs       — ShellExecute (bubblewrap-sandboxed command execution with namespace isolation)
     messaging.rs   — send_user_message tool (enforces full channel conversation identity)
     web.rs         — WebSearch (Exa) + WebFetch tools
@@ -125,6 +126,7 @@ src/
     messages.rs    — Message persistence (role, multipart content, token estimate), atomic assistant-call/result exchanges, legacy snapshot decoding, and deterministic row ordering
     summaries.rs   — Context summary CRUD
     jobs.rs        — Scheduled job CRUD
+    todos.rs       — Instance-wide todo CRUD with atomic SQLite-assigned, non-reused integer IDs; updates preserve ID/completion state and lists sort by ID
 
   web/
     mod.rs
@@ -139,7 +141,7 @@ tests/             — Integration tests (agent_loop, storage, scheduler, telegr
 docs/              — System design document and other docs
   zulip-editable-progress-messages.md — Proposal for Zulip progress/status messages using one editable message per agent run
   nerdbot-user.service.example — Sample user systemd unit for running NerdBot from ~/.local/bin with config/secrets under ~/.config/nerdbot
-migrations/        — SQLx migrations (00000000000001_init.sql)
+migrations/        — SQLx migrations (00000000000001_init.sql plus 00000000000002_todos.sql for persistent todos)
 .gitea/workflows/
   docker-image.yml — Manual Gitea Actions workflow that builds the root Dockerfile and pushes git.nerdworks.dev/avranju/nerdbot:<tag>
 Dockerfile         — Multi-stage Docker build (builder → runtime)
@@ -227,6 +229,11 @@ README.md          — Project documentation
 5. Job status updated to Success/Failed
 6. If notify_on_completion and the model didn't call send_user_message successfully during the current job run, harness sends final text through ChannelRegistry using `job.owner_address()` as the fallback notification target.
 
+**Persistent todo list:**
+- `src/tools/todo.rs` exposes six built-in tools registered in `main.rs`: `todo_add` (`text`), `todo_list_all` (no arguments), `todo_list_pending` (no arguments), `todo_complete` (`id`), `todo_update` (`id`, `text`), and `todo_delete` (`id`). They use `ToolContext.pool`; missing storage returns an error rather than mock success. Inputs must be JSON objects, text must contain non-whitespace characters, and IDs must be positive integers.
+- The list is shared instance-wide across users/channels/conversations/sessions, not scoped to a chat session. Normal harness access checks still apply. Session resets do not affect todos. `src/storage/todos.rs` stores `StoredTodo { id: i64, text, completed }`; migration `00000000000002_todos.sql` adds the table without modifying existing history. SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` assigns IDs atomically and never reuses committed IDs, including after deleting the highest/all items and restarting. IDs may have gaps and are never list positions.
+- Adds start pending; lists sort by ascending ID, with pending lists filtering out completed items. Completing twice succeeds, text updates preserve ID/completion status, deletes are permanent, and nonexistent IDs produce `success: false` with `error: "not_found"`. Item results use `{ "todo": ... }`, lists use `{ "todos": [...], "count": n }`, and deletes return `{ "id": n }`. `tests/todo_tests.rs` covers dispatch/lifecycle, invalid inputs, missing storage/IDs, restart persistence, non-reuse after deletion, concurrent allocation, text round trips, and migration upgrades.
+
 **Personality prompt cache:**
 - Startup creates one `agent::personality::Personality` from `[agent].personality_file`, loads the file contents once, and hands clones to `MessageHandler`, `SchedulerService`, and the diagnostics server.
 - `Personality` keeps the prompt in memory behind shared ownership, watches the configured file's parent directory with `notify`, only reacts to `Create` or content/name `Modify` events for the configured file path, hashes the file contents, and reloads the cache only when the hash changes. Access and metadata-only events are ignored so reading the file cannot trigger a reload loop.
@@ -262,6 +269,7 @@ README.md          — Project documentation
 ToolRegistry registration is fallible and collision-safe. Built-ins use the `builtin` provider label; runtime providers use `mcp:<server>` and are registered atomically so a collision cannot partially expose a server.
 - `echo` — Debug echo
 - `calculator` — Math evaluation
+- `todo_add` / `todo_list_all` / `todo_list_pending` / `todo_complete` / `todo_update` / `todo_delete` — Manage the persistent shared instance-wide todo list using stable, positive integer IDs (never reused); text-only updates preserve completion state
 - `schedule_job` / `list_jobs` / `delete_job` / `run_job_now` — Job management; `list_jobs` returns compact job metadata only (id, name, enabled, schedule_type, cron_expression, run_at, next_run_at, last_run_at, last_status, timezone, notify_on_completion, owner_address) and intentionally omits `creation_context_snapshot`, `prompt`, and `context_policy` to prevent context bloat. Snapshots remain persisted in the database and are available for scheduled job execution. `list_jobs` accepts `include_disabled = true` for disabled/deleted job history, and `delete_job` disables persisted jobs so they stop running but remain available for direct lookup/history.
 - `send_user_message` — Send messages to the current or explicitly targeted channel conversation. Enforces the run's channel-aware access policy against the full `ConversationAddress` (channel_id + conversation_id + thread_id), not just conversation_id alone. Same conversation ID on a different channel is rejected.
 - `read_file` / `write_file` / `append_file` / `list_directory` — File I/O (sandboxed)
