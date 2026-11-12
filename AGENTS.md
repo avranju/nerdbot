@@ -47,7 +47,7 @@ src/
     mod.rs         — Runtime MCP extension boundary and public adapter exports
     client.rs      — Long-lived rmcp Streamable HTTP sessions, overall call deadlines, serialized recovery for later independent calls, cancellation-safe session retirement, sanitized peer metadata, and terminal shutdown
     http.rs        — SDK HTTP adapter with bounded requests, long-lived GET streams, sanitized transport errors, and bounded credential-redacted diagnostics
-    manager.rs     — Startup discovery, filtering, collision-safe atomic registry population, and shutdown
+    manager.rs     — Ordered startup discovery, filtering, optional-server background recovery with jittered bounded exponential backoff, collision-safe atomic publication, and joined supervisor shutdown
     tool_proxy.rs  — MCP tool metadata and CallToolResult conversion to ordinary ToolOutput
 
   channel/
@@ -93,7 +93,7 @@ src/
   tools/
     mod.rs
     traits.rs      — Tool trait + ToolContext + ToolOutput
-    registry.rs    — ToolRegistry: fallible provider-aware registration, atomic batches, specs, execute
+    registry.rs    — ToolRegistry: internally synchronized shared append-only registry, fallible provider-aware atomic batches, per-run snapshots, specs, execute (no lock across tool I/O)
     calculator.rs  — Math calculator tool
     echo.rs        — Echo/debug tool
     files.rs       — read_file, write_file, append_file, list_directory
@@ -174,9 +174,9 @@ README.md          — Project documentation
 
 **Runtime MCP extensions:**
 1. Startup registers built-in tools through the fallible, provider-aware ToolRegistry API
-2. Enabled `[mcp.servers]` entries connect through rmcp Streamable HTTP, discover `tools/list` (including SDK pagination), and register servers in configuration order with filtered/prefixed tools sorted by exposed name within each server
+2. Enabled `[mcp.servers]` entries connect through rmcp Streamable HTTP, discover `tools/list` (including SDK pagination), and initially register servers in configuration order with filtered/prefixed tools sorted by exposed name within each server. Disabled servers are never contacted. Each enabled server has one manager-owned supervisor; optional startup connection/handshake/discovery/registration failures retry indefinitely with equal-jitter exponential backoff (initial cap 1 second, doubling to 60 seconds, each sleep in [cap/2, cap]). Successful discovery atomically publishes the whole filtered batch once, logs recovery, and stops background retries. Persistent configuration/name collisions keep retrying without partial registration. Concurrent recoveries race safely for conflicting names; the first complete batch wins. `McpRetryPolicy` / `initialize_with_retry_policy` allow short injected test delays without changing deployment configuration.
 3. Successful calls retain their MCP session. Per-server calls are serialized under one session lock, and each call has an overall deadline covering queue wait, reconnect, and execution. Failed/timed-out tools are never replayed, including by SDK expired-session renewal. Transport failures, timeouts, and cancelled futures retire the session; the next independent call performs a serialized, timeout-bounded handshake before dispatch
-4. Optional server failures are warned and skipped atomically; required failures abort startup. Rejected sessions are explicitly closed. Shutdown coordinates both ingress loops, drains Telegram handlers and scheduled jobs, then permanently closes sessions; closing a handle interrupts active calls/handshakes and prevents reconnect from restoring it
+4. Optional server failures are warned and retried atomically; required failures still abort startup on the first attempt and close previously connected sessions. Retries start only after the ordered startup pass completes. Rejected sessions are explicitly closed before retrying. ToolRegistry clones share a short-held RwLock; `run_agent` freezes a snapshot at entry, so specs and dispatch stay consistent across all iterations of that run, and recovered tools become visible to subsequent interactive/scheduled runs and live diagnostics. Shutdown coordinates both ingress loops, drains Telegram handlers and scheduled jobs, signals manager supervisors (interrupting backoff/handshake/discovery), joins them, and permanently closes sessions. Manager Drop also signals cancellation for later startup failures. Client shutdown joins tracked, bounded retired-session cleanup tasks; closing a handle interrupts active calls/handshakes and prevents reconnect from restoring it
 5. Version 1 supports Streamable HTTP only; stdio is deferred in `docs/runtime-mcp-stdio-follow-up.md`. Configured servers are trusted extensions and normal channel access control still runs before every tool call. HTTP error bodies are omitted before SDK error logging; request-helper raw traces are suppressed, JSON-RPC error messages are sanitized and their diagnostic data omitted before SDK tracing, stream errors are normalized, and NerdBot errors redact the configured token, remove control characters, and cap text at 512 characters. Connection logs include sanitized peer metadata and reconnect/shutdown state changes
 
 **CLI onboarding:**

@@ -307,7 +307,7 @@ async fn build_tool_registry(
         network_access: config.shell.network_access.clone(),
     }))?;
 
-    let mcp = McpManager::initialize(config, &mut registry).await?;
+    let mcp = McpManager::initialize(config, &registry).await?;
     Ok((Arc::new(registry), Arc::new(mcp)))
 }
 

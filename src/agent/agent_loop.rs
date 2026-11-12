@@ -54,6 +54,8 @@ pub async fn run_agent(
     registry: &ToolRegistry,
     config: &AgentLoopConfig,
 ) -> Result<AgentResult, AgentError> {
+    // Background MCP discovery must not change specs or dispatch during this run.
+    let registry = registry.snapshot();
     let mut working_messages = crate::context::history::normalize_history(&ctx.messages);
 
     // ContextManager may have already included a summary as a system message;

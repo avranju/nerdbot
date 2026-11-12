@@ -24,6 +24,8 @@ pub struct McpClientHandle {
     call_timeout: Duration,
     http: McpHttpClient,
     connection: Mutex<Option<Session>>,
+    // Accessed only while holding `connection`, so lease Drop can use try_lock.
+    retired: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -35,17 +37,13 @@ impl McpClientHandle {
         connect_timeout: Duration,
         call_timeout: Duration,
     ) -> Result<Arc<Self>, AgentError> {
-        let http = McpHttpClient::new(connect_timeout, call_timeout, bearer_token.clone())?;
-        let handle = Arc::new(Self {
-            server_name: server_name.into(),
-            url: url.into().trim().to_owned(),
+        let handle = Self::new(
+            server_name,
+            url,
             bearer_token,
             connect_timeout,
             call_timeout,
-            http,
-            connection: Mutex::new(None),
-            shutdown: watch::channel(false).0,
-        });
+        )?;
         let service = handle.open(Instant::now() + connect_timeout).await?;
         *handle.connection.lock().await = Some(service);
         tracing::info!(
@@ -54,6 +52,40 @@ impl McpClientHandle {
             "MCP connection established"
         );
         Ok(handle)
+    }
+
+    /// Construct before connecting so the manager can close the handle even if
+    /// establishment/discovery is cancelled.
+    pub(super) fn new(
+        server_name: impl Into<String>,
+        url: impl Into<String>,
+        bearer_token: Option<String>,
+        connect_timeout: Duration,
+        call_timeout: Duration,
+    ) -> Result<Arc<Self>, AgentError> {
+        let http = McpHttpClient::new(connect_timeout, call_timeout, bearer_token.clone())?;
+        Ok(Arc::new(Self {
+            server_name: server_name.into(),
+            url: url.into().trim().to_owned(),
+            bearer_token,
+            connect_timeout,
+            call_timeout,
+            http,
+            connection: Mutex::new(None),
+            retired: Mutex::new(Vec::new()),
+            shutdown: watch::channel(false).0,
+        }))
+    }
+
+    pub(super) async fn establish(&self) -> Result<(), AgentError> {
+        let _lease = self
+            .connection(Instant::now() + self.connect_timeout)
+            .await?;
+        Ok(())
+    }
+
+    pub(super) fn sanitize_detail(&self, detail: &str) -> String {
+        sanitize_error(detail, self.bearer_token.as_deref())
     }
 
     fn error(&self, operation: &str, detail: &str) -> AgentError {
@@ -100,6 +132,7 @@ impl McpClientHandle {
         }
         let mut lease = SessionLease {
             guard,
+            retired: &self.retired,
             discard: false,
         };
         // This lock also serializes recovery: queued callers share one successful handshake.
@@ -174,10 +207,18 @@ impl McpClientHandle {
         // Signal before waiting for the session lock, so active calls and handshakes stop.
         // send_replace retains the terminal value even when no receiver is subscribed.
         self.shutdown.send_replace(true);
-        let connection = self.connection.lock().await.take();
-        if let Some(mut service) = connection {
+        let mut connection = self.connection.lock().await;
+        // Holding `connection` prevents further retirement while cleanup is joined.
+        let mut retired = self.retired.lock().await;
+        if let Some(mut service) = connection.take() {
             tracing::info!(server = %self.server_name, "closing MCP connection");
-            let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+            retired.push(tokio::spawn(async move {
+                let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+            }));
+        }
+        while let Some(task) = retired.last_mut() {
+            let _ = task.await;
+            retired.pop();
         }
     }
 
@@ -210,6 +251,7 @@ fn is_connection_error(error: &ServiceError) -> bool {
 /// Cancelling a request future must retire its transport as well as release the mutex.
 struct SessionLease<'a> {
     guard: MutexGuard<'a, Option<Session>>,
+    retired: &'a Mutex<Vec<tokio::task::JoinHandle<()>>>,
     discard: bool,
 }
 
@@ -218,9 +260,11 @@ impl Drop for SessionLease<'_> {
         if self.discard
             && let Some(mut service) = self.guard.take()
         {
-            tokio::spawn(async move {
+            let mut retired = self.retired.try_lock().expect("connection lock held");
+            retired.retain(|task| !task.is_finished());
+            retired.push(tokio::spawn(async move {
                 let _ = service.close_with_timeout(Duration::from_secs(5)).await;
-            });
+            }));
         }
     }
 }

@@ -1,25 +1,36 @@
 //! Tool registry — holds and dispatches tool calls.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use genai::chat::Tool;
 
 use crate::error::AgentError;
 use crate::tools::traits::{Tool as ToolTrait, ToolContext, ToolOutput};
 
+#[derive(Clone)]
 struct RegisteredTool {
     tool: Arc<dyn ToolTrait>,
     provider: String,
 }
 
-/// Registry that holds all available tools.
+/// Shared, append-only registry. Clones share atomic registrations; snapshots do not.
+#[derive(Clone)]
 pub struct ToolRegistry {
-    tools: Vec<RegisteredTool>,
+    tools: Arc<RwLock<Vec<RegisteredTool>>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: Vec::new() }
+        Self {
+            tools: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Freeze the available tools for one agent run (including execution dispatch).
+    pub fn snapshot(&self) -> Self {
+        Self {
+            tools: Arc::new(RwLock::new(self.tools.read().unwrap().clone())),
+        }
     }
 
     /// Register a built-in tool with the registry.
@@ -43,15 +54,16 @@ impl ToolRegistry {
 
     /// Register a batch atomically. No tools are appended unless every name is unique.
     pub fn register_batch_from(
-        &mut self,
+        &self,
         tools: Vec<Arc<dyn ToolTrait>>,
         provider: impl Into<String>,
     ) -> Result<(), AgentError> {
         let provider = provider.into();
+        let mut registered = self.tools.write().unwrap();
         let mut names = std::collections::HashSet::new();
         for tool in &tools {
             let name = tool.name();
-            if let Some(existing) = self.tools.iter().find(|entry| entry.tool.name() == name) {
+            if let Some(existing) = registered.iter().find(|entry| entry.tool.name() == name) {
                 return Err(AgentError::ToolNameCollision {
                     name: name.to_string(),
                     existing_provider: existing.provider.clone(),
@@ -69,7 +81,7 @@ impl ToolRegistry {
 
         for tool in tools {
             tracing::debug!(tool = tool.name(), provider = %provider, "registering tool");
-            self.tools.push(RegisteredTool {
+            registered.push(RegisteredTool {
                 tool,
                 provider: provider.clone(),
             });
@@ -80,6 +92,8 @@ impl ToolRegistry {
     /// Get all tools as `genai` specs (for sending to the LLM).
     pub fn specs(&self) -> Vec<Tool> {
         self.tools
+            .read()
+            .unwrap()
             .iter()
             .map(|entry| {
                 Tool::new(entry.tool.name())
@@ -95,10 +109,14 @@ impl ToolRegistry {
         call: &genai::chat::ToolCall,
         ctx: ToolContext,
     ) -> Result<ToolOutput, AgentError> {
-        let entry = self
+        // Clone the implementation under the lock; never hold a lock across tool I/O.
+        let tool = self
             .tools
+            .read()
+            .unwrap()
             .iter()
             .find(|entry| entry.tool.name() == call.fn_name)
+            .map(|entry| entry.tool.clone())
             .ok_or_else(|| AgentError::ToolNotFound(call.fn_name.clone()))?;
 
         let args_len = serde_json::to_string(&call.fn_arguments)
@@ -111,15 +129,15 @@ impl ToolRegistry {
             "executing tool call"
         );
 
-        entry.tool.execute(call.fn_arguments.clone(), ctx).await
+        tool.execute(call.fn_arguments.clone(), ctx).await
     }
 
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.tools.read().unwrap().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.read().unwrap().is_empty()
     }
 }
 
